@@ -94,7 +94,7 @@ class CatchConfig:
     menu_star_template: str = "templates/menu_star.png"
     menu_star_threshold: float = 0.55
     autowalk_offset_x: int = 20     # from the star center to the AutoWalk button
-    autowalk_offset_y: int = 303
+    autowalk_offset_y: int = 730
     idle_before_autowalk: int = 3   # consecutive empty cycles before tapping AutoWalk (0 = off)
     autowalk_wait: float = 3.0      # wait after tapping for spawns to appear
 
