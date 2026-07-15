@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller build output (regenerable, and the exe is ~72MB)
+build/
+dist/
+*.spec.bak
+
+# Runtime / scratch
+settings.json
+screenshot.png
+catch_screen.png
+_*.png
+
+# Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
+# Note: adb/ IS committed so the project builds out of the box.
