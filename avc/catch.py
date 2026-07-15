@@ -84,6 +84,8 @@ class CatchConfig:
     popup_speed_template: str = "templates/popup_speed.png"         # "I'M A PASSENGER" green button
     claim_rewards_template: str = "templates/claim_rewards.png"      # "CLAIM REWARDS" level up button
     close_btn_template: str = "templates/close_btn.png"              # Close "X" button
+    close_btn_blue_template: str = "templates/close_btn_blue.png"    # Close "X" button (blue)
+    close_btn_white_template: str = "templates/close_btn_white.png"  # Close "X" button (white)
     popup_threshold: float = 0.7
 
     # AutoWalk: after several empty cycles, tap the spoofer's AutoWalk button to start walking and
@@ -120,6 +122,8 @@ class CatchRoutine:
         self._popup_speed = _load_optional(self.config.popup_speed_template)
         self._claim_rewards = _load_optional(self.config.claim_rewards_template)
         self._close_btn = _load_optional(self.config.close_btn_template)
+        self._close_btn_blue = _load_optional(self.config.close_btn_blue_template)
+        self._close_btn_white = _load_optional(self.config.close_btn_white_template)
         self.stats = CatchStats()
         self._idle_streak = 0
         self._autowalk_active = False
@@ -199,23 +203,25 @@ class CatchRoutine:
                     if self._slot_in(f) is not None:
                         break
                     # If close button appears in the center bottom region, tap it immediately
-                    if self._close_btn is not None:
-                        m_close = find(f, self._close_btn, threshold=0.6, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
-                        if m_close:
-                            self.device.tap(*m_close[0].center)
-                            self._interruptible_sleep(0.5)
-                            continue
+                    for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
+                        if btn is not None:
+                            m_close = find(f, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                            if m_close:
+                                self.device.tap(*m_close[0].center)
+                                self._interruptible_sleep(0.5)
+                                break
                     self.device.tap(cx, cy)
                 return True
-        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.6 threshold).
-        # We only check this if the map screen is not active, to prevent false positive clicks.
-        if self._close_btn is not None and self._slot_in(frame) is None:
-            m = find(frame, self._close_btn, threshold=0.6, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
-            if m:
-                x, y = m[0].center
-                self.device.tap(x, y)
-                self.stats.last_event = "popup"
-                return True
+        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.7 threshold).
+        # Supports teal/green, blue, and white variations of the close button.
+        for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
+            if btn is not None:
+                m = find(frame, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                if m:
+                    x, y = m[0].center
+                    self.device.tap(x, y)
+                    self.stats.last_event = "popup"
+                    return True
         return False
 
     def _try_autowalk(self) -> bool:
