@@ -8,6 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('templates/pokeball.png', 'templates'),
+        ('templates/camera.png', 'templates'),
         ('templates/nearby_anchor.png', 'templates'),
         ('templates/menu_star.png', 'templates'),
         ('templates/popup_autowalk.png', 'templates'),

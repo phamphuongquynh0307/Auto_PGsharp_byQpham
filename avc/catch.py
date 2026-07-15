@@ -57,8 +57,8 @@ class CatchConfig:
     require_anchor: bool = True     # if True, skip the cycle when the '@' bar isn't on screen
     double_tap_gap_ms: int = 90
 
-    # Poké Ball template + detection.
-    ball_template: str = "templates/pokeball.png"
+    # Encounter detection via camera template + fallback throw position.
+    ball_template: str = "templates/camera.png"
     ball_threshold: float = 0.7
     ball_fallback: tuple[int, int] = (610, 2485)  # used only if the ball isn't detected
 
@@ -148,7 +148,7 @@ class CatchRoutine:
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
         matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=(0.95, 1.0, 1.05))
-        return matches[0].center if matches else None
+        return self.config.ball_fallback if matches else None
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
         matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1))
