@@ -13,6 +13,8 @@ a = Analysis(
         ('templates/menu_star.png', 'templates'),
         ('templates/popup_autowalk.png', 'templates'),
         ('templates/popup_speed.png', 'templates'),
+        ('templates/claim_rewards.png', 'templates'),
+        ('templates/close_btn.png', 'templates'),
         ('adb/adb.exe', 'adb'),
         ('adb/AdbWinApi.dll', 'adb'),
         ('adb/AdbWinUsbApi.dll', 'adb'),

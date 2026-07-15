@@ -82,6 +82,8 @@ class CatchConfig:
     # Popups that block the flow. Both are opaque dialogs, so template detection is reliable.
     popup_autowalk_template: str = "templates/popup_autowalk.png"   # "Stop/Pause AutoWalk?" dialog
     popup_speed_template: str = "templates/popup_speed.png"         # "I'M A PASSENGER" green button
+    claim_rewards_template: str = "templates/claim_rewards.png"      # "CLAIM REWARDS" level up button
+    close_btn_template: str = "templates/close_btn.png"              # Close "X" button
     popup_threshold: float = 0.7
 
     # AutoWalk: after several empty cycles, tap the spoofer's AutoWalk button to start walking and
@@ -116,6 +118,8 @@ class CatchRoutine:
         # Popup templates are optional — a missing one just disables that handler.
         self._popup_autowalk = _load_optional(self.config.popup_autowalk_template)
         self._popup_speed = _load_optional(self.config.popup_speed_template)
+        self._claim_rewards = _load_optional(self.config.claim_rewards_template)
+        self._close_btn = _load_optional(self.config.close_btn_template)
         self.stats = CatchStats()
         self._idle_streak = 0
         # Control flags used by the GUI; ignored by the plain CLI loop.
@@ -160,6 +164,12 @@ class CatchRoutine:
     def _handle_popups(self) -> bool:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
         frame = self.device.screenshot()
+
+        # If the map screen (nearby anchor) is already visible, there's no blocking popup.
+        # This prevents false positives (like matching the close button on the Poké Ball button or calendar).
+        if self._slot_in(frame) is not None:
+            return False
+
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         if self._popup_speed is not None:
             m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(0.9, 1.0, 1.1))
@@ -168,11 +178,45 @@ class CatchRoutine:
                 self.device.tap(x, y)
                 self.stats.last_event = "popup"
                 return True
-        # "Stop/Pause AutoWalk?" dialog -> Back dismisses it without stopping AutoWalk.
+        # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
             m = find(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=(1.0,))
             if m:
-                self.device.back()
+                cx, cy = m[0].center
+                self.device.tap(cx + 185, cy + 168)
+                self.stats.last_event = "popup"
+                return True
+        # Level-up "CLAIM REWARDS" screen -> tap claim, then tap screen to dismiss rewards until default screen
+        if self._claim_rewards is not None:
+            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=(0.9, 1.0, 1.1))
+            if m:
+                rx, ry = m[0].center
+                self.device.tap(rx, ry)
+                self.stats.last_event = "popup"
+                
+                # Repeatedly tap center to dismiss items until map screen (nearby anchor) is back
+                cx, cy = 610, 1000
+                deadline = time.monotonic() + 15.0
+                while time.monotonic() < deadline and not self.stop_event.is_set():
+                    self._interruptible_sleep(0.5)
+                    f = self.device.screenshot()
+                    if self._slot_in(f) is not None:
+                        break
+                    # If close button appears in the center bottom region, tap it immediately
+                    if self._close_btn is not None:
+                        m_close = find(f, self._close_btn, threshold=0.6, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                        if m_close:
+                            self.device.tap(*m_close[0].center)
+                            self._interruptible_sleep(0.5)
+                            continue
+                    self.device.tap(cx, cy)
+                return True
+        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.6 threshold)
+        if self._close_btn is not None:
+            m = find(frame, self._close_btn, threshold=0.6, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+            if m:
+                x, y = m[0].center
+                self.device.tap(x, y)
                 self.stats.last_event = "popup"
                 return True
         return False
