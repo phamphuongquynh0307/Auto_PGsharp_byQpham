@@ -98,7 +98,7 @@ def cmd_catch(args) -> None:
     )
     routine = CatchRoutine(dev, cfg)
     print(
-        f"Bắt Pokemon | ô nearby=({cfg.nearby_slot[0]},{cfg.nearby_slot[1]}) | "
+        f"Bắt Pokemon (stream realtime) | "
         f"{'giới hạn ' + str(args.max) if args.max else 'không giới hạn'} lần | Ctrl+C để dừng"
     )
 
@@ -107,10 +107,13 @@ def cmd_catch(args) -> None:
         print(f"  chu kỳ {stats.cycles}: {tag}  | tổng ném: {stats.throws}")
 
     try:
+        dev.start_stream()
         routine.run(on_event=report)
         print(f"Xong. Tổng ném bóng: {routine.stats.throws}")
     except KeyboardInterrupt:
         print(f"\nDừng. Tổng ném bóng: {routine.stats.throws}")
+    finally:
+        dev.stop_stream()
 
 
 def build_parser() -> argparse.ArgumentParser:

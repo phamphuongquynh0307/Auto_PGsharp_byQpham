@@ -9,6 +9,9 @@ a = Analysis(
     datas=[
         ('templates/pokeball.png', 'templates'),
         ('templates/nearby_anchor.png', 'templates'),
+        ('templates/menu_star.png', 'templates'),
+        ('templates/popup_autowalk.png', 'templates'),
+        ('templates/popup_speed.png', 'templates'),
         ('adb/adb.exe', 'adb'),
         ('adb/AdbWinApi.dll', 'adb'),
         ('adb/AdbWinUsbApi.dll', 'adb'),

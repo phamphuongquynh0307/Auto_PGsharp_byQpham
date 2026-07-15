@@ -32,6 +32,22 @@ class Device:
         self.adb_path = adb_path or find_adb()
         self.serial = serial
         self._size: tuple[int, int] | None = None
+        self._stream = None  # ScreenStream when realtime capture is enabled
+
+    # -- realtime streaming ---------------------------------------------------
+    def start_stream(self) -> None:
+        """Switch screenshot() to pull frames from a live H.264 stream (near-zero latency)."""
+        if self._stream is not None:
+            return
+        from .stream import ScreenStream
+
+        self._stream = ScreenStream(self.serial, self.adb_path)
+        self._stream.start()
+
+    def stop_stream(self) -> None:
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream = None
 
     # -- low level ------------------------------------------------------------
     def _base_cmd(self) -> list[str]:
@@ -78,7 +94,12 @@ class Device:
 
     # -- capture --------------------------------------------------------------
     def screenshot(self) -> np.ndarray:
-        """Grab the current screen as a BGR numpy image."""
+        """Current screen as a BGR image. Uses the live stream if started, else a one-shot capture."""
+        if self._stream is not None:
+            frame = self._stream.latest()
+            if frame is not None:
+                return frame
+            # Stream not producing yet — fall through to a one-shot grab.
         png = self._run(["exec-out", "screencap", "-p"], binary=True)
         arr = np.frombuffer(png, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -98,8 +119,45 @@ class Device:
     def key(self, keycode: str) -> None:
         self._run(["shell", "input", "keyevent", keycode])
 
+    def back(self) -> None:
+        self.key("KEYCODE_BACK")
+
     def wake(self) -> None:
         self.key("KEYCODE_WAKEUP")
+
+    # -- low-power "screen off" ----------------------------------------------
+    # Setting brightness to 0 makes the panel look off (no backlight heat/drain) while the game
+    # keeps rendering to the framebuffer, so capture + taps still work. Also keep the screen from
+    # actually sleeping while on USB.
+    def _get_setting(self, ns: str, key: str) -> str:
+        return self._run(["shell", "settings", "get", ns, key]).strip()
+
+    def _put_setting(self, ns: str, key: str, value) -> None:
+        self._run(["shell", "settings", "put", ns, key, str(value)])
+
+    def enable_dim(self) -> None:
+        self.wake()
+        self._saved_screen = {
+            "mode": self._get_setting("system", "screen_brightness_mode"),
+            "bright": self._get_setting("system", "screen_brightness"),
+            "stay": self._get_setting("global", "stay_on_while_plugged_in"),
+        }
+        # manual brightness, minimum, and stay awake while charging (3 = AC|USB).
+        self._put_setting("system", "screen_brightness_mode", 0)
+        self._put_setting("system", "screen_brightness", 0)
+        self._put_setting("global", "stay_on_while_plugged_in", 3)
+
+    def restore_dim(self) -> None:
+        saved = getattr(self, "_saved_screen", None)
+        if not saved:
+            return
+        if saved["mode"].isdigit():
+            self._put_setting("system", "screen_brightness_mode", saved["mode"])
+        if saved["bright"].isdigit():
+            self._put_setting("system", "screen_brightness", saved["bright"])
+        if saved["stay"].isdigit():
+            self._put_setting("global", "stay_on_while_plugged_in", saved["stay"])
+        self._saved_screen = None
 
     def is_connected(self) -> bool:
         try:

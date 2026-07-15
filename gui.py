@@ -28,11 +28,12 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title("Auto Vision Clicker — Bắt Pokemon")
-        root.geometry("460x560")
-        root.minsize(420, 520)
+        root.geometry("470x690")
+        root.minsize(430, 640)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.routine: CatchRoutine | None = None
+        self.device: Device | None = None
         self.worker: threading.Thread | None = None
         self.paused = False
 
@@ -58,9 +59,17 @@ class App:
         cfg = ttk.LabelFrame(self.root, text="Cài đặt")
         cfg.pack(fill="x", **pad)
         self.slot_offset = self._spin(cfg, "Khoảng cách @ → ô đầu (px):", 0, 100, 1500, 770)
-        self.wait_enc = self._spin(cfg, "Chờ mở màn bắt tối đa (giây):", 1, 1, 15, 5.0, is_float=True)
-        self.wait_catch = self._spin(cfg, "Chờ bắt xong tối đa (giây):", 2, 1, 20, 6.0, is_float=True)
-        self.max_catches = self._spin(cfg, "Giới hạn số con (0=∞):", 3, 0, 9999, 0)
+        self.throw_power = self._spin(cfg, "Lực ném (px, càng lớn càng mạnh):", 1, 200, 1400, 550)
+        self.wait_enc = self._spin(cfg, "Chờ mở màn bắt tối đa (giây):", 2, 1, 15, 3.0, is_float=True)
+        self.wait_catch = self._spin(cfg, "Chờ bắt xong tối đa (giây):", 3, 1, 20, 6.0, is_float=True)
+        self.idle_aw = self._spin(cfg, "Trống mấy lần thì AutoWalk (0=tắt):", 4, 0, 20, 3)
+        self.max_catches = self._spin(cfg, "Giới hạn số con (0=∞):", 5, 0, 9999, 0)
+        self.dim_screen = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            cfg,
+            text="Tắt sáng màn hình khi chạy (giảm nóng)",
+            variable=self.dim_screen,
+        ).grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=4)
 
         # Controls
         controls = ttk.Frame(self.root)
@@ -106,18 +115,24 @@ class App:
         except (OSError, ValueError):
             return
         self.slot_offset.set(data.get("slot_offset", int(self.slot_offset.get())))
+        self.throw_power.set(data.get("throw_power", int(self.throw_power.get())))
         self.wait_enc.set(data.get("wait_enc", float(self.wait_enc.get())))
         self.wait_catch.set(data.get("wait_catch", float(self.wait_catch.get())))
+        self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
+        self.dim_screen.set(data.get("dim_screen", False))
         if data.get("device"):
             self.device_var.set(data["device"])
 
     def save_settings(self) -> None:
         data = {
             "slot_offset": int(self.slot_offset.get()),
+            "throw_power": int(self.throw_power.get()),
             "wait_enc": float(self.wait_enc.get()),
             "wait_catch": float(self.wait_catch.get()),
+            "idle_aw": int(self.idle_aw.get()),
             "max_catches": int(self.max_catches.get()),
+            "dim_screen": bool(self.dim_screen.get()),
             "device": self.device_var.get(),
         }
         try:
@@ -129,6 +144,12 @@ class App:
     def _on_close(self) -> None:
         if self.routine:
             self.routine.stop()
+        # Best-effort: never leave the phone stuck at brightness 0 if closed mid-run.
+        if self.device is not None:
+            try:
+                self.device.restore_dim()
+            except Exception:  # noqa: BLE001
+                pass
         self.save_settings()
         self.root.destroy()
 
@@ -156,13 +177,15 @@ class App:
         self.save_settings()
         cfg = CatchConfig(
             slot_offset_y=int(self.slot_offset.get()),
+            throw_dy=-abs(int(self.throw_power.get())),
             encounter_timeout=float(self.wait_enc.get()),
             catch_timeout=float(self.wait_catch.get()),
+            idle_before_autowalk=int(self.idle_aw.get()),
             max_catches=int(self.max_catches.get()),
         )
         try:
-            device = Device(serial)
-            self.routine = CatchRoutine(device, cfg)
+            self.device = Device(serial)
+            self.routine = CatchRoutine(self.device, cfg)
         except Exception as e:  # noqa: BLE001
             self._log(f"Không khởi tạo được: {e}")
             return
@@ -174,19 +197,31 @@ class App:
         self.pause_btn.config(state="normal", text="⏸ Tạm dừng")
         self.stop_btn.config(state="normal")
         self.status_var.set("Đang chạy…")
-        self._log("Bắt đầu.")
+        self._log("Bắt đầu (bật stream realtime).")
 
     def _run_worker(self) -> None:
         def on_event(stats, threw):
+            if stats.last_event == "autowalk":
+                self.log_queue.put(f"→ Trống lâu, bấm AutoWalk đi kiếm spawn (lần {stats.autowalks})")
+                return
             tag = "NÉM BÓNG" if threw else "(không có pokemon)"
             self.log_queue.put(f"chu kỳ {stats.cycles}: {tag} | tổng ném: {stats.throws}")
             self.log_queue.put(f"__count__{stats.throws}")
 
+        dim = self.dim_screen.get()
         try:
+            if dim:
+                self.device.enable_dim()
+                self.log_queue.put("Đã tắt sáng màn hình (game vẫn chạy nền).")
+            self.device.start_stream()  # realtime H.264 capture
             self.routine.run(on_event=on_event)
             self.log_queue.put("__done__Hoàn tất.")
         except Exception as e:  # noqa: BLE001
             self.log_queue.put(f"__done__Lỗi: {e}")
+        finally:
+            self.device.stop_stream()
+            if dim:
+                self.device.restore_dim()
 
     def on_pause(self) -> None:
         if not self.routine:
