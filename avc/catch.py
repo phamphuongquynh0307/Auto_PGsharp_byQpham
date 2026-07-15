@@ -122,6 +122,7 @@ class CatchRoutine:
         self._close_btn = _load_optional(self.config.close_btn_template)
         self.stats = CatchStats()
         self._idle_streak = 0
+        self._autowalk_active = False
         # Control flags used by the GUI; ignored by the plain CLI loop.
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
@@ -302,12 +303,14 @@ class CatchRoutine:
             else:
                 self._idle_streak += 1
                 if cfg.idle_before_autowalk and self._idle_streak >= cfg.idle_before_autowalk:
-                    if self._try_autowalk():
-                        self.stats.autowalks += 1
-                        self.stats.last_event = "autowalk"
-                        if on_event:
-                            on_event(self.stats, False)
-                        self._interruptible_sleep(cfg.autowalk_wait)
+                    if not self._autowalk_active:
+                        if self._try_autowalk():
+                            self.stats.autowalks += 1
+                            self.stats.last_event = "autowalk"
+                            if on_event:
+                                on_event(self.stats, False)
+                            self._autowalk_active = True
+                            self._interruptible_sleep(cfg.autowalk_wait)
                     self._idle_streak = 0
 
             if cfg.max_catches and self.stats.throws >= cfg.max_catches:
