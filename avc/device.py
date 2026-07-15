@@ -146,6 +146,10 @@ class Device:
         self._put_setting("system", "screen_brightness_mode", 0)
         self._put_setting("system", "screen_brightness", 0)
         self._put_setting("global", "stay_on_while_plugged_in", 3)
+        try:
+            self._run(["shell", "cmd", "display", "set-brightness", "0.0"])
+        except Exception:
+            pass
 
     def restore_dim(self) -> None:
         saved = getattr(self, "_saved_screen", None)
@@ -155,6 +159,12 @@ class Device:
             self._put_setting("system", "screen_brightness_mode", saved["mode"])
         if saved["bright"].isdigit():
             self._put_setting("system", "screen_brightness", saved["bright"])
+            try:
+                val = float(saved["bright"]) / 255.0
+                val = max(0.0, min(1.0, val))
+                self._run(["shell", "cmd", "display", "set-brightness", f"{val:.4f}"])
+            except Exception:
+                pass
         if saved["stay"].isdigit():
             self._put_setting("global", "stay_on_while_plugged_in", saved["stay"])
         self._saved_screen = None
