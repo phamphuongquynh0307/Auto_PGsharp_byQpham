@@ -262,7 +262,8 @@ class CatchRoutine:
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
         if self._handle_popups():
-            self._interruptible_sleep(0.4)
+            self._interruptible_sleep(1.0)
+            return False
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
