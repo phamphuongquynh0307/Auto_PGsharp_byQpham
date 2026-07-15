@@ -165,11 +165,6 @@ class CatchRoutine:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
         frame = self.device.screenshot()
 
-        # If the map screen (nearby anchor) is already visible, there's no blocking popup.
-        # This prevents false positives (like matching the close button on the Poké Ball button or calendar).
-        if self._slot_in(frame) is not None:
-            return False
-
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         if self._popup_speed is not None:
             m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(0.9, 1.0, 1.1))
@@ -211,8 +206,9 @@ class CatchRoutine:
                             continue
                     self.device.tap(cx, cy)
                 return True
-        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.6 threshold)
-        if self._close_btn is not None:
+        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.6 threshold).
+        # We only check this if the map screen is not active, to prevent false positive clicks.
+        if self._close_btn is not None and self._slot_in(frame) is None:
             m = find(frame, self._close_btn, threshold=0.6, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
             if m:
                 x, y = m[0].center
