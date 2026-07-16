@@ -18,6 +18,7 @@ import threading
 import time
 import urllib.request
 import uuid
+import webbrowser
 import tkinter as tk
 from tkinter import ttk
 
@@ -26,10 +27,19 @@ import cv2
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
 
+# Donate destinations shown on the Donate tab.
+DONATE_PAYPAL = "https://paypal.me/CHANGE_ME"   # TODO: real PayPal.me link
+DONATE_MOMO = "09xx xxx xxx"                     # TODO: real MoMo number
+
 LANG = {
-    "title":         {"vi": "Auto Vision Clicker — Bắt Pokemon", "en": "Auto Vision Clicker — Pokémon Catcher"},
+    "title":         {"vi": "Auto Catch Pokemon PGSharp", "en": "Auto Catch Pokemon PGSharp"},
     "tab_main":      {"vi": "Điều khiển", "en": "Control"},
     "tab_settings":  {"vi": "Cài đặt", "en": "Settings"},
+    "tab_donate":    {"vi": "Ủng hộ ❤", "en": "Donate ❤"},
+    "donate_msg":    {"vi": "Nếu app giúp bạn bắt được kha khá Pokémon, mời mình ly cà phê nhé ☕ Cảm ơn bạn!",
+                      "en": "If this app catches you a good few Pokémon, consider buying me a coffee ☕ Thank you!"},
+    "copy":          {"vi": "Sao chép", "en": "Copy"},
+    "copied":        {"vi": "Đã chép ✓", "en": "Copied ✓"},
     "device":        {"vi": "Thiết bị:", "en": "Device:"},
     "refresh":       {"vi": "Làm mới", "en": "Refresh"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
@@ -135,8 +145,10 @@ class App:
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
         self.tab_main = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
+        self.tab_donate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_main, text=self.tr("tab_main"))
         self.notebook.add(self.tab_settings, text=self.tr("tab_settings"))
+        self.notebook.add(self.tab_donate, text=self.tr("tab_donate"))
 
         # ---- Control tab ----
         top = ttk.Frame(self.tab_main)
@@ -202,6 +214,13 @@ class App:
         self.alert_batt = self._spin(dc_grp, "alert_batt", 3, 0, 90, 20)
         dc_grp.columnconfigure(1, weight=1)
 
+        # ---- Donate tab ----
+        donate_msg = ttk.Label(self.tab_donate, text=self.tr("donate_msg"), wraplength=410, justify="left")
+        donate_msg.pack(anchor="w", padx=14, pady=(16, 12))
+        self._i18n.append((donate_msg, "donate_msg"))
+        self._donate_row(self.tab_donate, "PayPal:", DONATE_PAYPAL, link=True)
+        self._donate_row(self.tab_donate, "MoMo:", DONATE_MOMO, link=False)
+
         lang_row = ttk.Frame(self.tab_settings)
         lang_row.pack(fill="x", **pad)
         self._label(lang_row, "language").pack(side="left")
@@ -210,6 +229,28 @@ class App:
                                        values=[name for _c, name in LANG_NAMES], width=14)
         self.lang_combo.pack(side="left", padx=6)
         self.lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
+
+    def _donate_row(self, parent, brand: str, value: str, link: bool) -> None:
+        """One donate line: brand label, the address (clickable when it's a URL), a copy button."""
+        row = ttk.Frame(parent)
+        row.pack(fill="x", padx=14, pady=4)
+        ttk.Label(row, text=brand, width=8, font=("Segoe UI", 10, "bold")).pack(side="left")
+        val = ttk.Label(row, text=value, foreground="#1a6fc4",
+                        cursor="hand2" if link else "arrow",
+                        font=("Segoe UI", 10, "underline" if link else "normal"))
+        val.pack(side="left", padx=4)
+        if link:
+            val.bind("<Button-1>", lambda _e: webbrowser.open(value))
+        copy_btn = ttk.Button(row, text=self.tr("copy"))
+        copy_btn.config(command=lambda: self._copy_to_clipboard(value, copy_btn))
+        copy_btn.pack(side="right")
+        self._i18n.append((copy_btn, "copy"))
+
+    def _copy_to_clipboard(self, text: str, btn: ttk.Button) -> None:
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        btn.config(text=self.tr("copied"))
+        self.root.after(1500, lambda: btn.config(text=self.tr("copy")))
 
     def _spin(self, parent, key, row, lo, hi, default, is_float=False):
         self._label(parent, key, row=row, column=0, sticky="w", padx=6, pady=2)
@@ -234,6 +275,7 @@ class App:
         self.root.title(self.tr("title"))
         self.notebook.tab(0, text=self.tr("tab_main"))
         self.notebook.tab(1, text=self.tr("tab_settings"))
+        self.notebook.tab(2, text=self.tr("tab_donate"))
         for widget, key in self._i18n:
             widget.config(text=self.tr(key))
         self.pause_btn.config(text=self.tr("resume" if self.paused else "pause"))
