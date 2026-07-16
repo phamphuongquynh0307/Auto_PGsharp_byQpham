@@ -87,14 +87,22 @@ class CatchConfig:
     close_btn_blue_template: str = "templates/close_btn_blue.png"    # Close "X" button (blue)
     close_btn_white_template: str = "templates/close_btn_white.png"  # Close "X" button (white)
     popup_threshold: float = 0.7
+    # The Pokéstop photo-disc screen's own 'X' sits at a fixed spot at the bottom center;
+    # used as the tap fallback when template matching misses it (the backdrop varies).
+    pokestop_close_xy: tuple[int, int] = (610, 2540)
 
     # AutoWalk: after several empty cycles, tap the spoofer's AutoWalk button to start walking and
     # generate fresh spawns. The button's row is semi-transparent (poor template target), so we
     # instead locate the opaque yellow menu star and tap a fixed offset down to the AutoWalk row.
+    # The star template is a tight crop of the star core (yellow body + pokéball) matched in
+    # colour, so yellow map clutter (event Pikachu, balloons) can't outscore it.
     menu_star_template: str = "templates/menu_star.png"
-    menu_star_threshold: float = 0.55
-    autowalk_offset_x: int = 20     # from the star center to the AutoWalk button
-    autowalk_offset_y: int = 730
+    menu_star_threshold: float = 0.7
+    autowalk_offset_x: int = 100    # from the star center onto the AutoWalk row
+    autowalk_offset_y: int = 300
+    # The AutoWalk row's paused icon ('⊘'). When visible, the walk stalled and a re-tap is safe;
+    # without it a started walk is assumed running and is never tapped again (Stop dialog risk).
+    autowalk_paused_template: str = "templates/autowalk_paused.png"
     idle_before_autowalk: int = 3   # consecutive empty cycles before tapping AutoWalk (0 = off)
     autowalk_wait: float = 3.0      # wait after tapping for spawns to appear
 
@@ -124,6 +132,7 @@ class CatchRoutine:
         self._close_btn = _load_optional(self.config.close_btn_template)
         self._close_btn_blue = _load_optional(self.config.close_btn_blue_template)
         self._close_btn_white = _load_optional(self.config.close_btn_white_template)
+        self._aw_paused = _load_optional(self.config.autowalk_paused_template)
         self.stats = CatchStats()
         self._idle_streak = 0
         self._autowalk_active = False
@@ -165,6 +174,24 @@ class CatchRoutine:
             return None
         ax, ay = matches[0].center
         return (ax, ay - self.config.slot_offset_y)
+
+    def _is_pokestop_screen(self, frame) -> bool:
+        """True when the Pokéstop photo-disc screen is up. Its giant blue pin fills both
+        sides of the screen at the disc's height (fixed UI, unaffected by day/night tint),
+        so two small side patches being solidly blue identifies it. Knowing we're on this
+        screen lets the close handler tap the X's known fixed spot instead of trusting a
+        template match that sometimes lands a stray click elsewhere."""
+        h, w = frame.shape[:2]
+        y0, y1 = int(h * 0.42), int(h * 0.50)
+        for x0, x1 in ((int(w * 0.04), int(w * 0.14)), (int(w * 0.86), int(w * 0.96))):
+            patch = frame[y0:y1, x0:x1]
+            b = patch[..., 0].astype(int)
+            g = patch[..., 1].astype(int)
+            r = patch[..., 2].astype(int)
+            blueish = (b > 140) & (b - r > 60) & (b - g > 10)
+            if blueish.mean() < 0.6:
+                return False
+        return True
 
     def _handle_popups(self) -> bool:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
@@ -212,6 +239,23 @@ class CatchRoutine:
                                 break
                     self.device.tap(cx, cy)
                 return True
+        # Pokéstop photo-disc screen -> close it via its bottom-center 'X'. The X always sits
+        # at the same spot, so search only a tight box around it and, if the template still
+        # misses (the backdrop behind the X varies), tap that fixed spot directly. This makes
+        # the close both guaranteed and immune to stray matches elsewhere on the screen.
+        # (_ball_in guards against a false positive while an encounter is up.)
+        if self._is_pokestop_screen(frame) and self._ball_in(frame) is None:
+            fx, fy = self.config.pokestop_close_xy
+            region = (fx - 160, fy - 160, 320, 320)
+            for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
+                if btn is not None:
+                    m = find(frame, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=region)
+                    if m:
+                        fx, fy = m[0].center
+                        break
+            self.device.tap(fx, fy)
+            self.stats.last_event = "popup"
+            return True
         # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.7 threshold).
         # Supports teal/green, blue, and white variations of the close button.
         for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
@@ -225,14 +269,25 @@ class CatchRoutine:
         return False
 
     def _try_autowalk(self) -> bool:
-        """Tap the AutoWalk button to start walking. Finds the opaque yellow menu star (robust
-        wherever the movable menu sits) and taps a fixed offset down onto the AutoWalk row."""
+        """Make AutoWalk walk. Finds the yellow menu star (colour match on its tight core crop,
+        robust wherever the movable menu sits) and taps a fixed offset down onto the AutoWalk row.
+        Tapping a row that is already walking would raise the "Stop AutoWalk?" dialog, so after
+        the first start we only tap again when the row shows the paused icon."""
+        cfg = self.config
         frame = self.device.screenshot()
-        matches = find(frame, self._star, threshold=self.config.menu_star_threshold, scales=(0.8, 0.9, 1.0, 1.1, 1.2))
+        matches = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=(0.9, 1.0, 1.1), grayscale=False)
         if not matches:
             return False
         sx, sy = matches[0].center
-        self.device.tap(sx + self.config.autowalk_offset_x, sy + self.config.autowalk_offset_y)
+        if self._autowalk_active:
+            if self._aw_paused is None:
+                return False
+            # The paused icon sits on the AutoWalk row, a fixed offset below the star.
+            region = (sx - 80, sy + cfg.autowalk_offset_y - 80, 280, 160)
+            paused = find(frame, self._aw_paused, threshold=0.7, scales=(0.9, 1.0, 1.1), grayscale=False, region=region)
+            if not paused:
+                return False
+        self.device.tap(sx + cfg.autowalk_offset_x, sy + cfg.autowalk_offset_y)
         return True
 
     def _poll(self, predicate, timeout: float):
@@ -310,14 +365,15 @@ class CatchRoutine:
             else:
                 self._idle_streak += 1
                 if cfg.idle_before_autowalk and self._idle_streak >= cfg.idle_before_autowalk:
-                    if not self._autowalk_active:
-                        if self._try_autowalk():
-                            self.stats.autowalks += 1
-                            self.stats.last_event = "autowalk"
-                            if on_event:
-                                on_event(self.stats, False)
-                            self._autowalk_active = True
-                            self._interruptible_sleep(cfg.autowalk_wait)
+                    # _try_autowalk itself refuses to tap an already-walking row, so calling it
+                    # on every dry spell is safe — it re-taps only a stalled (paused) walk.
+                    if self._try_autowalk():
+                        self.stats.autowalks += 1
+                        self.stats.last_event = "autowalk"
+                        if on_event:
+                            on_event(self.stats, False)
+                        self._autowalk_active = True
+                        self._interruptible_sleep(cfg.autowalk_wait)
                     self._idle_streak = 0
 
             if cfg.max_catches and self.stats.throws >= cfg.max_catches:
