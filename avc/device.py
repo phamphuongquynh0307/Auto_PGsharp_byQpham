@@ -169,6 +169,20 @@ class Device:
             self._put_setting("global", "stay_on_while_plugged_in", saved["stay"])
         self._saved_screen = None
 
+    def battery_info(self) -> dict:
+        """Battery snapshot: {'level': %, 'temp': °C, 'charging': bool}. Missing keys if unparsable."""
+        info: dict = {}
+        out = self._run(["shell", "dumpsys", "battery"])
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("level:"):
+                info["level"] = int(line.split(":")[1])
+            elif line.startswith("temperature:"):
+                info["temp"] = int(line.split(":")[1]) / 10.0
+            elif line.startswith(("AC powered:", "USB powered:", "Wireless powered:")):
+                info["charging"] = info.get("charging", False) or line.endswith("true")
+        return info
+
     def is_connected(self) -> bool:
         try:
             self._run(["get-state"], timeout=5)

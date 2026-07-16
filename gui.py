@@ -15,9 +15,13 @@ import os
 import queue
 import sys
 import threading
+import time
 import urllib.request
+import uuid
 import tkinter as tk
 from tkinter import ttk
+
+import cv2
 
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
@@ -39,6 +43,8 @@ LANG = {
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
+    "alert_report":  {"vi": "Báo cáo định kỳ (phút, 0=tắt):", "en": "Status report every (min, 0=off):"},
+    "alert_batt":    {"vi": "Báo pin yếu dưới (%, 0=tắt):", "en": "Low battery alert below (%, 0=off):"},
     "language":      {"vi": "Ngôn ngữ / Language:", "en": "Language / Ngôn ngữ:"},
     "run":           {"vi": "▶ Chạy", "en": "▶ Run"},
     "pause":         {"vi": "⏸ Tạm dừng", "en": "⏸ Pause"},
@@ -66,6 +72,11 @@ LANG = {
     "msg_paused":    {"vi": "Tạm dừng.", "en": "Paused."},
     "dc_alert":      {"vi": "⚠️ AutoClick: {} chu kỳ liên tiếp không thấy Pokémon (tổng đã ném: {})",
                       "en": "⚠️ AutoClick: {} cycles in a row with no Pokémon (total thrown: {})"},
+    "dc_report":     {"vi": "📊 AutoClick: chạy {} phút | ném {} ({}/giờ) | {} chu kỳ{}",
+                      "en": "📊 AutoClick: up {} min | thrown {} ({}/hr) | {} cycles{}"},
+    "dc_batt_part":  {"vi": " | pin {}% ({}°C)", "en": " | battery {}% ({}°C)"},
+    "dc_low_batt":   {"vi": "🔋 AutoClick: pin còn {}% — cắm sạc đi!", "en": "🔋 AutoClick: battery at {}% — plug in!"},
+    "dc_stopped":    {"vi": "🛑 AutoClick dừng vì lỗi: {}", "en": "🛑 AutoClick stopped with error: {}"},
     "dc_sent":       {"vi": "Đã gửi cảnh báo Discord.", "en": "Discord alert sent."},
     "dc_fail":       {"vi": "Gửi Discord thất bại: {}", "en": "Discord send failed: {}"},
 }
@@ -187,6 +198,8 @@ class App:
         self.webhook_url = tk.StringVar()
         ttk.Entry(dc_grp, textvariable=self.webhook_url, width=34).grid(row=0, column=1, sticky="ew", padx=6, pady=2)
         self.alert_idle = self._spin(dc_grp, "alert_idle", 1, 0, 200, 10)
+        self.alert_report = self._spin(dc_grp, "alert_report", 2, 0, 720, 30)
+        self.alert_batt = self._spin(dc_grp, "alert_batt", 3, 0, 90, 20)
         dc_grp.columnconfigure(1, weight=1)
 
         lang_row = ttk.Frame(self.tab_settings)
@@ -253,6 +266,8 @@ class App:
         self.dim_screen.set(data.get("dim_screen", False))
         self.webhook_url.set(data.get("webhook", ""))
         self.alert_idle.set(data.get("alert_idle", int(self.alert_idle.get())))
+        self.alert_report.set(data.get("alert_report", int(self.alert_report.get())))
+        self.alert_batt.set(data.get("alert_batt", int(self.alert_batt.get())))
         if data.get("device"):
             self.device_var.set(data["device"])
 
@@ -268,6 +283,8 @@ class App:
             "device": self.device_var.get(),
             "webhook": self.webhook_url.get().strip(),
             "alert_idle": int(self.alert_idle.get()),
+            "alert_report": int(self.alert_report.get()),
+            "alert_batt": int(self.alert_batt.get()),
             "lang": self.lang,
         }
         try:
@@ -302,25 +319,98 @@ class App:
             self._set_status("st_no_device")
 
     # -- Discord alert ----------------------------------------------------------
-    def _send_discord(self, content: str) -> None:
-        """POST to the webhook on a short-lived thread so the catch loop never waits on it."""
+    def _send_discord(self, content: str, shot: bool = False) -> None:
+        """POST to the webhook on a short-lived thread so the catch loop never waits on it.
+        With shot=True the current phone screen is attached as a JPEG (best effort — if the
+        screen can't be grabbed, e.g. the device just dropped, the text still goes out)."""
         url = self.webhook_url.get().strip()
         if not url:
             return
+        device = self.device
 
         def push() -> None:
             try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps({"content": content}).encode("utf-8"),
-                    headers={"Content-Type": "application/json", "User-Agent": "AutoVisionClicker"},
-                )
-                urllib.request.urlopen(req, timeout=10)
+                img = None
+                if shot and device is not None:
+                    try:
+                        ok, buf = cv2.imencode(".jpg", device.screenshot(), [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                        if ok:
+                            img = buf.tobytes()
+                    except Exception:  # noqa: BLE001
+                        img = None
+                if img is None:
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps({"content": content}).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "User-Agent": "AutoVisionClicker"},
+                    )
+                else:
+                    boundary = uuid.uuid4().hex
+                    body = (
+                        (f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
+                         f"Content-Type: application/json\r\n\r\n").encode("utf-8")
+                        + json.dumps({"content": content}).encode("utf-8")
+                        + (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; "
+                           f"filename=\"screen.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n").encode("utf-8")
+                        + img
+                        + f"\r\n--{boundary}--\r\n".encode("utf-8")
+                    )
+                    req = urllib.request.Request(
+                        url,
+                        data=body,
+                        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                                 "User-Agent": "AutoVisionClicker"},
+                    )
+                urllib.request.urlopen(req, timeout=15)
                 self.log_queue.put(self.tr("dc_sent"))
             except Exception as e:  # noqa: BLE001
                 self.log_queue.put(self.tr("dc_fail").format(e))
 
         threading.Thread(target=push, daemon=True).start()
+
+    def _tick_alerts(self, stats, threw: bool) -> None:
+        """Per-cycle Discord bookkeeping: dry-spell alert, periodic status report, low battery.
+        Runs on the worker thread; battery reads are spaced out so the extra adb call is rare."""
+        now = time.monotonic()
+
+        # Dry spell: N empty cycles in a row, one message (with screenshot) per spell.
+        if threw:
+            self._empty_streak = 0
+            self._alert_fired = False
+        else:
+            self._empty_streak += 1
+            limit = int(self.alert_idle.get())
+            if limit > 0 and self._empty_streak >= limit and not self._alert_fired:
+                self._alert_fired = True
+                self._send_discord(self.tr("dc_alert").format(self._empty_streak, stats.throws), shot=True)
+
+        # Low battery: check every 2 minutes, alert once, re-arm after a decent recharge.
+        batt_limit = int(self.alert_batt.get())
+        level = None
+        if batt_limit > 0 and now - self._last_batt_check >= 120:
+            self._last_batt_check = now
+            try:
+                self._batt_last = self.device.battery_info()
+            except Exception:  # noqa: BLE001
+                self._batt_last = {}
+            level = self._batt_last.get("level")
+            if level is not None:
+                if level <= batt_limit and not self._batt_fired:
+                    self._batt_fired = True
+                    self._send_discord(self.tr("dc_low_batt").format(level))
+                elif level >= batt_limit + 10:
+                    self._batt_fired = False
+
+        # Heartbeat report: totals since start. Silence past the interval = something is wrong.
+        report_min = int(self.alert_report.get())
+        if report_min > 0 and now - self._last_report >= report_min * 60:
+            self._last_report = now
+            up_min = int((now - self._run_started) / 60)
+            rate = round(stats.throws / max((now - self._run_started) / 3600, 1 / 60))
+            part = ""
+            if self._batt_last.get("level") is not None:
+                part = self.tr("dc_batt_part").format(self._batt_last["level"], self._batt_last.get("temp", "?"))
+            self._send_discord(self.tr("dc_report").format(up_min, stats.throws, rate, stats.cycles, part))
 
     # -- run control ----------------------------------------------------------
     def on_play(self) -> None:
@@ -349,6 +439,11 @@ class App:
         self.paused = False
         self._empty_streak = 0
         self._alert_fired = False
+        self._run_started = time.monotonic()
+        self._last_report = time.monotonic()
+        self._last_batt_check = 0.0
+        self._batt_fired = False
+        self._batt_last = {}
         self.worker = threading.Thread(target=self._run_worker, daemon=True)
         self.worker.start()
         self.play_btn.config(state="disabled")
@@ -365,16 +460,7 @@ class App:
             tag = self.tr("msg_throw") if threw else self.tr("msg_empty")
             self.log_queue.put(self.tr("msg_cycle").format(stats.cycles, tag, stats.throws))
             self.log_queue.put(f"__count__{stats.throws}")
-            # Discord dry-spell alert: N empty cycles in a row, one message per spell.
-            if threw:
-                self._empty_streak = 0
-                self._alert_fired = False
-            else:
-                self._empty_streak += 1
-                limit = int(self.alert_idle.get())
-                if limit > 0 and self._empty_streak >= limit and not self._alert_fired:
-                    self._alert_fired = True
-                    self._send_discord(self.tr("dc_alert").format(self._empty_streak, stats.throws))
+            self._tick_alerts(stats, threw)
 
         dim = self.dim_screen.get()
         try:
@@ -386,6 +472,8 @@ class App:
             self.log_queue.put("__done__" + self.tr("msg_done"))
         except Exception as e:  # noqa: BLE001
             self.log_queue.put("__done__" + self.tr("msg_err").format(e))
+            # The bot died while unattended — this is the alert that matters most.
+            self._send_discord(self.tr("dc_stopped").format(e), shot=True)
         finally:
             self.device.stop_stream()
             if dim:
