@@ -42,6 +42,18 @@ LANG = {
     "copied":        {"vi": "Đã chép ✓", "en": "Copied ✓"},
     "device":        {"vi": "Thiết bị:", "en": "Device:"},
     "refresh":       {"vi": "Làm mới", "en": "Refresh"},
+    "connect":       {"vi": "Kết nối", "en": "Connect"},
+    "conn_msg":      {"vi": "Điện thoại đang nối với máy tính bằng gì?", "en": "How is the phone connected?"},
+    "conn_usb":      {"vi": "USB (cắm cáp)", "en": "USB (cable)"},
+    "conn_wifi":     {"vi": "Wi-Fi (rút được cáp)", "en": "Wi-Fi (cable-free)"},
+    "conn_need_usb": {"vi": "Cần cắm cáp USB trước, sau đó mới bật được chế độ Wi-Fi.",
+                      "en": "Plug in the USB cable first, then Wi-Fi mode can be enabled."},
+    "conn_working":  {"vi": "Đang bật adb qua Wi-Fi…", "en": "Enabling adb over Wi-Fi…"},
+    "conn_wifi_ok":  {"vi": "✓ Đã kết nối Wi-Fi ({}) — bây giờ có thể rút cáp USB.",
+                      "en": "✓ Wi-Fi connected ({}) — you can unplug the USB cable now."},
+    "conn_wifi_fail": {"vi": "Kết nối Wi-Fi thất bại: {}", "en": "Wi-Fi connect failed: {}"},
+    "conn_usb_ok":   {"vi": "Đã chọn thiết bị USB: {}", "en": "USB device selected: {}"},
+    "conn_re_ok":    {"vi": "✓ Tự kết nối lại Wi-Fi ({}).", "en": "✓ Reconnected over Wi-Fi ({})."},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "slot_offset":   {"vi": "Khoảng cách @ → ô đầu (px):", "en": "Distance @ → first slot (px):"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
@@ -116,6 +128,7 @@ class App:
         self._last_throws = 0
         self._empty_streak = 0             # consecutive empty cycles, for the Discord alert
         self._alert_fired = False          # one alert per dry spell
+        self._reconnecting = False         # background Wi-Fi re-connect in flight
 
         data = self._read_settings()
         self.lang = data.get("lang", "vi") if data.get("lang") in ("vi", "en") else "vi"
@@ -157,8 +170,11 @@ class App:
         self.device_var = tk.StringVar()
         self.device_combo = ttk.Combobox(top, textvariable=self.device_var, state="readonly", width=22)
         self.device_combo.pack(side="left", padx=6)
+        self.connect_btn = ttk.Button(top, text=self.tr("connect"), command=self._connect_dialog)
+        self.connect_btn.pack(side="left")
+        self._i18n.append((self.connect_btn, "connect"))
         self.refresh_btn = ttk.Button(top, text=self.tr("refresh"), command=self.refresh_devices)
-        self.refresh_btn.pack(side="left")
+        self.refresh_btn.pack(side="left", padx=4)
         self._i18n.append((self.refresh_btn, "refresh"))
 
         controls = ttk.Frame(self.tab_main)
@@ -359,6 +375,83 @@ class App:
             self.device_var.set(devices[0])
         if not devices:
             self._set_status("st_no_device")
+        # A remembered Wi-Fi device that isn't listed (adb server restarted, PC rebooted):
+        # try to re-establish it in the background as long as the phone's adbd is still in
+        # TCP mode. On success the device list is refreshed and it shows up again.
+        saved = self.device_var.get()
+        if saved and ":" in saved and saved not in devices and not self._reconnecting:
+            self._reconnecting = True
+
+            def rejoin() -> None:
+                try:
+                    Device.adb_connect(saved)
+                    self.log_queue.put(self.tr("conn_re_ok").format(saved))
+                    self.root.after(0, self.refresh_devices)
+                except Exception:  # noqa: BLE001
+                    pass
+                finally:
+                    self._reconnecting = False
+
+            threading.Thread(target=rejoin, daemon=True).start()
+
+    def _connect_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.tr("connect"))
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, text=self.tr("conn_msg")).pack(padx=16, pady=(14, 10))
+        row = ttk.Frame(dlg)
+        row.pack(padx=16, pady=(0, 14))
+        ttk.Button(row, text=self.tr("conn_usb"), width=20,
+                   command=lambda: (dlg.destroy(), self._connect_usb())).pack(side="left", padx=4)
+        ttk.Button(row, text=self.tr("conn_wifi"), width=20,
+                   command=lambda: (dlg.destroy(), self._connect_wifi())).pack(side="left", padx=4)
+
+    def _usb_devices(self) -> list[str]:
+        try:
+            return [d for d in Device.list_devices() if ":" not in d]
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _connect_usb(self) -> None:
+        usb = self._usb_devices()
+        if not usb:
+            self._log(self.tr("st_no_device"))
+            self._set_status("st_no_device")
+            return
+        self.refresh_devices()
+        self.device_var.set(usb[0])
+        self.save_settings()
+        self._log(self.tr("conn_usb_ok").format(usb[0]))
+
+    def _connect_wifi(self) -> None:
+        """Turn on adb-over-Wi-Fi via the USB cable, then hand the GUI the Wi-Fi serial.
+        Runs on a thread: tcpip + connect take a few seconds and must not freeze the UI."""
+        self.connect_btn.config(state="disabled")
+        self._log(self.tr("conn_working"))
+
+        def work() -> None:
+            try:
+                usb = self._usb_devices()
+                if not usb:
+                    self.log_queue.put(self.tr("conn_need_usb"))
+                    return
+                serial = Device(usb[0]).enable_wifi_adb()
+                self.log_queue.put(self.tr("conn_wifi_ok").format(serial))
+
+                def adopt() -> None:
+                    self.refresh_devices()
+                    self.device_var.set(serial)
+                    self.save_settings()
+
+                self.root.after(0, adopt)
+            except Exception as e:  # noqa: BLE001
+                self.log_queue.put(self.tr("conn_wifi_fail").format(e))
+            finally:
+                self.root.after(0, lambda: self.connect_btn.config(state="normal"))
+
+        threading.Thread(target=work, daemon=True).start()
 
     # -- Discord alert ----------------------------------------------------------
     def _send_discord(self, content: str, shot: bool = False) -> None:

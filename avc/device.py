@@ -79,6 +79,41 @@ class Device:
                 serials.append(line.split("\t")[0])
         return serials
 
+    @classmethod
+    def adb_connect(cls, serial: str, adb_path: str | None = None) -> None:
+        """Connect the adb server to a TCP device ('ip:port'). Raises AdbError on failure."""
+        adb = adb_path or find_adb()
+        proc = _quiet_run([adb, "connect", serial], capture_output=True, timeout=10)
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+        # Success prints 'connected to …' or 'already connected to …'.
+        if "connected" not in out:
+            err = (proc.stderr or b"").decode("utf-8", "replace")
+            raise AdbError(f"adb connect {serial}: {(out + err).strip()}")
+
+    def wifi_ip(self) -> str | None:
+        """The phone's Wi-Fi IPv4 address, or None if Wi-Fi is down."""
+        try:
+            out = self._run(["shell", "ip", "addr", "show", "wlan0"])
+        except AdbError:
+            return None
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith("inet "):
+                return line.split()[1].split("/")[0]
+        return None
+
+    def enable_wifi_adb(self, port: int = 5555) -> str:
+        """Switch this (USB-connected) device's adbd to TCP mode and connect over Wi-Fi.
+        Returns the new serial 'ip:port'; afterwards the USB cable can be unplugged."""
+        ip = self.wifi_ip()
+        if not ip:
+            raise AdbError("phone has no Wi-Fi IP — check that Wi-Fi is connected")
+        self._run(["tcpip", str(port)])
+        time.sleep(2.0)  # adbd restarts in TCP mode
+        serial = f"{ip}:{port}"
+        Device.adb_connect(serial, self.adb_path)
+        return serial
+
     def screen_size(self) -> tuple[int, int]:
         """(width, height) in pixels. Cached after first read."""
         if self._size is not None:
