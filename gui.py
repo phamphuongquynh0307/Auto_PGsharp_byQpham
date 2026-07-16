@@ -60,8 +60,8 @@ class App:
         cfg.pack(fill="x", **pad)
         self.slot_offset = self._spin(cfg, "Khoảng cách @ → ô đầu (px):", 0, 100, 1500, 770)
         self.throw_power = self._spin(cfg, "Lực ném (px, càng lớn càng mạnh):", 1, 200, 1400, 550)
-        self.wait_enc = self._spin(cfg, "Chờ mở màn bắt tối đa (giây):", 2, 1, 15, 3.0, is_float=True)
-        self.wait_catch = self._spin(cfg, "Chờ bắt xong tối đa (giây):", 3, 1, 20, 6.0, is_float=True)
+        self.wait_enc = self._spin(cfg, "Chờ mở màn bắt tối đa (giây):", 2, 2, 15, 3.0, is_float=True)
+        self.wait_catch = self._spin(cfg, "Chờ bắt xong tối đa (giây):", 3, 2, 20, 6.0, is_float=True)
         self.idle_aw = self._spin(cfg, "Trống mấy lần thì AutoWalk (0=tắt):", 4, 0, 20, 3)
         self.max_catches = self._spin(cfg, "Giới hạn số con (0=∞):", 5, 0, 9999, 0)
         self.dim_screen = tk.BooleanVar(value=False)
@@ -116,8 +116,10 @@ class App:
             return
         self.slot_offset.set(data.get("slot_offset", int(self.slot_offset.get())))
         self.throw_power.set(data.get("throw_power", int(self.throw_power.get())))
-        self.wait_enc.set(data.get("wait_enc", float(self.wait_enc.get())))
-        self.wait_catch.set(data.get("wait_catch", float(self.wait_catch.get())))
+        # Encounters take ~2-3s to open; a stored wait below that makes the routine give up
+        # mid-load and re-tap from scratch every cycle, so clamp old too-low values.
+        self.wait_enc.set(max(2.0, float(data.get("wait_enc", self.wait_enc.get()))))
+        self.wait_catch.set(max(2.0, float(data.get("wait_catch", self.wait_catch.get()))))
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
         self.dim_screen.set(data.get("dim_screen", False))
@@ -178,8 +180,8 @@ class App:
         cfg = CatchConfig(
             slot_offset_y=int(self.slot_offset.get()),
             throw_dy=-abs(int(self.throw_power.get())),
-            encounter_timeout=float(self.wait_enc.get()),
-            catch_timeout=float(self.wait_catch.get()),
+            encounter_timeout=max(2.0, float(self.wait_enc.get())),
+            catch_timeout=max(2.0, float(self.wait_catch.get())),
             idle_before_autowalk=int(self.idle_aw.get()),
             max_catches=int(self.max_catches.get()),
         )

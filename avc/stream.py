@@ -16,6 +16,7 @@ import threading
 import time
 
 import av
+import cv2
 import numpy as np
 
 _NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -35,10 +36,26 @@ class _ReadOnly:
 
 
 class ScreenStream:
-    def __init__(self, serial: str | None, adb_path: str, bitrate: str = "8M") -> None:
+    def __init__(
+        self,
+        serial: str | None,
+        adb_path: str,
+        bitrate: str = "4M",
+        native_size: tuple[int, int] | None = None,
+    ) -> None:
         self.serial = serial
         self.adb_path = adb_path
         self.bitrate = bitrate
+        # Encode at half resolution: the phone's H.264 encoder then works on 1/4 of the
+        # pixels (much less heat) and the PC decodes 4x faster, so frames never back up in
+        # the pipe and latest() stays truly "now". Frames are upscaled back to native size
+        # after decode so template matching and tap coordinates are unaffected.
+        self.native_size = native_size
+        self._half_size: tuple[int, int] | None = None
+        if native_size is not None:
+            w, h = native_size
+            self._half_size = (w // 2 - (w // 2) % 2, h // 2 - (h // 2) % 2)
+        self._use_size = self._half_size is not None
         self._frame: np.ndarray | None = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -54,8 +71,11 @@ class ScreenStream:
             "--output-format=h264",
             f"--bit-rate={self.bitrate}",
             f"--time-limit={_TIME_LIMIT}",
-            "-",
         ]
+        if self._use_size:
+            hw, hh = self._half_size
+            cmd.append(f"--size={hw}x{hh}")
+        cmd.append("-")
         return cmd
 
     def start(self) -> None:
@@ -67,6 +87,7 @@ class ScreenStream:
 
     def _run(self) -> None:
         while not self._stop.is_set():
+            got_frame = False
             try:
                 self._proc = subprocess.Popen(self._cmd(), stdout=subprocess.PIPE, creationflags=_NO_WINDOW)
                 container = av.open(_ReadOnly(self._proc.stdout), format="h264", mode="r")
@@ -74,6 +95,9 @@ class ScreenStream:
                     if self._stop.is_set():
                         break
                     img = frame.to_ndarray(format="bgr24")
+                    if self.native_size is not None and (img.shape[1], img.shape[0]) != self.native_size:
+                        img = cv2.resize(img, self.native_size, interpolation=cv2.INTER_LINEAR)
+                    got_frame = True
                     with self._lock:
                         self._frame = img
             except Exception:
@@ -81,6 +105,10 @@ class ScreenStream:
                 time.sleep(0.3)
             finally:
                 self._kill_proc()
+            if self._use_size and not got_frame:
+                # This device's screenrecord rejected the reduced --size: retry at native size
+                # for the rest of the run rather than looping on a dead stream.
+                self._use_size = False
             if not self._stop.is_set():
                 time.sleep(0.05)  # tiny gap between recordings
 

@@ -41,7 +41,7 @@ class Device:
             return
         from .stream import ScreenStream
 
-        self._stream = ScreenStream(self.serial, self.adb_path)
+        self._stream = ScreenStream(self.serial, self.adb_path, native_size=self.screen_size())
         self._stream.start()
 
     def stop_stream(self) -> None:

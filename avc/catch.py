@@ -8,9 +8,10 @@ Per cycle:
   3. Swipe up from the ball to throw it.
   4. Wait out the catch animation, then repeat.
 
-The Poké Ball is the anchor: it looks the same for every Pokémon, so one template covers
-all of them, and detecting it is what gates the throw (no ball on screen -> no encounter ->
-skip the swipe instead of flailing).
+The camera icon marks the encounter opening; it only *times* the throw (throw the moment it
+shows). If it never shows the routine throws anyway — a stray swipe on the map is harmless
+and cheaper than a missed catch — but the cycle still counts as empty so the AutoWalk
+dry-spell logic keeps working.
 """
 from __future__ import annotations
 
@@ -51,6 +52,9 @@ class CatchConfig:
     # above that anchor.
     anchor_template: str = "templates/nearby_anchor.png"
     anchor_threshold: float = 0.7
+    # The '@' anchor lives on the right-edge sidebar; its height varies with how many
+    # Pokémon are listed. Searching just that strip is ~10x cheaper than the full frame.
+    anchor_region: tuple[int, int, int, int] = (950, 200, 270, 1800)
     slot_offset_y: int = 770        # pixels above the '@' anchor to the first Pokémon slot
     # Fallback fixed slot, used only if the anchor can't be found and require_anchor is False.
     nearby_slot: tuple[int, int] = (940, 205)
@@ -61,6 +65,8 @@ class CatchConfig:
     ball_template: str = "templates/camera.png"
     ball_threshold: float = 0.7
     ball_fallback: tuple[int, int] = (610, 2485)  # used only if the ball isn't detected
+    # The encounter camera icon sits at a fixed spot at the top center (~610, 181).
+    ball_region: tuple[int, int, int, int] = (430, 40, 360, 300)
 
     # Throw: swipe from the ball straight up toward the Pokémon. Bigger |throw_dy| = harder throw;
     # too hard sails over the Pokémon, so this is deliberately gentle and tunable in the GUI.
@@ -165,11 +171,13 @@ class CatchRoutine:
         self.device.tap(jx, jy)
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=(0.95, 1.0, 1.05))
+        matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=(0.95, 1.0, 1.05),
+                       region=self.config.ball_region)
         return self.config.ball_fallback if matches else None
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1))
+        matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1),
+                       region=self.config.anchor_region)
         if not matches:
             return None
         ax, ay = matches[0].center
@@ -198,8 +206,9 @@ class CatchRoutine:
         frame = self.device.screenshot()
 
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
+        # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
-            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(0.9, 1.0, 1.1))
+            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(1.0,))
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -215,7 +224,7 @@ class CatchRoutine:
                 return True
         # Level-up "CLAIM REWARDS" screen -> tap claim, then tap screen to dismiss rewards until default screen
         if self._claim_rewards is not None:
-            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=(0.9, 1.0, 1.1))
+            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=(1.0,))
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
@@ -329,22 +338,24 @@ class CatchRoutine:
                 return False
             slot = cfg.nearby_slot
 
-        # Step 2: engage it, then WAIT (poll) for the encounter's ball to actually appear.
-        # Watching for the ball (instead of a fixed delay) is what stops the "sometimes no
-        # pokemon" misses; a short timeout keeps a genuinely-empty slot from stalling long.
+        # Step 2: engage it, then throw. The camera-icon poll only *times* the throw: the swipe
+        # goes out the instant the encounter shows up. If the icon never shows we throw anyway
+        # (a stray swipe on the map is harmless), but the cycle still counts as empty so the
+        # AutoWalk dry-spell logic below keeps triggering on a dead map.
         self._double_tap(*slot)
         ball_xy = self._poll(self._ball_in, cfg.encounter_timeout)
-        if ball_xy is None:
+        if self.stop_event.is_set():
             return False
+        confirmed = ball_xy is not None
 
         # Step 3: throw, then wait until the nearby bar's '@' anchor reappears — that's the reliable
         # "encounter finished, we're back on the map" signal. (Waiting merely for the ball to vanish
         # fired too early: the ball leaves its rest spot the instant it's thrown, mid-animation.)
-        self._throw(ball_xy)
+        self._throw(ball_xy or cfg.ball_fallback)
         # Give the throw/catch animation a moment so we don't detect the pre-throw map state.
         self._interruptible_sleep(cfg.settle_after_catch)
         self._poll(self._slot_in, cfg.catch_timeout)
-        return True
+        return confirmed
 
     def run(self, on_event=None) -> None:
         """Blocking loop. Honors stop_event / pause_event so a GUI can drive it in a thread."""
