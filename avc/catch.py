@@ -64,7 +64,9 @@ class CatchConfig:
     # Encounter detection via camera template + fallback throw position.
     ball_template: str = "templates/camera.png"
     ball_threshold: float = 0.7
-    ball_fallback: tuple[int, int] = (610, 2485)  # used only if the ball isn't detected
+    # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
+    # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
+    ball_fallback: tuple[int, int] = (610, 2380)
     # The encounter camera icon sits at a fixed spot at the top center (~610, 181).
     ball_region: tuple[int, int, int, int] = (430, 40, 360, 300)
 
