@@ -42,17 +42,20 @@ class ScreenStream:
         adb_path: str,
         bitrate: str = "4M",
         native_size: tuple[int, int] | None = None,
+        half: bool = True,
     ) -> None:
         self.serial = serial
         self.adb_path = adb_path
         self.bitrate = bitrate
-        # Encode at half resolution: the phone's H.264 encoder then works on 1/4 of the
-        # pixels (much less heat) and the PC decodes 4x faster, so frames never back up in
-        # the pipe and latest() stays truly "now". Frames are upscaled back to native size
-        # after decode so template matching and tap coordinates are unaffected.
+        # Encode at half resolution by default: the phone's H.264 encoder then works on
+        # 1/4 of the pixels (much less heat) and the PC decodes 4x faster, so frames never
+        # back up in the pipe and latest() stays truly "now". Frames are upscaled back to
+        # native size after decode so template matching and tap coordinates are unaffected.
+        # half=False keeps the native resolution — needed when tiny UI text must stay
+        # sharp enough for template matching (the shundo IV read).
         self.native_size = native_size
         self._half_size: tuple[int, int] | None = None
-        if native_size is not None:
+        if half and native_size is not None:
             w, h = native_size
             self._half_size = (w // 2 - (w // 2) % 2, h // 2 - (h // 2) % 2)
         self._use_size = self._half_size is not None

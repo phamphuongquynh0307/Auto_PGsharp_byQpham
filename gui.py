@@ -26,6 +26,7 @@ import cv2
 
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
+from avc.shundo import ShundoConfig, ShundoRoutine
 
 # Donate destinations shown on the Donate tab.
 DONATE_PAYPAL = "https://paypal.me/CHANGE_ME"   # TODO: real PayPal.me link
@@ -62,6 +63,34 @@ LANG = {
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
+    "mode":          {"vi": "Chế độ:", "en": "Mode:"},
+    "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
+    "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
+    "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
+    "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
+                      "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
+    "tp_wait":       {"vi": "Chờ dịch chuyển tới con mới (giây):", "en": "Teleport wait (s):"},
+    "s_enc_wait":    {"vi": "Chờ mở màn bắt / bị chặn (giây):", "en": "Wait for encounter / block (s):"},
+    "alert_shiny":   {"vi": "Báo Discord khi gặp shiny chưa đủ 100 IV", "en": "Discord alert on shiny below 100 IV"},
+    "shundo_action": {"vi": "Khi thấy shundo:", "en": "On shundo:"},
+    "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
+    "act_stop":      {"vi": "Dừng hẳn bot", "en": "Stop the bot"},
+    "s_counts":      {"vi": "Soi: {} | shiny: {} | shundo: {}", "en": "Checked: {} | shiny: {} | shundo: {}"},
+    "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | shundo {}",
+                      "en": "check {}: not shiny (blocked) | shiny {} | shundo {}"},
+    "msg_s_shiny":   {"vi": "✨ SHINY nhưng chưa đủ 100 IV — bỏ qua, đi tiếp", "en": "✨ SHINY but below 100 IV — skipping"},
+    "msg_s_shundo":  {"vi": "🌟💯 SHUNDO!!! Bot {} — vào máy bắt ngay!", "en": "🌟💯 SHUNDO!!! Bot {} — go catch it now!"},
+    "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
+    "msg_s_miss":    {"vi": "(chưa tap trúng pokemon dưới chân — thử lại)", "en": "(didn't hit the pokémon at the feet — retrying)"},
+    "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
+                      "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
+    "st_shundo":     {"vi": "🌟 SHUNDO — chờ bạn xử lý!", "en": "🌟 SHUNDO — waiting for you!"},
+    "dc_shundo":     {"vi": "🌟💯 SHUNDO phát hiện! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
+                      "en": "🌟💯 SHUNDO found! Bot {} — go catch it! ({} checked, {} shiny)"},
+    "dc_shundo_pause": {"vi": "tạm dừng, encounter đang mở", "en": "paused with the encounter open"},
+    "dc_shundo_stop":  {"vi": "đã dừng hẳn, encounter đang mở", "en": "stopped with the encounter open"},
+    "dc_shiny":      {"vi": "✨ Shiny nhưng chưa đủ 100 IV — bot bỏ qua (đã soi {} con)",
+                      "en": "✨ Shiny below 100 IV — skipped ({} checked)"},
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
@@ -115,8 +144,8 @@ def _settings_path() -> str:
 class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        root.geometry("470x720")
-        root.minsize(430, 640)
+        root.geometry("470x780")
+        root.minsize(430, 700)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.routine: CatchRoutine | None = None
@@ -177,6 +206,15 @@ class App:
         self.refresh_btn.pack(side="left", padx=4)
         self._i18n.append((self.refresh_btn, "refresh"))
 
+        mode_row = ttk.Frame(self.tab_main)
+        mode_row.pack(fill="x", **pad)
+        self._label(mode_row, "mode").pack(side="left")
+        self.mode = "catch"            # "catch" | "shundo"
+        self.mode_var = tk.StringVar()
+        self.mode_combo = ttk.Combobox(mode_row, textvariable=self.mode_var, state="readonly", width=28)
+        self.mode_combo.pack(side="left", padx=6)
+        self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
+
         controls = ttk.Frame(self.tab_main)
         controls.pack(fill="x", **pad)
         self.play_btn = ttk.Button(controls, text=self.tr("run"), command=self.on_play)
@@ -218,6 +256,25 @@ class App:
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
         dim_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
+
+        sh_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_shundo"))
+        sh_grp.pack(fill="x", **pad)
+        self._i18n.append((sh_grp, "grp_shundo"))
+        note = ttk.Label(sh_grp, text=self.tr("shundo_note"), wraplength=400, foreground="#666")
+        note.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
+        self._i18n.append((note, "shundo_note"))
+        self.tp_wait = self._spin(sh_grp, "tp_wait", 1, 2, 15, 4.0, is_float=True)
+        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 2, 1, 5, 2.0, is_float=True)
+        self._label(sh_grp, "shundo_action", row=3, column=0, sticky="w", padx=6, pady=2)
+        self.shundo_action = "pause"   # "pause" | "stop"
+        self.action_var = tk.StringVar()
+        self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
+        self.action_combo.grid(row=3, column=1, sticky="e", padx=6, pady=2)
+        self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
+        self.alert_shiny = tk.BooleanVar(value=True)
+        shiny_chk = ttk.Checkbutton(sh_grp, text=self.tr("alert_shiny"), variable=self.alert_shiny)
+        shiny_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((shiny_chk, "alert_shiny"))
 
         dc_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_discord"))
         dc_grp.pack(fill="x", **pad)
@@ -277,6 +334,28 @@ class App:
         parent.columnconfigure(1, weight=1)
         return var
 
+    # -- mode / shundo action selectors ----------------------------------------
+    MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"))
+    ACTIONS = (("pause", "act_pause"), ("stop", "act_stop"))
+
+    def _refresh_choice(self, combo: ttk.Combobox, var: tk.StringVar, pairs, code: str) -> None:
+        combo["values"] = [self.tr(k) for _c, k in pairs]
+        var.set(self.tr(dict(pairs)[code]))
+
+    def _code_from_choice(self, var: tk.StringVar, pairs, fallback: str) -> str:
+        for code, key in pairs:
+            if var.get() == self.tr(key):
+                return code
+        return fallback
+
+    def _on_mode_change(self, _event=None) -> None:
+        self.mode = self._code_from_choice(self.mode_var, self.MODES, self.mode)
+        self.save_settings()
+
+    def _on_action_change(self, _event=None) -> None:
+        self.shundo_action = self._code_from_choice(self.action_var, self.ACTIONS, self.shundo_action)
+        self.save_settings()
+
     # -- language ---------------------------------------------------------------
     def _on_lang_change(self, _event=None) -> None:
         chosen = self.lang_var.get()
@@ -297,6 +376,8 @@ class App:
         self.pause_btn.config(text=self.tr("resume" if self.paused else "pause"))
         self.status_var.set(self.tr(self._status_key))
         self.count_var.set(self.tr("thrown").format(self._last_throws))
+        self._refresh_choice(self.mode_combo, self.mode_var, self.MODES, self.mode)
+        self._refresh_choice(self.action_combo, self.action_var, self.ACTIONS, self.shundo_action)
 
     def _set_status(self, key: str) -> None:
         self._status_key = key
@@ -322,6 +403,13 @@ class App:
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
         self.dim_screen.set(data.get("dim_screen", False))
+        if data.get("mode") in ("catch", "shundo"):
+            self.mode = data["mode"]
+        self.tp_wait.set(max(2.0, float(data.get("tp_wait", self.tp_wait.get()))))
+        self.s_enc_wait.set(max(1.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
+        if data.get("shundo_action") in ("pause", "stop"):
+            self.shundo_action = data["shundo_action"]
+        self.alert_shiny.set(data.get("alert_shiny", True))
         self.webhook_url.set(data.get("webhook", ""))
         self.alert_idle.set(data.get("alert_idle", int(self.alert_idle.get())))
         self.alert_report.set(data.get("alert_report", int(self.alert_report.get())))
@@ -338,6 +426,11 @@ class App:
             "idle_aw": int(self.idle_aw.get()),
             "max_catches": int(self.max_catches.get()),
             "dim_screen": bool(self.dim_screen.get()),
+            "mode": self.mode,
+            "tp_wait": float(self.tp_wait.get()),
+            "s_enc_wait": float(self.s_enc_wait.get()),
+            "shundo_action": self.shundo_action,
+            "alert_shiny": bool(self.alert_shiny.get()),
             "device": self.device_var.get(),
             "webhook": self.webhook_url.get().strip(),
             "alert_idle": int(self.alert_idle.get()),
@@ -507,6 +600,10 @@ class App:
         """Per-cycle Discord bookkeeping: dry-spell alert, periodic status report, low battery.
         Runs on the worker thread; battery reads are spaced out so the extra adb call is rare."""
         now = time.monotonic()
+        # Catch mode counts throws; shundo mode counts checked encounters.
+        done = getattr(stats, "throws", None)
+        if done is None:
+            done = getattr(stats, "checked", 0)
 
         # Dry spell: N empty cycles in a row, one message (with screenshot) per spell.
         if threw:
@@ -517,7 +614,7 @@ class App:
             limit = int(self.alert_idle.get())
             if limit > 0 and self._empty_streak >= limit and not self._alert_fired:
                 self._alert_fired = True
-                self._send_discord(self.tr("dc_alert").format(self._empty_streak, stats.throws), shot=True)
+                self._send_discord(self.tr("dc_alert").format(self._empty_streak, done), shot=True)
 
         # Low battery: check every 2 minutes, alert once, re-arm after a decent recharge.
         batt_limit = int(self.alert_batt.get())
@@ -541,11 +638,11 @@ class App:
         if report_min > 0 and now - self._last_report >= report_min * 60:
             self._last_report = now
             up_min = int((now - self._run_started) / 60)
-            rate = round(stats.throws / max((now - self._run_started) / 3600, 1 / 60))
+            rate = round(done / max((now - self._run_started) / 3600, 1 / 60))
             part = ""
             if self._batt_last.get("level") is not None:
                 part = self.tr("dc_batt_part").format(self._batt_last["level"], self._batt_last.get("temp", "?"))
-            self._send_discord(self.tr("dc_report").format(up_min, stats.throws, rate, stats.cycles, part))
+            self._send_discord(self.tr("dc_report").format(up_min, done, rate, stats.cycles, part))
 
     # -- run control ----------------------------------------------------------
     def on_play(self) -> None:
@@ -556,17 +653,25 @@ class App:
             self._log(self.tr("msg_no_device"))
             return
         self.save_settings()
-        cfg = CatchConfig(
-            slot_offset_y=int(self.slot_offset.get()),
-            throw_dy=-abs(int(self.throw_power.get())),
-            encounter_timeout=max(2.0, float(self.wait_enc.get())),
-            catch_timeout=max(2.0, float(self.wait_catch.get())),
-            idle_before_autowalk=int(self.idle_aw.get()),
-            max_catches=int(self.max_catches.get()),
-        )
         try:
             self.device = Device(serial)
-            self.routine = CatchRoutine(self.device, cfg)
+            if self.mode == "shundo":
+                cfg = ShundoConfig(
+                    teleport_wait=max(2.0, float(self.tp_wait.get())),
+                    tap_answer_wait=max(1.0, float(self.s_enc_wait.get())),
+                    shundo_action=self.shundo_action,
+                )
+                self.routine = ShundoRoutine(self.device, cfg)
+            else:
+                cfg = CatchConfig(
+                    slot_offset_y=int(self.slot_offset.get()),
+                    throw_dy=-abs(int(self.throw_power.get())),
+                    encounter_timeout=max(2.0, float(self.wait_enc.get())),
+                    catch_timeout=max(2.0, float(self.wait_catch.get())),
+                    idle_before_autowalk=int(self.idle_aw.get()),
+                    max_catches=int(self.max_catches.get()),
+                )
+                self.routine = CatchRoutine(self.device, cfg)
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))
             return
@@ -597,13 +702,40 @@ class App:
             self.log_queue.put(f"__count__{stats.throws}")
             self._tick_alerts(stats, threw)
 
+        def on_shundo_event(stats, outcome):
+            self.log_queue.put("__countstr__" + self.tr("s_counts").format(stats.checked, stats.shinies, stats.shundos))
+            if outcome == "shundo":
+                how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
+                self.log_queue.put(self.tr("msg_s_shundo").format(how))
+                self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                if self.shundo_action == "pause":
+                    self.log_queue.put("__shundo_paused__")
+            elif outcome == "shiny":
+                self.log_queue.put(self.tr("msg_s_shiny"))
+                if self.alert_shiny.get():
+                    self._send_discord(self.tr("dc_shiny").format(stats.checked), shot=True)
+            elif outcome == "blocked":
+                self.log_queue.put(self.tr("msg_s_blocked").format(stats.checked, stats.shinies, stats.shundos))
+            elif outcome == "miss":
+                self.log_queue.put(self.tr("msg_s_miss"))
+            elif outcome == "nospawn":
+                self.log_queue.put(self.tr("msg_s_nospawn"))
+            elif outcome == "idle":
+                self.log_queue.put(self.tr("msg_s_idle"))
+            self._tick_alerts(stats, outcome not in ("idle", "popup"))
+
         dim = self.dim_screen.get()
         try:
             if dim:
                 self.device.enable_dim()
                 self.log_queue.put(self.tr("msg_dim"))
-            self.device.start_stream()  # realtime H.264 capture
-            self.routine.run(on_event=on_event)
+            # Realtime H.264 capture. Shundo mode streams at native resolution with a
+            # higher bitrate: the IV digits are too small to survive the half-res encode.
+            if self.mode == "shundo":
+                self.device.start_stream(half=False, bitrate="8M")
+            else:
+                self.device.start_stream()
+            self.routine.run(on_event=on_shundo_event if self.mode == "shundo" else on_event)
             self.log_queue.put("__done__" + self.tr("msg_done"))
         except Exception as e:  # noqa: BLE001
             self.log_queue.put("__done__" + self.tr("msg_err").format(e))
@@ -652,6 +784,13 @@ class App:
                 if msg.startswith("__count__"):
                     self._last_throws = int(msg[len("__count__"):])
                     self.count_var.set(self.tr("thrown").format(self._last_throws))
+                elif msg.startswith("__countstr__"):
+                    self.count_var.set(msg[len("__countstr__"):])
+                elif msg == "__shundo_paused__":
+                    # The routine paused itself on a shundo — sync the buttons/status.
+                    self.paused = True
+                    self.pause_btn.config(text=self.tr("resume"))
+                    self._set_status("st_shundo")
                 elif msg.startswith("__done__"):
                     self._finish(msg[len("__done__"):])
                 else:

@@ -35,13 +35,16 @@ class Device:
         self._stream = None  # ScreenStream when realtime capture is enabled
 
     # -- realtime streaming ---------------------------------------------------
-    def start_stream(self) -> None:
-        """Switch screenshot() to pull frames from a live H.264 stream (near-zero latency)."""
+    def start_stream(self, half: bool = True, bitrate: str = "4M") -> None:
+        """Switch screenshot() to pull frames from a live H.264 stream (near-zero latency).
+        half=False streams at native resolution (sharper, hotter) — use when small text
+        must survive the encode, e.g. the shundo IV read."""
         if self._stream is not None:
             return
         from .stream import ScreenStream
 
-        self._stream = ScreenStream(self.serial, self.adb_path, native_size=self.screen_size())
+        self._stream = ScreenStream(self.serial, self.adb_path, bitrate=bitrate,
+                                    native_size=self.screen_size(), half=half)
         self._stream.start()
 
     def stop_stream(self) -> None:
