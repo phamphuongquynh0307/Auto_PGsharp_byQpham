@@ -10,6 +10,7 @@ between Vietnamese and English at runtime.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
@@ -55,6 +56,7 @@ LANG = {
     "conn_wifi_fail": {"vi": "Kết nối Wi-Fi thất bại: {}", "en": "Wi-Fi connect failed: {}"},
     "conn_usb_ok":   {"vi": "Đã chọn thiết bị USB: {}", "en": "USB device selected: {}"},
     "conn_re_ok":    {"vi": "✓ Tự kết nối lại Wi-Fi ({}).", "en": "✓ Reconnected over Wi-Fi ({})."},
+    "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "slot_offset":   {"vi": "Khoảng cách @ → ô đầu (px):", "en": "Distance @ → first slot (px):"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
@@ -64,13 +66,19 @@ LANG = {
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
+    "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
+    "pv_legend":     {"vi": "Xanh lá = ô feed sẽ bấm • Vàng nhạt = thanh @ / ô spawn • Vàng = điểm tap dưới chân • "
+                            "Hồng = vòng Pokémon • Cam = vùng đọc IV • Trắng = vùng toast • Đỏ = đang trong màn bắt",
+                      "en": "Green = feed tap • Pale yellow = @ bar / spawn slot • Yellow = feet tap point • "
+                            "Pink = Pokémon rings • Orange = IV read area • White = toast area • Red = in encounter"},
+    "pv_err":        {"vi": "Không mở được xem trực tiếp: {}", "en": "Could not open live view: {}"},
     "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
     "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
     "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
     "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
                       "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
     "tp_wait":       {"vi": "Chờ dịch chuyển tới con mới (giây):", "en": "Teleport wait (s):"},
-    "s_enc_wait":    {"vi": "Chờ mở màn bắt / bị chặn (giây):", "en": "Wait for encounter / block (s):"},
+    "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
     "alert_shiny":   {"vi": "Báo Discord khi gặp shiny chưa đủ 100 IV", "en": "Discord alert on shiny below 100 IV"},
     "shundo_action": {"vi": "Khi thấy shundo:", "en": "On shundo:"},
     "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
@@ -78,19 +86,21 @@ LANG = {
     "s_counts":      {"vi": "Soi: {} | shiny: {} | shundo: {}", "en": "Checked: {} | shiny: {} | shundo: {}"},
     "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | shundo {}",
                       "en": "check {}: not shiny (blocked) | shiny {} | shundo {}"},
-    "msg_s_shiny":   {"vi": "✨ SHINY nhưng chưa đủ 100 IV — bỏ qua, đi tiếp", "en": "✨ SHINY but below 100 IV — skipping"},
+    "msg_s_shiny":   {"vi": "✨ SHINY! Bot {} — vào máy xử lý!", "en": "✨ SHINY! Bot {} — go handle it!"},
+    "st_shiny":      {"vi": "✨ SHINY — chờ bạn xử lý!", "en": "✨ SHINY — waiting for you!"},
     "msg_s_shundo":  {"vi": "🌟💯 SHUNDO!!! Bot {} — vào máy bắt ngay!", "en": "🌟💯 SHUNDO!!! Bot {} — go catch it now!"},
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
-    "msg_s_miss":    {"vi": "(chưa tap trúng pokemon dưới chân — thử lại)", "en": "(didn't hit the pokémon at the feet — retrying)"},
+    "msg_s_miss":    {"vi": "(double-tap chưa được trả lời — thử lại)", "en": "(double-tap got no answer — retrying)"},
     "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
                       "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
+    "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
     "st_shundo":     {"vi": "🌟 SHUNDO — chờ bạn xử lý!", "en": "🌟 SHUNDO — waiting for you!"},
     "dc_shundo":     {"vi": "🌟💯 SHUNDO phát hiện! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
                       "en": "🌟💯 SHUNDO found! Bot {} — go catch it! ({} checked, {} shiny)"},
     "dc_shundo_pause": {"vi": "tạm dừng, encounter đang mở", "en": "paused with the encounter open"},
     "dc_shundo_stop":  {"vi": "đã dừng hẳn, encounter đang mở", "en": "stopped with the encounter open"},
-    "dc_shiny":      {"vi": "✨ Shiny nhưng chưa đủ 100 IV — bot bỏ qua (đã soi {} con)",
-                      "en": "✨ Shiny below 100 IV — skipped ({} checked)"},
+    "dc_shiny":      {"vi": "✨ SHINY phát hiện (chưa đủ 100 IV)! Bot {} — vào xử lý! (đã soi {} con)",
+                      "en": "✨ SHINY found (below 100 IV)! Bot {} — go handle it! ({} checked)"},
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
@@ -114,6 +124,7 @@ LANG = {
     "msg_empty":     {"vi": "(không có pokemon)", "en": "(no pokémon)"},
     "msg_cycle":     {"vi": "chu kỳ {}: {} | tổng ném: {}", "en": "cycle {}: {} | total thrown: {}"},
     "msg_autowalk":  {"vi": "→ Trống lâu, bấm AutoWalk đi kiếm spawn (lần {})", "en": "→ Dry spell, tapped AutoWalk to find spawns (#{})"},
+    "msg_no_balls":  {"vi": "→ Hết Poké Ball! Thoát màn bắt, tạm ngừng 10 phút (vẫn tự di chuyển).", "en": "→ Out of Poké Balls! Left the encounter, holding off 10 min (still auto-walking)."},
     "msg_done":      {"vi": "Hoàn tất.", "en": "Done."},
     "msg_err":       {"vi": "Lỗi: {}", "en": "Error: {}"},
     "msg_no_init":   {"vi": "Không khởi tạo được: {}", "en": "Could not initialize: {}"},
@@ -127,6 +138,7 @@ LANG = {
                       "en": "📊 AutoClick: up {} min | thrown {} ({}/hr) | {} cycles{}"},
     "dc_batt_part":  {"vi": " | pin {}% ({}°C)", "en": " | battery {}% ({}°C)"},
     "dc_low_batt":   {"vi": "🔋 AutoClick: pin còn {}% — cắm sạc đi!", "en": "🔋 AutoClick: battery at {}% — plug in!"},
+    "dc_no_balls":   {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt, tạm ngừng 10 phút và bật tự di chuyển.", "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen, pausing 10 min and auto-walking."},
     "dc_stopped":    {"vi": "🛑 AutoClick dừng vì lỗi: {}", "en": "🛑 AutoClick stopped with error: {}"},
     "dc_sent":       {"vi": "Đã gửi cảnh báo Discord.", "en": "Discord alert sent."},
     "dc_fail":       {"vi": "Gửi Discord thất bại: {}", "en": "Discord send failed: {}"},
@@ -161,6 +173,9 @@ class App:
 
         data = self._read_settings()
         self.lang = data.get("lang", "vi") if data.get("lang") in ("vi", "en") else "vi"
+        # Every device ever connected, most recent first; shown in the picker even when
+        # currently offline, and Wi-Fi ones are re-connected automatically.
+        self.known: list[str] = [s for s in data.get("known_devices", []) if isinstance(s, str)][:10]
 
         self._build_ui()
         self._apply_settings(data)
@@ -199,6 +214,7 @@ class App:
         self.device_var = tk.StringVar()
         self.device_combo = ttk.Combobox(top, textvariable=self.device_var, state="readonly", width=22)
         self.device_combo.pack(side="left", padx=6)
+        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_pick)
         self.connect_btn = ttk.Button(top, text=self.tr("connect"), command=self._connect_dialog)
         self.connect_btn.pack(side="left")
         self._i18n.append((self.connect_btn, "connect"))
@@ -214,6 +230,9 @@ class App:
         self.mode_combo = ttk.Combobox(mode_row, textvariable=self.mode_var, state="readonly", width=28)
         self.mode_combo.pack(side="left", padx=6)
         self.mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
+        self.preview_btn = ttk.Button(mode_row, text=self.tr("preview"), command=self.toggle_preview)
+        self.preview_btn.pack(side="right")
+        self._i18n.append((self.preview_btn, "preview"))
 
         controls = ttk.Frame(self.tab_main)
         controls.pack(fill="x", **pad)
@@ -264,17 +283,15 @@ class App:
         note.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
         self._i18n.append((note, "shundo_note"))
         self.tp_wait = self._spin(sh_grp, "tp_wait", 1, 2, 15, 4.0, is_float=True)
-        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 2, 1, 5, 2.0, is_float=True)
+        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 2, 2, 12, 3.0, is_float=True)
         self._label(sh_grp, "shundo_action", row=3, column=0, sticky="w", padx=6, pady=2)
         self.shundo_action = "pause"   # "pause" | "stop"
         self.action_var = tk.StringVar()
         self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
         self.action_combo.grid(row=3, column=1, sticky="e", padx=6, pady=2)
         self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
+        # Any shiny now always alerts + pauses (user decision), so no toggle for it.
         self.alert_shiny = tk.BooleanVar(value=True)
-        shiny_chk = ttk.Checkbutton(sh_grp, text=self.tr("alert_shiny"), variable=self.alert_shiny)
-        shiny_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._i18n.append((shiny_chk, "alert_shiny"))
 
         dc_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_discord"))
         dc_grp.pack(fill="x", **pad)
@@ -406,7 +423,7 @@ class App:
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
         self.tp_wait.set(max(2.0, float(data.get("tp_wait", self.tp_wait.get()))))
-        self.s_enc_wait.set(max(1.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
+        self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
         if data.get("shundo_action") in ("pause", "stop"):
             self.shundo_action = data["shundo_action"]
         self.alert_shiny.set(data.get("alert_shiny", True))
@@ -431,7 +448,8 @@ class App:
             "s_enc_wait": float(self.s_enc_wait.get()),
             "shundo_action": self.shundo_action,
             "alert_shiny": bool(self.alert_shiny.get()),
-            "device": self.device_var.get(),
+            "device": self._sel_serial(),
+            "known_devices": self.known,
             "webhook": self.webhook_url.get().strip(),
             "alert_idle": int(self.alert_idle.get()),
             "alert_report": int(self.alert_report.get()),
@@ -457,33 +475,64 @@ class App:
         self.root.destroy()
 
     # -- device ---------------------------------------------------------------
+    OFFLINE_TAG = " (offline)"
+
+    def _sel_serial(self) -> str:
+        """The selected serial with the '(offline)' decoration stripped."""
+        return self.device_var.get().replace(self.OFFLINE_TAG, "").strip()
+
+    def _remember_device(self, serial: str) -> None:
+        """Put `serial` at the front of the known-devices history (deduped, capped)."""
+        if not serial:
+            return
+        self.known = ([serial] + [s for s in self.known if s != serial])[:10]
+        self.save_settings()
+
+    def _on_device_pick(self, _event=None) -> None:
+        self._remember_device(self._sel_serial())
+        # Picking an offline Wi-Fi device is a request to reconnect it — refresh does that.
+        self.refresh_devices()
+
     def refresh_devices(self) -> None:
         try:
-            devices = Device.list_devices()
+            attached = Device.list_devices()
         except Exception as e:  # noqa: BLE001
-            devices = []
+            attached = []
             self._log(self.tr("msg_dev_err").format(e))
-        self.device_combo["values"] = devices
-        if devices and not self.device_var.get():
-            self.device_var.set(devices[0])
-        if not devices:
+        # Show every known device: attached ones plain, remembered-but-absent ones tagged.
+        options = attached + [s + self.OFFLINE_TAG for s in self.known if s not in attached]
+        self.device_combo["values"] = options
+        cur = self._sel_serial()
+        if cur:
+            self.device_var.set(cur if cur in attached else
+                                (cur + self.OFFLINE_TAG if cur in self.known else cur))
+        elif attached:
+            self.device_var.set(attached[0])
+        elif options:
+            self.device_var.set(options[0])
+        if not attached:
             self._set_status("st_no_device")
-        # A remembered Wi-Fi device that isn't listed (adb server restarted, PC rebooted):
-        # try to re-establish it in the background as long as the phone's adbd is still in
-        # TCP mode. On success the device list is refreshed and it shows up again.
-        saved = self.device_var.get()
-        if saved and ":" in saved and saved not in devices and not self._reconnecting:
+        # Known Wi-Fi devices that aren't attached (adb server restarted, PC rebooted):
+        # try to re-establish them all in the background while the phones' adbd is still
+        # in TCP mode. On success the list is refreshed and they show up again.
+        missing_wifi = [s for s in self.known if ":" in s and s not in attached]
+        if missing_wifi and not self._reconnecting:
             self._reconnecting = True
 
             def rejoin() -> None:
+                regained = False
                 try:
-                    Device.adb_connect(saved)
-                    self.log_queue.put(self.tr("conn_re_ok").format(saved))
-                    self.root.after(0, self.refresh_devices)
-                except Exception:  # noqa: BLE001
-                    pass
+                    for serial in missing_wifi:
+                        try:
+                            Device.adb_connect(serial)
+                            self.log_queue.put(self.tr("conn_re_ok").format(serial))
+                            regained = True
+                        except Exception:  # noqa: BLE001
+                            pass
                 finally:
                     self._reconnecting = False
+                if regained:
+                    self.root.after(0, self.refresh_devices)
 
             threading.Thread(target=rejoin, daemon=True).start()
 
@@ -507,44 +556,64 @@ class App:
         except Exception:  # noqa: BLE001
             return []
 
-    def _connect_usb(self) -> None:
+    def _pick_usb(self, then) -> None:
+        """Run `then(serial)` on a USB device — directly when one is plugged in, via a
+        small picker dialog when several are."""
         usb = self._usb_devices()
         if not usb:
-            self._log(self.tr("st_no_device"))
+            self._log(self.tr("conn_need_usb"))
             self._set_status("st_no_device")
             return
-        self.refresh_devices()
-        self.device_var.set(usb[0])
-        self.save_settings()
-        self._log(self.tr("conn_usb_ok").format(usb[0]))
+        if len(usb) == 1:
+            then(usb[0])
+            return
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.tr("connect"))
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, text=self.tr("pick_usb")).pack(padx=16, pady=(14, 8))
+        for serial in usb:
+            ttk.Button(dlg, text=serial, width=30,
+                       command=lambda s=serial: (dlg.destroy(), then(s))).pack(padx=16, pady=3)
+        ttk.Frame(dlg).pack(pady=6)
+
+    def _connect_usb(self) -> None:
+        def adopt(serial: str) -> None:
+            self.refresh_devices()
+            self.device_var.set(serial)
+            self._remember_device(serial)
+            self._log(self.tr("conn_usb_ok").format(serial))
+
+        self._pick_usb(adopt)
 
     def _connect_wifi(self) -> None:
         """Turn on adb-over-Wi-Fi via the USB cable, then hand the GUI the Wi-Fi serial.
         Runs on a thread: tcpip + connect take a few seconds and must not freeze the UI."""
-        self.connect_btn.config(state="disabled")
-        self._log(self.tr("conn_working"))
 
-        def work() -> None:
-            try:
-                usb = self._usb_devices()
-                if not usb:
-                    self.log_queue.put(self.tr("conn_need_usb"))
-                    return
-                serial = Device(usb[0]).enable_wifi_adb()
-                self.log_queue.put(self.tr("conn_wifi_ok").format(serial))
+        def start(usb_serial: str) -> None:
+            self.connect_btn.config(state="disabled")
+            self._log(self.tr("conn_working"))
 
-                def adopt() -> None:
-                    self.refresh_devices()
-                    self.device_var.set(serial)
-                    self.save_settings()
+            def work() -> None:
+                try:
+                    serial = Device(usb_serial).enable_wifi_adb()
+                    self.log_queue.put(self.tr("conn_wifi_ok").format(serial))
 
-                self.root.after(0, adopt)
-            except Exception as e:  # noqa: BLE001
-                self.log_queue.put(self.tr("conn_wifi_fail").format(e))
-            finally:
-                self.root.after(0, lambda: self.connect_btn.config(state="normal"))
+                    def adopt() -> None:
+                        self.refresh_devices()
+                        self.device_var.set(serial)
+                        self._remember_device(serial)
 
-        threading.Thread(target=work, daemon=True).start()
+                    self.root.after(0, adopt)
+                except Exception as e:  # noqa: BLE001
+                    self.log_queue.put(self.tr("conn_wifi_fail").format(e))
+                finally:
+                    self.root.after(0, lambda: self.connect_btn.config(state="normal"))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        self._pick_usb(start)
 
     # -- Discord alert ----------------------------------------------------------
     def _send_discord(self, content: str, shot: bool = False) -> None:
@@ -596,8 +665,10 @@ class App:
 
         threading.Thread(target=push, daemon=True).start()
 
-    def _tick_alerts(self, stats, threw: bool) -> None:
+    def _tick_alerts(self, stats, threw: bool, *, shundo: bool = False) -> None:
         """Per-cycle Discord bookkeeping: dry-spell alert, periodic status report, low battery.
+        Shundo mode keeps only the battery alert — its real notifications are the
+        shiny/shundo messages, and the throw-rate heartbeat would just be noise.
         Runs on the worker thread; battery reads are spaced out so the extra adb call is rare."""
         now = time.monotonic()
         # Catch mode counts throws; shundo mode counts checked encounters.
@@ -606,15 +677,16 @@ class App:
             done = getattr(stats, "checked", 0)
 
         # Dry spell: N empty cycles in a row, one message (with screenshot) per spell.
-        if threw:
-            self._empty_streak = 0
-            self._alert_fired = False
-        else:
-            self._empty_streak += 1
-            limit = int(self.alert_idle.get())
-            if limit > 0 and self._empty_streak >= limit and not self._alert_fired:
-                self._alert_fired = True
-                self._send_discord(self.tr("dc_alert").format(self._empty_streak, done), shot=True)
+        if not shundo:
+            if threw:
+                self._empty_streak = 0
+                self._alert_fired = False
+            else:
+                self._empty_streak += 1
+                limit = int(self.alert_idle.get())
+                if limit > 0 and self._empty_streak >= limit and not self._alert_fired:
+                    self._alert_fired = True
+                    self._send_discord(self.tr("dc_alert").format(self._empty_streak, done), shot=True)
 
         # Low battery: check every 2 minutes, alert once, re-arm after a decent recharge.
         batt_limit = int(self.alert_batt.get())
@@ -634,7 +706,7 @@ class App:
                     self._batt_fired = False
 
         # Heartbeat report: totals since start. Silence past the interval = something is wrong.
-        report_min = int(self.alert_report.get())
+        report_min = 0 if shundo else int(self.alert_report.get())
         if report_min > 0 and now - self._last_report >= report_min * 60:
             self._last_report = now
             up_min = int((now - self._run_started) / 60)
@@ -644,24 +716,98 @@ class App:
                 part = self.tr("dc_batt_part").format(self._batt_last["level"], self._batt_last.get("temp", "?"))
             self._send_discord(self.tr("dc_report").format(up_min, done, rate, stats.cycles, part))
 
+    # -- live view -------------------------------------------------------------
+    def toggle_preview(self) -> None:
+        """A small window mirroring the phone with the shundo detections drawn on it:
+        where the feed tap goes, the '@' slot state, the feet tap point, spawn rings."""
+        if getattr(self, "_pv_win", None):
+            self._close_preview()
+            return
+        try:
+            dev = self.device or Device(self._sel_serial() or None)
+            if not (self._sel_serial() or self.device):
+                raise RuntimeError(self.tr("msg_no_device"))
+            self._pv_dev = dev
+            self._pv_det = ShundoRoutine(dev)
+        except Exception as e:  # noqa: BLE001
+            self._log(self.tr("pv_err").format(e))
+            return
+        win = tk.Toplevel(self.root)
+        win.title(self.tr("preview"))
+        win.resizable(False, False)
+        self._pv_win = win
+        self._pv_label = ttk.Label(win)
+        self._pv_label.pack(padx=4, pady=4)
+        ttk.Label(win, text=self.tr("pv_legend"), wraplength=330, justify="left").pack(padx=8, pady=(0, 8))
+        win.protocol("WM_DELETE_WINDOW", self._close_preview)
+        self._pv_busy = False
+        self._pv_img = None
+        self._pv_tick()
+
+    def _close_preview(self) -> None:
+        win = getattr(self, "_pv_win", None)
+        self._pv_win = None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _pv_tick(self) -> None:
+        if getattr(self, "_pv_win", None) is None:
+            return
+        if not self._pv_busy:
+            self._pv_busy = True
+            threading.Thread(target=self._pv_work, daemon=True).start()
+        self.root.after(800, self._pv_tick)
+
+    def _pv_work(self) -> None:
+        """Grab + annotate + display one frame. Runs off the UI thread; only the final
+        image swap is marshalled back. Uses the routine's live stream when running,
+        else one-shot captures (slower but fine for a preview)."""
+        try:
+            dev = self.device if self.device is not None else self._pv_dev
+            frame = dev.screenshot()
+            ann = self._pv_det.annotate(frame)
+            h, w = ann.shape[:2]
+            scale = 340 / w
+            small = cv2.resize(ann, (340, int(h * scale)))
+            ok, png = cv2.imencode(".png", small)
+            if ok:
+                data = base64.b64encode(png.tobytes())
+
+                def show() -> None:
+                    if getattr(self, "_pv_win", None) is not None:
+                        img = tk.PhotoImage(data=data)
+                        self._pv_img = img          # keep a reference or Tk drops it
+                        self._pv_label.config(image=img)
+
+                self.root.after(0, show)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            self._pv_busy = False
+
     # -- run control ----------------------------------------------------------
     def on_play(self) -> None:
         if self.worker and self.worker.is_alive():
             return
-        serial = self.device_var.get()
+        serial = self._sel_serial()
         if not serial:
             self._log(self.tr("msg_no_device"))
             return
+        self._remember_device(serial)
         self.save_settings()
         try:
             self.device = Device(serial)
             if self.mode == "shundo":
                 cfg = ShundoConfig(
                     teleport_wait=max(2.0, float(self.tp_wait.get())),
-                    tap_answer_wait=max(1.0, float(self.s_enc_wait.get())),
+                    encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     shundo_action=self.shundo_action,
                 )
                 self.routine = ShundoRoutine(self.device, cfg)
+                self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
             else:
                 cfg = CatchConfig(
                     slot_offset_y=int(self.slot_offset.get()),
@@ -694,6 +840,10 @@ class App:
 
     def _run_worker(self) -> None:
         def on_event(stats, threw):
+            if stats.last_event == "no_balls":
+                self.log_queue.put(self.tr("msg_no_balls"))
+                self._send_discord(self.tr("dc_no_balls"), shot=True)
+                return
             if stats.last_event == "autowalk":
                 self.log_queue.put(self.tr("msg_autowalk").format(stats.autowalks))
                 return
@@ -704,16 +854,16 @@ class App:
 
         def on_shundo_event(stats, outcome):
             self.log_queue.put("__countstr__" + self.tr("s_counts").format(stats.checked, stats.shinies, stats.shundos))
-            if outcome == "shundo":
+            if outcome in ("shundo", "shiny"):
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
-                self.log_queue.put(self.tr("msg_s_shundo").format(how))
-                self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                if outcome == "shundo":
+                    self.log_queue.put(self.tr("msg_s_shundo").format(how))
+                    self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                else:
+                    self.log_queue.put(self.tr("msg_s_shiny").format(how))
+                    self._send_discord(self.tr("dc_shiny").format(how, stats.checked), shot=True)
                 if self.shundo_action == "pause":
-                    self.log_queue.put("__shundo_paused__")
-            elif outcome == "shiny":
-                self.log_queue.put(self.tr("msg_s_shiny"))
-                if self.alert_shiny.get():
-                    self._send_discord(self.tr("dc_shiny").format(stats.checked), shot=True)
+                    self.log_queue.put("__paused_shundo__" if outcome == "shundo" else "__paused_shiny__")
             elif outcome == "blocked":
                 self.log_queue.put(self.tr("msg_s_blocked").format(stats.checked, stats.shinies, stats.shundos))
             elif outcome == "miss":
@@ -722,7 +872,7 @@ class App:
                 self.log_queue.put(self.tr("msg_s_nospawn"))
             elif outcome == "idle":
                 self.log_queue.put(self.tr("msg_s_idle"))
-            self._tick_alerts(stats, outcome not in ("idle", "popup"))
+            self._tick_alerts(stats, outcome not in ("idle", "popup"), shundo=True)
 
         dim = self.dim_screen.get()
         try:
@@ -786,11 +936,11 @@ class App:
                     self.count_var.set(self.tr("thrown").format(self._last_throws))
                 elif msg.startswith("__countstr__"):
                     self.count_var.set(msg[len("__countstr__"):])
-                elif msg == "__shundo_paused__":
-                    # The routine paused itself on a shundo — sync the buttons/status.
+                elif msg in ("__paused_shundo__", "__paused_shiny__"):
+                    # The routine paused itself on a shiny/shundo — sync the buttons/status.
                     self.paused = True
                     self.pause_btn.config(text=self.tr("resume"))
-                    self._set_status("st_shundo")
+                    self._set_status("st_shundo" if msg == "__paused_shundo__" else "st_shiny")
                 elif msg.startswith("__done__"):
                     self._finish(msg[len("__done__"):])
                 else:

@@ -7,13 +7,12 @@ attempting to encounter a non-shiny is blocked by PGSharp (a 1-second
 Per cycle:
   1. Tap the first slot of the PGSharp *feed* sidebar (the bar with the RSS icon at its
      bottom). PGSharp teleports to that spawn.
-  2. Wait for the spawn to load, then double-tap the first slot of the nearby '@' bar —
-     the same gesture the catch routine uses — to request the encounter.
-  3. If no encounter opens within the timeout, PGSharp blocked it (non-shiny): move on.
-  4. If an encounter opens, the Pokémon is shiny. Read PGSharp's info pill
-     ("▼ L28 IV55 14/2/9 ⚡") and look for the sub-IV string 15/15/15:
-       - found  -> SHUNDO: report it and (by default) pause so the user catches manually.
-       - absent -> plain shiny: report (optional) and flee, then continue.
+  2. Wait for the spawn to load (it shows up in the nearby '@' bar), then double-tap the
+     bar's first slot — the same gesture the catch routine uses — to request the encounter.
+  3. If PGSharp's "blocked(non-shiny)" toast answers (or nothing opens), move on.
+  4. If an encounter opens, the Pokémon is shiny — report it over Discord and pause for
+     the user either way. Reading PGSharp's info pill ("▼ L3 IV40 0/6/12 ✨ ⚡") for the
+     sub-IV string 15/15/15 decides whether it is announced as a full SHUNDO.
 
 The sub-IVs are read by template-matching the glyphs '1', '5' and '/' inside the pill
 region and checking for the exact ordered sequence 1 5 / 1 5 / 1 5 with sane gaps.
@@ -49,33 +48,35 @@ class ShundoConfig:
     # (gray std ~15) while a Pokémon sprite is busy (std ~45+).
     anchor_template: str = "templates/nearby_anchor.png"
     anchor_threshold: float = 0.7
-    slot_offset_y: int = 770        # '@' anchor -> first slot center (same as catch mode)
-    slot_patch: int = 110           # square patch size inspected at the slot
-    slot_busy_std: float = 30.0     # gray std above this = a Pokémon icon is present
+    slot_offset_y: int = 770        # '@' anchor -> first (top) slot center; the double-tap target
+    slot_patch: int = 110           # square patch height inspected per band
+    # "Spawn loaded" is decided by scanning the whole nearby-bar column (not one fixed
+    # slot): a Pokémon icon anywhere in it makes some band's gray-std jump. Measured:
+    # empty bar ≈ 26-32, occupied ≈ 49-52, so 40 cleanly separates them and tolerates the
+    # spawn sitting at any height / the bar holding a variable number of Pokémon.
+    bar_half_w: int = 70            # half-width of the bar column around the '@' x
+    bar_scan_top: int = 820        # scan from ('@' y - this) ...
+    bar_scan_bottom: int = 150     # ... up to ('@' y - this), excluding the '@' icon itself
+    bar_scan_step: int = 55
+    slot_busy_std: float = 40.0
     # A far teleport makes the game reload spawns, which clears the nearby bar first.
     # Waiting for that clear keeps a stale entry from the previous location from being
     # mistaken for the new spawn (the icons all look alike on event days). If the bar
     # never clears (short hop), proceed after this cap.
     bar_clear_timeout: float = 10.0
-    # Loading can be slow — keep waiting for the spawn rather than skipping the target.
-    # The instant it shows in the bar the tap goes out; this cap only breaks dead waits
-    # (e.g. the spawn despawned while we were on the way).
-    spawn_timeout: float = 60.0
+    # Loading can be slow (hot phone, teleport cooldown), so stay put and keep waiting
+    # for the spawn instead of teleporting away to another feed entry. 0 = wait until it
+    # loads or the user stops (the user's explicit preference); a positive value caps the
+    # wait and then moves on. The instant it shows in the bar the double-tap goes out.
+    spawn_timeout: float = 0.0
+    spawn_wait_log: float = 20.0    # log a "still waiting" heartbeat this often (s)
 
-    # The teleported-to Pokémon stands at the character's feet — a fixed screen point on
-    # the map — so the first taps go straight there the moment the spawn is loaded.
-    # Only if those miss (the walker carried us off the spawn) do later attempts aim at
-    # the nearest white spawn ring instead. Pokéstop discs also draw white rings, but
-    # always two of them stacked vertically — such pairs are dropped.
-    feet_xy: tuple[int, int] = (612, 1770)
-    fixed_taps: int = 2             # attempts aimed at the fixed feet point first
-    feet_offsets: tuple[tuple[int, int], ...] = (
-        (0, 0), (0, -70), (0, 110), (-130, 30), (130, 30), (0, 240),
-    )
-    ring_search_radius: int = 700   # how far from the feet to look for spawn rings
-    ring_bounds: tuple[int, int, int, int] = (120, 1150, 1040, 2350)  # x0, y0, x1, y1 tap-safe area
-    max_tap_attempts: int = 6
-    tap_answer_wait: float = 1.6    # per-tap wait for the encounter/toast answer
+    # The encounter is requested by ONE double-tap of the bar's first slot (same gesture
+    # as the catch routine). The reliable "shiny" signal is the encounter's camera icon,
+    # which appears and stays; we wait up to encounter_open_wait for it and never re-tap
+    # (a second double-tap would land on the opening encounter screen). No camera in that
+    # window ⇒ the Pokémon is non-shiny and we move on.
+    encounter_open_wait: float = 3.0
 
     # Encounter confirmation: the camera icon at the top of the encounter screen.
     camera_template: str = "templates/camera.png"
@@ -91,16 +92,17 @@ class ShundoConfig:
     glyph_max_gap: int = 45         # max px between consecutive glyph centers
     iv_read_tries: int = 3          # re-read the pill a few times before deciding
 
-    # Encounter flee button (top-left runner icon) — fixed UI position.
-    flee_xy: tuple[int, int] = (126, 181)
-
-    # PGSharp's "blocked(non-shiny) IV:xx" toast: a white pill with dark text at the
-    # bottom center, visible for ~1s. Seeing it means the check answered "not shiny".
-    # Detection requires an actual pill shape WITH dark text inside, so the encounter
-    # screen's big white ball (also bright, but textless) can't fake a "blocked".
-    toast_region: tuple[int, int, int, int] = (180, 2280, 860, 250)   # x, y, w, h
-    toast_pill_w: tuple[int, int] = (350, 850)
-    toast_pill_h: tuple[int, int] = (80, 190)
+    # PGSharp's "blocked(non-shiny) IV:xx" toast: a light rounded pill at the bottom
+    # centre, up for ~1s. The text frame is too fleeting to rely on (we usually catch the
+    # blank-pill frame), so detection keys on the PILL SHAPE — a wide, solid, light,
+    # horizontally-centred blob. The encounter screen's big white ball also lands in this
+    # region, so the caller must confirm we're NOT in/opening an encounter first (camera
+    # absent AND the '@' bar still visible) before trusting a toast here.
+    toast_region: tuple[int, int, int, int] = (150, 2260, 920, 300)   # x, y, w, h
+    toast_pill_w: tuple[int, int] = (380, 860)
+    toast_pill_h: tuple[int, int] = (85, 210)
+    toast_fill: float = 0.7          # min filled fraction of the pill's bounding box
+    toast_center_tol: int = 320      # max |pill center x - screen center x|
 
     # PGSharp menu accidentally left open (it occludes the map and eats taps):
     # detected via its Settings-gear icon, closed by tapping the yellow menu star.
@@ -116,7 +118,6 @@ class ShundoConfig:
 
     # Timing (seconds).
     teleport_wait: float = 4.0      # after the feed tap, let spawns + nearby bar load
-    settle_after_flee: float = 2.0
     poll_interval: float = 0.15
     idle_poll: float = 1.5          # pause between cycles when the feed bar is missing
 
@@ -155,6 +156,9 @@ class ShundoRoutine:
             ) if b is not None
         ]
         self.stats = ShundoStats()
+        # Optional callback(seconds_waited) so the GUI can log a "still waiting for spawn"
+        # heartbeat during a long load without the routine knowing about the UI.
+        self._on_waiting = None
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
 
@@ -184,60 +188,34 @@ class ShundoRoutine:
             time.sleep(self.config.poll_interval)
 
     # -- element lookups ---------------------------------------------------------
-    def _spawn_rings(self, frame) -> list[tuple[int, int]]:
-        """Centers of white spawn rings near the feet, nearest first.
-        Vertically stacked ring pairs (Pokéstop discs) are removed."""
-        import cv2
-        import numpy as np
-        cfg = self.config
-        cx, cy = cfg.feet_xy
-        r = cfg.ring_search_radius
-        x0, y0 = max(0, cx - r), max(0, cy - r)
-        roi = frame[y0:cy + r, x0:cx + r]
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        _, bw = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
-        bw = cv2.dilate(bw, np.ones((9, 9), np.uint8))
-        n, _labels, stats, _cents = cv2.connectedComponentsWithStats(bw, 8)
-        cands = []
-        for i in range(1, n):
-            x, y, w, h, area = stats[i]
-            if not (140 <= w <= 420 and 60 <= h <= 260):
-                continue
-            if area > w * h * 0.55:     # rings are hollow; reject solid blobs
-                continue
-            cands.append((x0 + x + w // 2, y0 + y + h // 2))
-        # Drop vertical pairs: a Pokéstop disc draws two rings ~75px apart.
-        keep = []
-        for i, (px, py) in enumerate(cands):
-            paired = any(j != i and abs(px - qx) < 40 and abs(py - qy) < 130
-                         for j, (qx, qy) in enumerate(cands))
-            if paired:
-                continue
-            bx0, by0, bx1, by1 = cfg.ring_bounds
-            if bx0 <= px <= bx1 and by0 <= py <= by1:
-                keep.append((px, py))
-        keep.sort(key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
-        return keep
+    def _anchor_in(self, frame) -> tuple[int, int] | None:
+        m = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1))
+        return m[0].center if m else None
 
     def _target_in_bar(self, frame) -> bool:
-        """True when the nearby '@' bar's first slot shows a Pokémon icon (spawn loaded)."""
+        """True when a Pokémon icon is present anywhere in the nearby '@' bar (spawn
+        loaded). Scans the whole bar column and takes the busiest band, so it doesn't
+        depend on the spawn sitting at one exact slot."""
         import cv2
         cfg = self.config
-        m = find(frame, self._anchor, threshold=cfg.anchor_threshold, scales=(0.9, 1.0, 1.1))
-        if not m:
+        anchor = self._anchor_in(frame)
+        if anchor is None:
             return False
-        ax, ay = m[0].center
-        half = cfg.slot_patch // 2
-        y0 = max(0, ay - cfg.slot_offset_y - half)
-        x0 = max(0, ax - half)
-        patch = frame[y0:y0 + cfg.slot_patch, x0:x0 + cfg.slot_patch]
-        if patch.size == 0:
-            return False
-        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
-        return float(gray.std()) > cfg.slot_busy_std
+        ax, ay = anchor
+        x0, x1 = max(0, ax - cfg.bar_half_w), ax + cfg.bar_half_w
+        for top in range(ay - cfg.bar_scan_top, ay - cfg.bar_scan_bottom, cfg.bar_scan_step):
+            patch = frame[max(0, top):top + cfg.slot_patch, x0:x1]
+            if patch.size == 0:
+                continue
+            gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+            if float(gray.std()) > cfg.slot_busy_std:
+                return True
+        return False
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
-        """First feed slot: the '≡' handle in the RSS icon's column, plus a fixed dy."""
+        """First feed slot. The feed is a QUEUE: tapping the top entry teleports to it and
+        removes it, so the next spawn shifts up into the top slot — we always tap slot 1.
+        Located as the '≡' handle in the RSS icon's column, plus a fixed dy."""
         cfg = self.config
         rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=(0.9, 1.0, 1.1))
         if not rss:
@@ -255,32 +233,26 @@ class ShundoRoutine:
                          scales=(0.95, 1.0, 1.05), region=self.config.camera_region))
 
     def _blocked_toast_in(self, frame) -> bool:
+        """A light rounded toast pill sits in the bottom-centre region. Shape only — see
+        toast_region notes. Callers must first rule out an (opening) encounter."""
         import cv2
         cfg = self.config
         x, y, w, h = cfg.toast_region
         gray = cv2.cvtColor(frame[y:y + h, x:x + w], cv2.COLOR_BGR2GRAY)
-        _, bw = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        _, bw = cv2.threshold(gray, 165, 255, cv2.THRESH_BINARY)
         n, _labels, stats, _cents = cv2.connectedComponentsWithStats(bw, 8)
+        screen_cx = frame.shape[1] / 2
         for i in range(1, n):
             cx, cy, cw, ch, area = stats[i]
             if not (cfg.toast_pill_w[0] <= cw <= cfg.toast_pill_w[1]
                     and cfg.toast_pill_h[0] <= ch <= cfg.toast_pill_h[1]):
                 continue
-            if area < cw * ch * 0.55:          # pills are solid white (minus the text)
+            if area < cw * ch * cfg.toast_fill:       # solid rounded pill
                 continue
-            sub = gray[cy:cy + ch, cx:cx + cw]
-            dark = float((sub < 120).mean())   # the "blocked(non-shiny)" text itself
-            if 0.02 <= dark <= 0.4:
-                return True
+            if abs((x + cx + cw / 2) - screen_cx) > cfg.toast_center_tol:
+                continue
+            return True
         return False
-
-    def _encounter_answer(self, frame) -> str | None:
-        """'shiny' when the encounter opened, 'blocked' when PGSharp's toast showed."""
-        if self._camera_in(frame):
-            return "shiny"
-        if self._blocked_toast_in(frame):
-            return "blocked"
-        return None
 
     def _handle_popups(self) -> bool:
         frame = self.device.screenshot()
@@ -351,11 +323,6 @@ class ShundoRoutine:
                     return True
         return False
 
-    # -- gestures -------------------------------------------------------------------
-    def flee(self) -> None:
-        self.device.tap(*self.config.flee_xy)
-        self._interruptible_sleep(self.config.settle_after_flee)
-
     # -- main loop --------------------------------------------------------------------
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
@@ -376,8 +343,12 @@ class ShundoRoutine:
             self.stats.checked += 1
             return self._grade_encounter()
 
-        # Step 1: teleport to the next feed candidate.
+        # Step 1: teleport to the next feed candidate. A miss on the stream frame is
+        # retried on a crisp one-shot capture first — H.264 smear between keyframes
+        # periodically drops the small RSS/handle templates below threshold.
         slot = self._feed_slot_in(frame)
+        if slot is None:
+            slot = self._feed_slot_in(self.device.screenshot(fresh=True))
         if slot is None:
             self._interruptible_sleep(cfg.idle_poll)
             self.stats.last_event = "idle"
@@ -405,12 +376,14 @@ class ShundoRoutine:
             time.sleep(cfg.poll_interval)
 
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
-        # in the bar's first slot — then tap the Pokémon at the character's feet.
-        # Waits patiently (spawns can load slowly); popups that appear meanwhile (speed
-        # warning after the teleport) are cleared without giving up on the target.
-        deadline = time.monotonic() + cfg.spawn_timeout
+        # in the bar's first slot. Stays put and waits (spawns can load slowly); it does
+        # NOT teleport away. With spawn_timeout == 0 it waits until the spawn loads or the
+        # user stops; a positive value caps the wait and then moves to the next entry.
+        # Popups that appear meanwhile (speed warning after the teleport) are cleared.
+        start = time.monotonic()
+        next_log = start + cfg.spawn_wait_log
         loaded = False
-        while time.monotonic() < deadline and not self.stop_event.is_set():
+        while not self.stop_event.is_set():
             self._wait_if_paused()
             if self._target_in_bar(self.device.screenshot()):
                 loaded = True
@@ -418,37 +391,30 @@ class ShundoRoutine:
             if self._handle_popups():
                 self._interruptible_sleep(0.8)
                 continue
+            now = time.monotonic()
+            if cfg.spawn_timeout and now - start >= cfg.spawn_timeout:
+                break
+            if self._on_waiting is not None and now >= next_log:
+                next_log = now + cfg.spawn_wait_log
+                self._on_waiting(int(now - start))
             time.sleep(cfg.poll_interval)
         if not loaded:
             self.stats.last_event = "nospawn"
             return "nospawn"
-        answer = None
-        for attempt in range(cfg.max_tap_attempts):
-            if self.stop_event.is_set():
-                return "idle"
-            if attempt < cfg.fixed_taps:
-                # The character's feet are a fixed screen point — tap straight there.
-                dx, dy = cfg.feet_offsets[attempt % len(cfg.feet_offsets)]
-                tx, ty = cfg.feet_xy[0] + dx, cfg.feet_xy[1] + dy
-            else:
-                # Missed — the walker likely carried us off the spawn. Aim at the
-                # nearest spawn ring instead (re-detected each try: Pokémon wander).
-                rings = self._spawn_rings(self.device.screenshot())
-                if rings:
-                    tx, ty = rings[min(attempt - cfg.fixed_taps, len(rings) - 1)]
-                else:
-                    dx, dy = cfg.feet_offsets[attempt % len(cfg.feet_offsets)]
-                    tx, ty = cfg.feet_xy[0] + dx, cfg.feet_xy[1] + dy
-            self.device.tap(tx, ty)
-            answer = self._poll(self._encounter_answer, cfg.tap_answer_wait)
-            if answer:
-                break
-        if answer is None:
-            self.stats.last_event = "miss"
-            return "miss"
+        # Step 3: double-tap the bar's first slot ONCE, then watch for the camera icon —
+        # the decisive shiny signal (it appears and stays). Camera up ⇒ shiny. No camera
+        # within the window ⇒ non-shiny; move on. Never a second double-tap: it would land
+        # on the opening encounter screen (the stray taps the user was seeing).
+        frame = self.device.screenshot()
+        if self._camera_in(frame):
+            answer = "shiny"
+        else:
+            anchor = self._anchor_in(frame)
+            if anchor is not None:
+                self.device.double_tap(anchor[0], anchor[1] - cfg.slot_offset_y)
+            answer = "shiny" if self._poll(self._camera_in, cfg.encounter_open_wait) else "blocked"
         self.stats.checked += 1
 
-        # Step 3: shiny check happens inside PGSharp. Encounter open = shiny.
         if answer == "blocked":
             self.stats.last_event = "blocked"
             return "blocked"
@@ -482,14 +448,12 @@ class ShundoRoutine:
             outcome = self.run_once()
             if on_event:
                 on_event(self.stats, outcome)
-            if outcome == "shundo":
-                # Leave the encounter open for the user. "pause" waits for Resume;
-                # "stop" ends the loop entirely.
+            if outcome in ("shundo", "shiny"):
+                # Any shiny is left open for the user to handle. "pause" waits for
+                # Resume; "stop" ends the loop entirely.
                 if cfg.shundo_action == "stop":
                     break
                 self.pause_event.set()
-            elif outcome == "shiny":
-                self.flee()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -499,3 +463,42 @@ class ShundoRoutine:
 
     def resume(self) -> None:
         self.pause_event.clear()
+
+    # -- live-view annotation --------------------------------------------------------
+    def annotate(self, frame):
+        """Copy of `frame` with the routine's detections drawn on it, for the GUI's
+        live view: feed tap spot, nearby '@' first slot (the double-tap target) and its
+        state, the IV pill region and the blocked-toast region."""
+        import cv2
+        cfg = self.config
+        img = frame.copy()
+
+        slot = self._feed_slot_in(frame)
+        if slot is not None:
+            cv2.circle(img, slot, 45, (0, 220, 0), 6)
+            cv2.putText(img, "FEED TAP", (slot[0] + 55, slot[1] + 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 220, 0), 3)
+
+        anchor = self._anchor_in(frame)
+        if anchor is not None:
+            ax, ay = anchor
+            half = cfg.slot_patch // 2
+            x0, y0 = ax - half, ay - cfg.slot_offset_y - half
+            busy = self._target_in_bar(frame)
+            color = (255, 255, 0)
+            cv2.rectangle(img, (x0, y0), (x0 + cfg.slot_patch, y0 + cfg.slot_patch), color, 5)
+            cv2.putText(img, "DBL TAP" if busy else "EMPTY", (x0 - 260, y0 + 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+            cv2.drawMarker(img, (ax, ay - cfg.slot_offset_y), (0, 255, 255), cv2.MARKER_CROSS, 80, 6)
+            cv2.circle(img, (ax, ay), 40, color, 4)
+
+        px, py, pw, ph = cfg.pill_region
+        cv2.rectangle(img, (px, py), (px + pw, py + ph), (0, 165, 255), 4)
+        cv2.putText(img, "IV", (px, py - 12), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 3)
+        tx, ty, tw, th = cfg.toast_region
+        cv2.rectangle(img, (tx, ty), (tx + tw, ty + th), (255, 255, 255), 3)
+
+        if self._camera_in(frame):
+            cv2.putText(img, "ENCOUNTER (SHINY)", (60, 150),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 255), 4)
+        return img

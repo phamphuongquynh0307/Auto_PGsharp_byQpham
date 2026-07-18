@@ -52,9 +52,12 @@ class CatchConfig:
     # above that anchor.
     anchor_template: str = "templates/nearby_anchor.png"
     anchor_threshold: float = 0.7
-    # The '@' anchor lives on the right-edge sidebar; its height varies with how many
+    # The '@' anchor lives on the nearby sidebar; its height varies with how many
     # Pokémon are listed. Searching just that strip is ~10x cheaper than the full frame.
-    anchor_region: tuple[int, int, int, int] = (950, 200, 270, 1800)
+    # The strip sits around x≈880 (anchor center), so the region spans x=760..1220 to
+    # cover it with margin; a region that starts at x=950 misses the anchor entirely
+    # (its 122px-wide box lands left of that edge) and the whole cycle is skipped.
+    anchor_region: tuple[int, int, int, int] = (760, 200, 460, 1800)
     slot_offset_y: int = 770        # pixels above the '@' anchor to the first Pokémon slot
     # Fallback fixed slot, used only if the anchor can't be found and require_anchor is False.
     nearby_slot: tuple[int, int] = (940, 205)
@@ -69,6 +72,18 @@ class CatchConfig:
     ball_fallback: tuple[int, int] = (610, 2380)
     # The encounter camera icon sits at a fixed spot at the top center (~610, 181).
     ball_region: tuple[int, int, int, int] = (430, 40, 360, 300)
+
+    # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
+    # the bottom center. When it shows we're out of Poké Balls: flee the encounter, alert Discord,
+    # and hold off catching for a while (still AutoWalking) so the bag can refill instead of
+    # burning cycles on an empty encounter. Matched in colour so a red "x0" can't be confused
+    # with a neutral non-zero count.
+    out_of_balls_template: str = "templates/out_of_balls.png"
+    out_of_balls_threshold: float = 0.72
+    out_of_balls_region: tuple[int, int, int, int] = (390, 2545, 340, 167)
+    flee_xy: tuple[int, int] = (120, 170)   # encounter flee (running-man) button, top-left
+    no_balls_pause: float = 600.0           # seconds to hold off catching when out of balls (10 min)
+    no_balls_walk_interval: float = 15.0    # re-check AutoWalk this often during the hold-off
 
     # Throw: swipe from the ball straight up toward the Pokémon. Bigger |throw_dy| = harder throw;
     # too hard sails over the Pokémon, so this is deliberately gentle and tunable in the GUI.
@@ -141,9 +156,11 @@ class CatchRoutine:
         self._close_btn_blue = _load_optional(self.config.close_btn_blue_template)
         self._close_btn_white = _load_optional(self.config.close_btn_white_template)
         self._aw_paused = _load_optional(self.config.autowalk_paused_template)
+        self._noball_tpl = _load_optional(self.config.out_of_balls_template)
         self.stats = CatchStats()
         self._idle_streak = 0
         self._autowalk_active = False
+        self._no_balls = False   # set by run_once when the "x0" badge is seen; consumed by run()
         # Control flags used by the GUI; ignored by the plain CLI loop.
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
@@ -167,15 +184,25 @@ class CatchRoutine:
         return x + random.randint(-j, j), y + random.randint(-j, j)
 
     def _double_tap(self, x: int, y: int) -> None:
+        # One adb invocation for both taps — two tap() round-trips over Wi-Fi adb are
+        # too far apart (~0.5s) for the game to read them as a double-tap.
         jx, jy = self._jitter(x, y)
-        self.device.tap(jx, jy)
-        time.sleep(self.config.double_tap_gap_ms / 1000.0)
-        self.device.tap(jx, jy)
+        self.device.double_tap(jx, jy)
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
         matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=(0.95, 1.0, 1.05),
                        region=self.config.ball_region)
         return self.config.ball_fallback if matches else None
+
+    def _is_out_of_balls(self, frame) -> bool:
+        """True when the encounter's ball-count badge reads 'x0' (the red pill at the bottom
+        centre) — i.e. we have no Poké Balls left. Colour match so it can't be confused with a
+        neutral non-zero count."""
+        if self._noball_tpl is None:
+            return False
+        matches = find(frame, self._noball_tpl, threshold=self.config.out_of_balls_threshold,
+                       scales=(0.9, 1.0, 1.1), grayscale=False, region=self.config.out_of_balls_region)
+        return bool(matches)
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
         matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1),
@@ -301,6 +328,25 @@ class CatchRoutine:
         self.device.tap(sx + cfg.autowalk_offset_x, sy + cfg.autowalk_offset_y)
         return True
 
+    def _wait_no_balls(self, on_event=None) -> None:
+        """Out of Poké Balls: hold off catching for no_balls_pause seconds so we don't burn
+        cycles on an empty bag. Keep AutoWalk moving during the wait so the avatar keeps
+        travelling (passing Pokéstops / finding fresh spawns) instead of standing still, then
+        resume normal catching — by then the bag has usually refilled."""
+        cfg = self.config
+        deadline = time.monotonic() + cfg.no_balls_pause
+        # We may have fled from an encounter, so the walk state is unknown: force one fresh
+        # AutoWalk start. Afterwards _try_autowalk only re-taps a stalled (paused) row.
+        self._autowalk_active = False
+        while time.monotonic() < deadline and not self.stop_event.is_set():
+            self._wait_if_paused()
+            if self.stop_event.is_set():
+                return
+            self._handle_popups()
+            if self._try_autowalk():
+                self._autowalk_active = True
+            self._interruptible_sleep(cfg.no_balls_walk_interval)
+
     def _poll(self, predicate, timeout: float):
         """Screenshot repeatedly until predicate(frame) is truthy or timeout. Returns its value or None."""
         deadline = time.monotonic() + timeout
@@ -328,6 +374,17 @@ class CatchRoutine:
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
         if self._handle_popups():
+            self._interruptible_sleep(1.0)
+            return False
+
+        # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
+        # reads "x0". Checking here (before hunting the nearby bar) also rescues us when a useless
+        # throw left us stuck in the encounter — the nearby bar never returns, but the badge does.
+        # Flee via the running-man button and flag the loop to hold off catching.
+        if self._noball_tpl is not None and self._is_out_of_balls(self.device.screenshot()):
+            self.device.tap(*cfg.flee_xy)
+            self._no_balls = True
+            self.stats.last_event = "no_balls"
             self._interruptible_sleep(1.0)
             return False
 
@@ -368,6 +425,18 @@ class CatchRoutine:
             if self.stop_event.is_set():
                 break
             threw = self.run_once()
+
+            # Out of balls: notify the caller (Discord alert), then hold off catching for a
+            # while — still AutoWalking so we keep moving — before resuming.
+            if self._no_balls:
+                self._no_balls = False
+                self.stats.last_event = "no_balls"
+                if on_event:
+                    on_event(self.stats, False)
+                self._wait_no_balls(on_event)
+                self._idle_streak = 0
+                continue
+
             self.stats.last_event = "throw" if threw else "idle"
             if on_event:
                 on_event(self.stats, threw)

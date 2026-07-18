@@ -131,9 +131,11 @@ class Device:
         raise AdbError(f"could not parse screen size from: {out!r}")
 
     # -- capture --------------------------------------------------------------
-    def screenshot(self) -> np.ndarray:
-        """Current screen as a BGR image. Uses the live stream if started, else a one-shot capture."""
-        if self._stream is not None:
+    def screenshot(self, fresh: bool = False) -> np.ndarray:
+        """Current screen as a BGR image. Uses the live stream if started, else a one-shot capture.
+        fresh=True forces a one-shot screencap even when streaming — slower (~1s) but free of
+        H.264 compression smear, for when a template match on the stream frame fails."""
+        if self._stream is not None and not fresh:
             frame = self._stream.latest()
             if frame is not None:
                 return frame
@@ -148,6 +150,13 @@ class Device:
     # -- input ----------------------------------------------------------------
     def tap(self, x: int, y: int) -> None:
         self._run(["shell", "input", "tap", str(int(x)), str(int(y))])
+
+    def double_tap(self, x: int, y: int) -> None:
+        """Two taps in ONE adb invocation. Two separate tap() calls pay the adb
+        round-trip twice (0.5s+ over Wi-Fi), which the game no longer reads as a
+        double-tap; chained on-device the gap is just the input binary's startup."""
+        x, y = int(x), int(y)
+        self._run(["shell", f"input tap {x} {y}; input tap {x} {y}"])
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._run(
