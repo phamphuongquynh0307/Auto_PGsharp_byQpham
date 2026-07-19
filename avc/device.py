@@ -230,6 +230,17 @@ class Device:
                 info["charging"] = info.get("charging", False) or line.endswith("true")
         return info
 
+    def kill_server(self) -> None:
+        """Stop the background adb server daemon. Important for frozen one-file builds: the
+        daemon's executable image is the bundled adb.exe living under PyInstaller's _MEI temp
+        dir, and while it runs Windows won't let that dir be deleted — which surfaces as a
+        'Failed to remove temporary directory' warning when the app exits. Killing the daemon
+        releases the file so cleanup succeeds. Best-effort; errors are ignored."""
+        try:
+            _quiet_run([self.adb_path, "kill-server"], capture_output=True, timeout=10)
+        except Exception:
+            pass
+
     def is_connected(self) -> bool:
         try:
             self._run(["get-state"], timeout=5)

@@ -114,6 +114,7 @@ def cmd_catch(args) -> None:
         print(f"\nDừng. Tổng ném bóng: {routine.stats.throws}")
     finally:
         dev.stop_stream()
+        dev.kill_server()
 
 
 def build_parser() -> argparse.ArgumentParser:

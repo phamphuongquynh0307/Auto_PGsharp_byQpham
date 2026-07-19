@@ -105,6 +105,7 @@ class CatchConfig:
     # Popups that block the flow. Both are opaque dialogs, so template detection is reliable.
     popup_autowalk_template: str = "templates/popup_autowalk.png"   # "Stop/Pause AutoWalk?" dialog
     popup_speed_template: str = "templates/popup_speed.png"         # "I'M A PASSENGER" green button
+    popup_weather_template: str = "templates/popup_weather.png"     # "I AM SAFE" green button (weather warning)
     claim_rewards_template: str = "templates/claim_rewards.png"      # "CLAIM REWARDS" level up button
     close_btn_template: str = "templates/close_btn.png"              # Close "X" button
     close_btn_blue_template: str = "templates/close_btn_blue.png"    # Close "X" button (blue)
@@ -151,6 +152,7 @@ class CatchRoutine:
         # Popup templates are optional — a missing one just disables that handler.
         self._popup_autowalk = _load_optional(self.config.popup_autowalk_template)
         self._popup_speed = _load_optional(self.config.popup_speed_template)
+        self._popup_weather = _load_optional(self.config.popup_weather_template)
         self._claim_rewards = _load_optional(self.config.claim_rewards_template)
         self._close_btn = _load_optional(self.config.close_btn_template)
         self._close_btn_blue = _load_optional(self.config.close_btn_blue_template)
@@ -233,6 +235,16 @@ class CatchRoutine:
     def _handle_popups(self) -> bool:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
         frame = self.device.screenshot()
+
+        # Weather warning "Weather conditions are potentially dangerous" -> tap the green
+        # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
+        if self._popup_weather is not None:
+            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=(1.0,))
+            if m:
+                x, y = m[0].center
+                self.device.tap(x, y)
+                self.stats.last_event = "popup"
+                return True
 
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         # Popups render at a fixed size on a given device, so a single scale is enough.

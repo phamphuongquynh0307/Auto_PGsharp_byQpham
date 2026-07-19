@@ -30,14 +30,84 @@ from avc.device import Device
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 # Donate destinations shown on the Donate tab.
-DONATE_PAYPAL = "https://paypal.me/CHANGE_ME"   # TODO: real PayPal.me link
-DONATE_MOMO = "09xx xxx xxx"                     # TODO: real MoMo number
+DONATE_KOFI = "https://ko-fi.com/qpham7286"
 
 LANG = {
     "title":         {"vi": "Auto Catch Pokemon PGSharp", "en": "Auto Catch Pokemon PGSharp"},
     "tab_main":      {"vi": "Điều khiển", "en": "Control"},
     "tab_settings":  {"vi": "Cài đặt", "en": "Settings"},
     "tab_donate":    {"vi": "Ủng hộ ❤", "en": "Donate ❤"},
+    "tab_guide":     {"vi": "Hướng dẫn", "en": "Guide"},
+    "guide_text":    {"vi": (
+        "📖 HƯỚNG DẪN SỬ DỤNG\n"
+        "\n"
+        "① CHUẨN BỊ ĐIỆN THOẠI\n"
+        "• Bật \"Tùy chọn nhà phát triển\" → bật \"Gỡ lỗi USB (USB debugging)\".\n"
+        "• Mở Pokémon GO (PGSharp), vào tới màn hình bản đồ.\n"
+        "• Điện thoại và máy tính phải chung một mạng Wi-Fi.\n"
+        "\n"
+        "② KẾT NỐI (nút \"Kết nối\")\n"
+        "• Lần đầu: CẮM CÁP USB → bấm \"Kết nối\". App tự bật adb qua Wi-Fi và nhớ máy. "
+        "Khi thấy báo \"có thể rút cáp USB\" là rút cáp ra được.\n"
+        "• Lần sau: KHÔNG cần cáp. Mở app → chọn máy trong danh sách (hoặc bấm \"Kết nối\") "
+        "là tự nối lại qua Wi-Fi.\n"
+        "\n"
+        "③ CHỌN CHẾ ĐỘ\n"
+        "• \"Bắt Pokémon\": tự bắt các Pokémon ở thanh bên phải màn hình.\n"
+        "• \"Shundo\": chỉ săn shiny / 100% IV theo cấu hình.\n"
+        "\n"
+        "④ CHẠY\n"
+        "• Bấm ▶ Chạy để bắt đầu, ⏸ Tạm dừng, ⏹ Dừng.\n"
+        "• Theo dõi hoạt động ở khung \"Nhật ký\" phía dưới.\n"
+        "\n"
+        "⑤ HẾT POKÉ BALL\n"
+        "• Khi hết bóng, app tự thoát màn bắt, báo Discord, tạm ngừng 10 phút và vẫn tự di "
+        "chuyển (AutoWalk) để đi kiếm bóng, rồi tự bắt lại.\n"
+        "\n"
+        "⑥ THÔNG BÁO DISCORD (tab Cài đặt)\n"
+        "• Dán \"Webhook URL\" của kênh Discord để nhận cảnh báo: trống spawn lâu, báo cáo "
+        "định kỳ, pin yếu, hết bóng, gặp shiny…\n"
+        "\n"
+        "⑦ MẸO\n"
+        "• Cắm sạc khi chạy lâu; app có thể tự làm tối màn hình cho đỡ nóng (game vẫn chạy nền).\n"
+        "• Nếu ném lệch: chỉnh \"Lực ném\" và \"Khoảng cách @ → ô đầu\" trong tab Cài đặt.\n"
+        "• Mất kết nối: bấm \"Làm mới\" hoặc chọn lại máy trong danh sách để nối lại Wi-Fi.\n"
+    ), "en": (
+        "📖 USER GUIDE\n"
+        "\n"
+        "① PREPARE THE PHONE\n"
+        "• Enable \"Developer options\" → turn on \"USB debugging\".\n"
+        "• Open Pokémon GO (PGSharp) and reach the map screen.\n"
+        "• The phone and PC must be on the same Wi-Fi network.\n"
+        "\n"
+        "② CONNECT (the \"Connect\" button)\n"
+        "• First time: PLUG IN THE USB CABLE → click \"Connect\". The app switches adb to "
+        "Wi-Fi and remembers the phone. When it says \"you can unplug the USB cable\", unplug it.\n"
+        "• Next times: NO cable needed. Open the app → pick the phone from the list (or click "
+        "\"Connect\") and it reconnects over Wi-Fi.\n"
+        "\n"
+        "③ PICK A MODE\n"
+        "• \"Catching\": auto-catches the Pokémon in the right-side sidebar.\n"
+        "• \"Shundo\": hunts only shiny / 100% IV per your settings.\n"
+        "\n"
+        "④ RUN\n"
+        "• Click ▶ Run to start, ⏸ Pause, ⏹ Stop.\n"
+        "• Watch activity in the \"Log\" box below.\n"
+        "\n"
+        "⑤ OUT OF POKÉ BALLS\n"
+        "• When balls run out, the app leaves the encounter, alerts Discord, holds off catching "
+        "for 10 minutes while still AutoWalking to find balls, then resumes.\n"
+        "\n"
+        "⑥ DISCORD ALERTS (Settings tab)\n"
+        "• Paste a Discord channel \"Webhook URL\" to receive alerts: long dry spells, periodic "
+        "reports, low battery, out of balls, shiny found…\n"
+        "\n"
+        "⑦ TIPS\n"
+        "• Keep it charging for long runs; the app can dim the screen to stay cool (the game "
+        "keeps running).\n"
+        "• Throws off target? Tune \"Throw power\" and \"Distance @ → first slot\" in Settings.\n"
+        "• Lost connection? Click \"Refresh\" or re-pick the phone from the list to reconnect Wi-Fi.\n"
+    )},
     "donate_msg":    {"vi": "Nếu app giúp bạn bắt được kha khá Pokémon, mời mình ly cà phê nhé ☕ Cảm ơn bạn!",
                       "en": "If this app catches you a good few Pokémon, consider buying me a coffee ☕ Thank you!"},
     "copy":          {"vi": "Sao chép", "en": "Copy"},
@@ -56,6 +126,9 @@ LANG = {
     "conn_wifi_fail": {"vi": "Kết nối Wi-Fi thất bại: {}", "en": "Wi-Fi connect failed: {}"},
     "conn_usb_ok":   {"vi": "Đã chọn thiết bị USB: {}", "en": "USB device selected: {}"},
     "conn_re_ok":    {"vi": "✓ Tự kết nối lại Wi-Fi ({}).", "en": "✓ Reconnected over Wi-Fi ({})."},
+    "conn_reconnecting": {"vi": "Đang kết nối lại Wi-Fi…", "en": "Reconnecting over Wi-Fi…"},
+    "conn_re_fail":  {"vi": "Kết nối lại thất bại — cắm cáp USB để bật lại Wi-Fi.",
+                      "en": "Reconnect failed — plug in the USB cable to re-enable Wi-Fi."},
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "slot_offset":   {"vi": "Khoảng cách @ → ô đầu (px):", "en": "Distance @ → first slot (px):"},
@@ -81,8 +154,14 @@ LANG = {
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
     "alert_shiny":   {"vi": "Báo Discord khi gặp shiny chưa đủ 100 IV", "en": "Discord alert on shiny below 100 IV"},
     "shundo_action": {"vi": "Khi thấy shundo:", "en": "On shundo:"},
+    "shiny_action":  {"vi": "Khi shiny (chưa 100 IV):", "en": "On shiny (below 100 IV):"},
     "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
     "act_stop":      {"vi": "Dừng hẳn bot", "en": "Stop the bot"},
+    "act_skip":      {"vi": "Thoát, soi con khác", "en": "Flee and keep hunting"},
+    "msg_s_shiny_skip": {"vi": "✨ shiny (chưa đủ 100 IV) — thoát, soi con tiếp.",
+                         "en": "✨ shiny (below 100 IV) — fled, hunting next."},
+    "dc_shiny_skip": {"vi": "✨ SHINY (chưa đủ 100 IV) — đã bỏ qua, soi tiếp. (đã soi {} con)",
+                      "en": "✨ SHINY (below 100 IV) — skipped, still hunting. ({} checked)"},
     "s_counts":      {"vi": "Soi: {} | shiny: {} | shundo: {}", "en": "Checked: {} | shiny: {} | shundo: {}"},
     "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | shundo {}",
                       "en": "check {}: not shiny (blocked) | shiny {} | shundo {}"},
@@ -202,9 +281,11 @@ class App:
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
         self.tab_main = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
+        self.tab_guide = ttk.Frame(self.notebook)
         self.tab_donate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_main, text=self.tr("tab_main"))
         self.notebook.add(self.tab_settings, text=self.tr("tab_settings"))
+        self.notebook.add(self.tab_guide, text=self.tr("tab_guide"))
         self.notebook.add(self.tab_donate, text=self.tr("tab_donate"))
 
         # ---- Control tab ----
@@ -215,7 +296,7 @@ class App:
         self.device_combo = ttk.Combobox(top, textvariable=self.device_var, state="readonly", width=22)
         self.device_combo.pack(side="left", padx=6)
         self.device_combo.bind("<<ComboboxSelected>>", self._on_device_pick)
-        self.connect_btn = ttk.Button(top, text=self.tr("connect"), command=self._connect_dialog)
+        self.connect_btn = ttk.Button(top, text=self.tr("connect"), command=self._connect_smart)
         self.connect_btn.pack(side="left")
         self._i18n.append((self.connect_btn, "connect"))
         self.refresh_btn = ttk.Button(top, text=self.tr("refresh"), command=self.refresh_devices)
@@ -290,7 +371,14 @@ class App:
         self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
         self.action_combo.grid(row=3, column=1, sticky="e", padx=6, pady=2)
         self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
-        # Any shiny now always alerts + pauses (user decision), so no toggle for it.
+        self._label(sh_grp, "shiny_action", row=4, column=0, sticky="w", padx=6, pady=2)
+        self.shiny_action = "skip"     # "skip" | "pause"
+        self.shiny_action_var = tk.StringVar()
+        self.shiny_action_combo = ttk.Combobox(sh_grp, textvariable=self.shiny_action_var,
+                                                state="readonly", width=22)
+        self.shiny_action_combo.grid(row=4, column=1, sticky="e", padx=6, pady=2)
+        self.shiny_action_combo.bind("<<ComboboxSelected>>", self._on_shiny_action_change)
+        # A skipped shiny still alerts Discord (with screenshot), it just isn't waited on.
         self.alert_shiny = tk.BooleanVar(value=True)
 
         dc_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_discord"))
@@ -308,8 +396,19 @@ class App:
         donate_msg = ttk.Label(self.tab_donate, text=self.tr("donate_msg"), wraplength=410, justify="left")
         donate_msg.pack(anchor="w", padx=14, pady=(16, 12))
         self._i18n.append((donate_msg, "donate_msg"))
-        self._donate_row(self.tab_donate, "PayPal:", DONATE_PAYPAL, link=True)
-        self._donate_row(self.tab_donate, "MoMo:", DONATE_MOMO, link=False)
+        self._donate_row(self.tab_donate, "Ko-fi:", DONATE_KOFI, link=True)
+
+        # ---- Guide tab ---- (read-only, scrollable, retranslated on language switch)
+        gframe = ttk.Frame(self.tab_guide)
+        gframe.pack(fill="both", expand=True, padx=8, pady=8)
+        gscroll = ttk.Scrollbar(gframe, orient="vertical")
+        gscroll.pack(side="right", fill="y")
+        self.guide_text = tk.Text(gframe, wrap="word", yscrollcommand=gscroll.set,
+                                  font=("Segoe UI", 10), relief="flat", borderwidth=0,
+                                  padx=6, pady=4, height=10, cursor="arrow")
+        self.guide_text.pack(side="left", fill="both", expand=True)
+        gscroll.config(command=self.guide_text.yview)
+        self._set_guide_text()
 
         lang_row = ttk.Frame(self.tab_settings)
         lang_row.pack(fill="x", **pad)
@@ -319,6 +418,13 @@ class App:
                                        values=[name for _c, name in LANG_NAMES], width=14)
         self.lang_combo.pack(side="left", padx=6)
         self.lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
+
+    def _set_guide_text(self) -> None:
+        """Fill the guide box with the current language's text (read-only)."""
+        self.guide_text.config(state="normal")
+        self.guide_text.delete("1.0", "end")
+        self.guide_text.insert("1.0", self.tr("guide_text"))
+        self.guide_text.config(state="disabled")
 
     def _donate_row(self, parent, brand: str, value: str, link: bool) -> None:
         """One donate line: brand label, the address (clickable when it's a URL), a copy button."""
@@ -354,6 +460,7 @@ class App:
     # -- mode / shundo action selectors ----------------------------------------
     MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"))
     ACTIONS = (("pause", "act_pause"), ("stop", "act_stop"))
+    SHINY_ACTIONS = (("skip", "act_skip"), ("pause", "act_pause"))
 
     def _refresh_choice(self, combo: ttk.Combobox, var: tk.StringVar, pairs, code: str) -> None:
         combo["values"] = [self.tr(k) for _c, k in pairs]
@@ -373,6 +480,10 @@ class App:
         self.shundo_action = self._code_from_choice(self.action_var, self.ACTIONS, self.shundo_action)
         self.save_settings()
 
+    def _on_shiny_action_change(self, _event=None) -> None:
+        self.shiny_action = self._code_from_choice(self.shiny_action_var, self.SHINY_ACTIONS, self.shiny_action)
+        self.save_settings()
+
     # -- language ---------------------------------------------------------------
     def _on_lang_change(self, _event=None) -> None:
         chosen = self.lang_var.get()
@@ -385,9 +496,11 @@ class App:
 
     def _retranslate(self) -> None:
         self.root.title(self.tr("title"))
-        self.notebook.tab(0, text=self.tr("tab_main"))
-        self.notebook.tab(1, text=self.tr("tab_settings"))
-        self.notebook.tab(2, text=self.tr("tab_donate"))
+        self.notebook.tab(self.tab_main, text=self.tr("tab_main"))
+        self.notebook.tab(self.tab_settings, text=self.tr("tab_settings"))
+        self.notebook.tab(self.tab_guide, text=self.tr("tab_guide"))
+        self.notebook.tab(self.tab_donate, text=self.tr("tab_donate"))
+        self._set_guide_text()
         for widget, key in self._i18n:
             widget.config(text=self.tr(key))
         self.pause_btn.config(text=self.tr("resume" if self.paused else "pause"))
@@ -395,6 +508,7 @@ class App:
         self.count_var.set(self.tr("thrown").format(self._last_throws))
         self._refresh_choice(self.mode_combo, self.mode_var, self.MODES, self.mode)
         self._refresh_choice(self.action_combo, self.action_var, self.ACTIONS, self.shundo_action)
+        self._refresh_choice(self.shiny_action_combo, self.shiny_action_var, self.SHINY_ACTIONS, self.shiny_action)
 
     def _set_status(self, key: str) -> None:
         self._status_key = key
@@ -426,6 +540,8 @@ class App:
         self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
         if data.get("shundo_action") in ("pause", "stop"):
             self.shundo_action = data["shundo_action"]
+        if data.get("shiny_action") in ("skip", "pause"):
+            self.shiny_action = data["shiny_action"]
         self.alert_shiny.set(data.get("alert_shiny", True))
         self.webhook_url.set(data.get("webhook", ""))
         self.alert_idle.set(data.get("alert_idle", int(self.alert_idle.get())))
@@ -447,6 +563,7 @@ class App:
             "tp_wait": float(self.tp_wait.get()),
             "s_enc_wait": float(self.s_enc_wait.get()),
             "shundo_action": self.shundo_action,
+            "shiny_action": self.shiny_action,
             "alert_shiny": bool(self.alert_shiny.get()),
             "device": self._sel_serial(),
             "known_devices": self.known,
@@ -465,10 +582,25 @@ class App:
     def _on_close(self) -> None:
         if self.routine:
             self.routine.stop()
-        # Best-effort: never leave the phone stuck at brightness 0 if closed mid-run.
+        # Let the worker unwind (its finally stops the stream and restores brightness) so no adb
+        # child process is left holding files when we exit.
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=3.0)
         if self.device is not None:
+            # Best-effort: never leave the phone stuck at brightness 0 if closed mid-run.
             try:
                 self.device.restore_dim()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.device.stop_stream()
+            except Exception:  # noqa: BLE001
+                pass
+            # Frozen one-file build: the adb daemon's image lives in PyInstaller's _MEI temp dir;
+            # kill it so that dir can be removed on exit (otherwise Windows shows a
+            # 'Failed to remove temporary directory' warning).
+            try:
+                self.device.kill_server()
             except Exception:  # noqa: BLE001
                 pass
         self.save_settings()
@@ -489,8 +621,18 @@ class App:
         self.save_settings()
 
     def _on_device_pick(self, _event=None) -> None:
-        self._remember_device(self._sel_serial())
-        # Picking an offline Wi-Fi device is a request to reconnect it — refresh does that.
+        serial = self._sel_serial()
+        self._remember_device(serial)
+        # Picking an offline Wi-Fi device from the list is a request to reconnect it (the
+        # cable-free "second time" path): bring it straight back over Wi-Fi.
+        if ":" in serial:
+            try:
+                attached = Device.list_devices()
+            except Exception:  # noqa: BLE001
+                attached = []
+            if serial not in attached:
+                self._reconnect_wifi([serial])
+                return
         self.refresh_devices()
 
     def refresh_devices(self) -> None:
@@ -536,19 +678,56 @@ class App:
 
             threading.Thread(target=rejoin, daemon=True).start()
 
-    def _connect_dialog(self) -> None:
-        dlg = tk.Toplevel(self.root)
-        dlg.title(self.tr("connect"))
-        dlg.resizable(False, False)
-        dlg.transient(self.root)
-        dlg.grab_set()
-        ttk.Label(dlg, text=self.tr("conn_msg")).pack(padx=16, pady=(14, 10))
-        row = ttk.Frame(dlg)
-        row.pack(padx=16, pady=(0, 14))
-        ttk.Button(row, text=self.tr("conn_usb"), width=20,
-                   command=lambda: (dlg.destroy(), self._connect_usb())).pack(side="left", padx=4)
-        ttk.Button(row, text=self.tr("conn_wifi"), width=20,
-                   command=lambda: (dlg.destroy(), self._connect_wifi())).pack(side="left", padx=4)
+    def _connect_smart(self) -> None:
+        """One-tap connect, no USB/Wi-Fi question asked.
+        • First time (USB cable plugged in): switch the phone to adb-over-Wi-Fi and remember that
+          wireless serial, so the cable can then be unplugged.
+        • Later (no cable): reconnect the remembered Wi-Fi device — the same thing that picking
+          it from the list does.
+        If Wi-Fi can't be enabled it still connects over the cable, so you're never stuck."""
+        if self._usb_devices():
+            # Cable plugged in → set up (or refresh) Wi-Fi so future connects are cable-free.
+            self._connect_wifi()
+            return
+        # No cable → bring back a remembered Wi-Fi device (its adbd is still in TCP mode).
+        wifi_known = [s for s in self.known if ":" in s]
+        if wifi_known:
+            self._reconnect_wifi(wifi_known)
+            return
+        self._log(self.tr("conn_need_usb"))
+        self._set_status("st_no_device")
+
+    def _reconnect_wifi(self, serials: list[str]) -> None:
+        """Reconnect remembered Wi-Fi device(s) without a cable: the phone's adbd stayed in TCP
+        mode from the first cable setup, so a plain `adb connect ip:port` brings it back. Runs on
+        a thread (connect can take a few seconds) and selects the first serial that comes back."""
+        self.connect_btn.config(state="disabled")
+        self._log(self.tr("conn_reconnecting"))
+
+        def work() -> None:
+            got = None
+            for s in serials:
+                try:
+                    Device.adb_connect(s)
+                    got = s
+                    break
+                except Exception:  # noqa: BLE001
+                    pass
+
+            def done() -> None:
+                self.connect_btn.config(state="normal")
+                self.refresh_devices()
+                if got:
+                    self.device_var.set(got)
+                    self._remember_device(got)
+                    self._log(self.tr("conn_re_ok").format(got))
+                else:
+                    self._log(self.tr("conn_re_fail"))
+                    self._set_status("st_no_device")
+
+            self.root.after(0, done)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _usb_devices(self) -> list[str]:
         try:
@@ -578,15 +757,6 @@ class App:
                        command=lambda s=serial: (dlg.destroy(), then(s))).pack(padx=16, pady=3)
         ttk.Frame(dlg).pack(pady=6)
 
-    def _connect_usb(self) -> None:
-        def adopt(serial: str) -> None:
-            self.refresh_devices()
-            self.device_var.set(serial)
-            self._remember_device(serial)
-            self._log(self.tr("conn_usb_ok").format(serial))
-
-        self._pick_usb(adopt)
-
     def _connect_wifi(self) -> None:
         """Turn on adb-over-Wi-Fi via the USB cable, then hand the GUI the Wi-Fi serial.
         Runs on a thread: tcpip + connect take a few seconds and must not freeze the UI."""
@@ -607,7 +777,17 @@ class App:
 
                     self.root.after(0, adopt)
                 except Exception as e:  # noqa: BLE001
+                    # Wi-Fi couldn't be enabled (phone Wi-Fi off, etc.) — fall back to the plain
+                    # USB connection so the user is still connected and can run over the cable.
                     self.log_queue.put(self.tr("conn_wifi_fail").format(e))
+
+                    def adopt_usb() -> None:
+                        self.refresh_devices()
+                        self.device_var.set(usb_serial)
+                        self._remember_device(usb_serial)
+                        self._log(self.tr("conn_usb_ok").format(usb_serial))
+
+                    self.root.after(0, adopt_usb)
                 finally:
                     self.root.after(0, lambda: self.connect_btn.config(state="normal"))
 
@@ -805,6 +985,7 @@ class App:
                     teleport_wait=max(2.0, float(self.tp_wait.get())),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     shundo_action=self.shundo_action,
+                    shiny_action=self.shiny_action,
                 )
                 self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
@@ -854,16 +1035,24 @@ class App:
 
         def on_shundo_event(stats, outcome):
             self.log_queue.put("__countstr__" + self.tr("s_counts").format(stats.checked, stats.shinies, stats.shundos))
-            if outcome in ("shundo", "shiny"):
+            if outcome == "shundo":
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
-                if outcome == "shundo":
-                    self.log_queue.put(self.tr("msg_s_shundo").format(how))
-                    self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                self.log_queue.put(self.tr("msg_s_shundo").format(how))
+                self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                if self.shundo_action == "pause":
+                    self.log_queue.put("__paused_shundo__")
+            elif outcome == "shiny":
+                if self.shiny_action == "skip":
+                    # Not a full shundo: the routine flees and keeps hunting. Still alert
+                    # Discord with a screenshot so the user knows a shiny went by.
+                    self.log_queue.put(self.tr("msg_s_shiny_skip"))
+                    self._send_discord(self.tr("dc_shiny_skip").format(stats.checked), shot=True)
                 else:
+                    how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
                     self.log_queue.put(self.tr("msg_s_shiny").format(how))
                     self._send_discord(self.tr("dc_shiny").format(how, stats.checked), shot=True)
-                if self.shundo_action == "pause":
-                    self.log_queue.put("__paused_shundo__" if outcome == "shundo" else "__paused_shiny__")
+                    if self.shundo_action == "pause":
+                        self.log_queue.put("__paused_shiny__")
             elif outcome == "blocked":
                 self.log_queue.put(self.tr("msg_s_blocked").format(stats.checked, stats.shinies, stats.shundos))
             elif outcome == "miss":

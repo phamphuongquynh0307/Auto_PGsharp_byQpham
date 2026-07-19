@@ -111,6 +111,7 @@ class ShundoConfig:
 
     # Popups. Teleporting long distances reliably triggers the speed warning.
     popup_speed_template: str = "templates/popup_speed.png"
+    popup_weather_template: str = "templates/popup_weather.png"     # "I AM SAFE" green button (weather warning)
     close_btn_template: str = "templates/close_btn.png"
     close_btn_blue_template: str = "templates/close_btn_blue.png"
     close_btn_white_template: str = "templates/close_btn_white.png"
@@ -123,6 +124,12 @@ class ShundoConfig:
 
     # What to do when a shundo is found: "pause" (default) or "stop".
     shundo_action: str = "pause"
+    # What to do on a plain shiny (opened encounter but NOT 15/15/15):
+    #   "skip"  -> flee the encounter and keep hunting the next spawn (default)
+    #   "pause" -> stop on it like a shundo (obeys shundo_action's pause/stop)
+    shiny_action: str = "skip"
+    # Encounter flee button (running-man, top-left) — used to leave a skipped shiny.
+    flee_xy: tuple[int, int] = (120, 170)
 
 
 @dataclass
@@ -148,6 +155,7 @@ class ShundoRoutine:
         self._menu_open = _load_optional(self.config.menu_open_template)
         self._menu_star = _load_optional(self.config.menu_star_template)
         self._popup_speed = _load_optional(self.config.popup_speed_template)
+        self._popup_weather = _load_optional(self.config.popup_weather_template)
         self._close_btns = [
             b for b in (
                 _load_optional(self.config.close_btn_template),
@@ -265,6 +273,13 @@ class ShundoRoutine:
                     self.device.tap(*star[0].center)
                     self.stats.last_event = "popup"
                     return True
+        # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
+        if self._popup_weather is not None:
+            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=(1.0,))
+            if m:
+                self.device.tap(*m[0].center)
+                self.stats.last_event = "popup"
+                return True
         if self._popup_speed is not None:
             m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(1.0,))
             if m:
@@ -448,12 +463,21 @@ class ShundoRoutine:
             outcome = self.run_once()
             if on_event:
                 on_event(self.stats, outcome)
-            if outcome in ("shundo", "shiny"):
-                # Any shiny is left open for the user to handle. "pause" waits for
-                # Resume; "stop" ends the loop entirely.
+            if outcome == "shundo":
+                # Full shundo: hand it to the user. "pause" waits for Resume; "stop" ends the loop.
                 if cfg.shundo_action == "stop":
                     break
                 self.pause_event.set()
+            elif outcome == "shiny":
+                if cfg.shiny_action == "skip":
+                    # Not a full shundo — leave this shiny (flee the encounter) and keep hunting.
+                    # on_event has already fired, so the Discord screenshot alert still goes out.
+                    self.device.tap(*cfg.flee_xy)
+                    self._interruptible_sleep(1.5)
+                elif cfg.shundo_action == "stop":
+                    break
+                else:
+                    self.pause_event.set()
 
     def stop(self) -> None:
         self.stop_event.set()
