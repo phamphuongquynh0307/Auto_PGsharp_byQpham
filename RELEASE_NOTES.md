@@ -1,13 +1,25 @@
-# v1.0.1
+# v1.0.2
 
 ## 🎯 Nổi bật
-- **Chạy đúng trên nhiều độ phân giải / kích thước màn hình khác nhau.** Tọa độ giờ được tính theo **mật độ điểm ảnh (density)** thay vì chiều rộng, nên các nút và vùng nhận diện bám đúng vị trí trên mọi tỉ lệ màn hình — không còn bấm lệch khi đổi máy.
-- **Tự hiệu chỉnh khi khởi động (self-calibration).** Bot tự **đo kích thước giao diện thật** của máy (dựa trên nút menu PGSharp) rồi căn chỉnh nhận diện theo đó — cắm máy nào cũng tự thích nghi, khỏi chỉnh tay.
-- **Nhận diện ổn định hơn.** Quét template ở **nhiều kích thước** nên bắt icon tốt hơn dù giao diện game render to/nhỏ khác nhau.
 
-## 🐛 Sửa lỗi
-- **Đếm số bóng ném sai:** chu kỳ *"không có Pokémon"* không còn bị cộng nhầm vào tổng — chỉ đếm khi thực sự vào màn bắt.
-- **Đọc độ phân giải:** sửa lỗi đọc nhầm khi máy đặt độ phân giải tùy chỉnh (nay đọc đúng *Override size/density*), tránh bấm sai toàn bộ.
+### 🖐️ Căn chỉnh tay (kéo-thả)
+Thêm nút **🎯 Căn chỉnh tay**: hiện ảnh màn hình điện thoại với các **điểm & khung kéo được**, bạn tự kéo vào đúng chỗ trên máy mình rồi **Lưu**. Bot dùng đúng các điểm đó, **bỏ qua việc dò tự động** (vốn hay bị lệch khi giao diện thay đổi).
+- Điểm: bấm Pokémon (nearby), ném bóng, nút Flee, đóng Pokéstop.
+- Khung: quét camera (chung Bắt & Shundo), IV pill, toast, hết bóng — kéo **4 góc** để đổi kích thước.
+
+### ⚡ Bắt nhanh & mượt hơn nhiều
+- **Con fled / ô trống → qua con kế NGAY**, không còn đứng chờ vô ích vài giây mỗi vòng.
+- **Bắt xong chuyển con kế tức thì**: nhận biết "đã về bản đồ" bằng tín hiệu camera biến mất (nhanh, chắc) thay vì chờ thanh nearby hiện lại.
 
 ## ✨ Khác
-- Thêm link **Discord** vào tab **Ủng hộ ❤** để tham gia cộng đồng.
+- Thêm ô **"Nghỉ giữa 2 con (giây)"** trong Cài đặt để tự chỉnh nhịp bắt.
+
+## 🐛 Sửa lỗi (gộp từ các cập nhật trước)
+- Chạy đúng trên nhiều độ phân giải màn hình (tự đo & căn theo máy).
+- Đếm số bóng ném chuẩn (không cộng nhầm ở vòng "không có Pokémon").
+- Đọc đúng độ phân giải khi máy đặt chế độ tùy chỉnh.
+
+## ⬇️ Cập nhật
+Tải file `.exe` mới ở phần **Assets** bên dưới → thay file cũ → mở lên chạy, không cần cài lại.
+
+💬 Hỗ trợ: https://discord.gg/QXSfKKPpG6
