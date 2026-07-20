@@ -33,6 +33,20 @@ from avc.shundo import ShundoConfig, ShundoRoutine
 DONATE_KOFI = "https://ko-fi.com/qpham7286"
 DISCORD_INVITE = "https://discord.gg/QXSfKKPpG6"
 
+# Manual-alignment items shown in the calibrate window.
+# (config field, kind 'point'|'region', mode 'catch'|'shundo'|'both', i18n key, colour)
+CALIB_ITEMS = [
+    ("nearby_slot",   "point",  "catch",  "cal_nearby",  "#ff3030"),
+    ("ball_fallback", "point",  "catch",  "cal_ball",    "#00c000"),
+    ("flee_xy",       "point",  "both",   "cal_flee",    "#ffcc00"),
+    ("ball_region",        "region", "catch",  "cal_camera",  "#00c000"),
+    ("pokestop_close_xy",  "point",  "catch",  "cal_stop",    "#ff33cc"),
+    ("out_of_balls_region","region", "catch",  "cal_noball",  "#ff8800"),
+    ("pill_region",        "region", "shundo", "cal_pill",    "#3399ff"),
+    ("camera_region",      "region", "shundo", "cal_scamera", "#00ccff"),
+    ("toast_region",       "region", "shundo", "cal_toast",   "#cc66ff"),
+]
+
 LANG = {
     "title":         {"vi": "Auto Catch Pokemon PGSharp", "en": "Auto Catch Pokemon PGSharp"},
     "tab_main":      {"vi": "Điều khiển", "en": "Control"},
@@ -141,6 +155,30 @@ LANG = {
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
+    "calibrate":     {"vi": "🎯 Căn chỉnh tay", "en": "🎯 Manual align"},
+    "cal_title":     {"vi": "Căn chỉnh tay — kéo các điểm/khung vào đúng chỗ",
+                      "en": "Manual alignment — drag points/boxes into place"},
+    "cal_hint":      {"vi": "Kéo dấu (+) tới đúng nút/pokémon; kéo góc khung để đổi kích thước. "
+                            "Lưu xong bot dùng đúng các điểm này (tắt dò '@').",
+                      "en": "Drag each (+) onto the right button/pokémon; drag a box corner to resize. "
+                            "After saving, the bot uses these exact spots (auto-detect off)."},
+    "cal_save":      {"vi": "Lưu", "en": "Save"},
+    "cal_reset":     {"vi": "Đặt lại mặc định", "en": "Reset to default"},
+    "cal_cancel":    {"vi": "Hủy", "en": "Cancel"},
+    "cal_refresh":   {"vi": "Chụp lại", "en": "Recapture"},
+    "cal_saved":     {"vi": "Đã lưu căn chỉnh tay.", "en": "Manual alignment saved."},
+    "cal_cleared":   {"vi": "Đã xóa căn chỉnh tay (về tự động).", "en": "Manual alignment cleared (back to auto)."},
+    "cal_mismatch":  {"vi": "⚠ Căn chỉnh tay thuộc độ phân giải khác — bỏ qua. Hãy căn lại.",
+                      "en": "⚠ Manual alignment was for a different resolution — ignored. Please re-align."},
+    "cal_nearby":    {"vi": "Điểm bấm Pokémon (nearby)", "en": "Pokémon tap (nearby)"},
+    "cal_ball":      {"vi": "Điểm ném bóng", "en": "Ball throw point"},
+    "cal_flee":      {"vi": "Nút Flee (thoát)", "en": "Flee button"},
+    "cal_camera":    {"vi": "Khung camera (Bắt)", "en": "Camera box (Catch)"},
+    "cal_pill":      {"vi": "Khung IV pill (Shundo)", "en": "IV pill box (Shundo)"},
+    "cal_scamera":   {"vi": "Khung camera (Shundo)", "en": "Camera box (Shundo)"},
+    "cal_stop":      {"vi": "Nút đóng Pokéstop (X)", "en": "Pokéstop close (X)"},
+    "cal_noball":    {"vi": "Khung 'hết bóng' (x0)", "en": "Out-of-balls box (x0)"},
+    "cal_toast":     {"vi": "Khung toast (Shundo)", "en": "Toast box (Shundo)"},
     "pv_legend":     {"vi": "Xanh lá = ô feed sẽ bấm • Vàng nhạt = thanh @ / ô spawn • Vàng = điểm tap dưới chân • "
                             "Hồng = vòng Pokémon • Cam = vùng đọc IV • Trắng = vùng toast • Đỏ = đang trong màn bắt",
                       "en": "Green = feed tap • Pale yellow = @ bar / spawn slot • Yellow = feet tap point • "
@@ -256,6 +294,9 @@ class App:
         # Every device ever connected, most recent first; shown in the picker even when
         # currently offline, and Wi-Fi ones are re-connected automatically.
         self.known: list[str] = [s for s in data.get("known_devices", []) if isinstance(s, str)][:10]
+        # Manual alignment: device-pixel overrides for tap points / detection boxes, keyed by
+        # field name; "_screen" stores the resolution they were set at. Empty = full auto.
+        self.manual: dict = data.get("manual", {}) if isinstance(data.get("manual"), dict) else {}
 
         self._build_ui()
         self._apply_settings(data)
@@ -315,6 +356,9 @@ class App:
         self.preview_btn = ttk.Button(mode_row, text=self.tr("preview"), command=self.toggle_preview)
         self.preview_btn.pack(side="right")
         self._i18n.append((self.preview_btn, "preview"))
+        self.calib_btn = ttk.Button(mode_row, text=self.tr("calibrate"), command=self.open_calibrate)
+        self.calib_btn.pack(side="right", padx=4)
+        self._i18n.append((self.calib_btn, "calibrate"))
 
         controls = ttk.Frame(self.tab_main)
         controls.pack(fill="x", **pad)
@@ -574,6 +618,7 @@ class App:
             "alert_report": int(self.alert_report.get()),
             "alert_batt": int(self.alert_batt.get()),
             "lang": self.lang,
+            "manual": self.manual,
         }
         try:
             with open(_settings_path(), "w", encoding="utf-8") as f:
@@ -977,6 +1022,228 @@ class App:
             self._pv_busy = False
 
     # -- run control ----------------------------------------------------------
+    # -- manual alignment -----------------------------------------------------
+    def _cal_defaults(self, w: int, h: int, dens) -> dict:
+        """Auto positions (device px) for this screen, used as starting handles."""
+        c = CatchConfig().scale_to(w, h, dens)
+        s = ShundoConfig().scale_to(w, h, dens)
+        return {
+            "nearby_slot":         list(c.nearby_slot),
+            "ball_fallback":       list(c.ball_fallback),
+            "flee_xy":             list(c.flee_xy),
+            "ball_region":         list(c.ball_region),
+            "pokestop_close_xy":   list(c.pokestop_close_xy),
+            "out_of_balls_region": list(c.out_of_balls_region),
+            "pill_region":         list(s.pill_region),
+            "camera_region":       list(s.camera_region),
+            "toast_region":        list(s.toast_region),
+        }
+
+    def open_calibrate(self) -> None:
+        if getattr(self, "_cal_win", None) is not None:
+            try: self._cal_win.lift()
+            except Exception:  # noqa: BLE001
+                pass
+            return
+        try:
+            dev = self.device or Device(self._sel_serial() or None)
+            if not (self._sel_serial() or self.device):
+                raise RuntimeError(self.tr("msg_no_device"))
+            w, h = dev.screen_size(); dens = dev.density()
+            frame = dev.screenshot(fresh=True)
+        except Exception as e:  # noqa: BLE001
+            self._log(self.tr("pv_err").format(e))
+            return
+
+        self._cal_dev_size = (w, h)
+        self._cal_def = self._cal_defaults(w, h, dens)
+        if self.manual and tuple(self.manual.get("_screen", ())) == (w, h):
+            self._cal = {k: list(self.manual.get(k, v)) for k, v in self._cal_def.items()}
+        else:
+            self._cal = {k: list(v) for k, v in self._cal_def.items()}
+
+        disp_h = min(760, h)
+        self._cal_sf = disp_h / h
+        disp_w = int(round(w * self._cal_sf))
+        small = cv2.resize(frame, (disp_w, disp_h))
+        ok, png = cv2.imencode(".png", small)
+        self._cal_photo = tk.PhotoImage(data=base64.b64encode(png.tobytes())) if ok else None
+
+        win = tk.Toplevel(self.root); win.title(self.tr("cal_title")); win.resizable(False, False)
+        self._cal_win = win
+        win.protocol("WM_DELETE_WINDOW", self._cal_close)
+        ttk.Label(win, text=self.tr("cal_hint"), wraplength=disp_w + 200,
+                  foreground="#555", justify="left").pack(anchor="w", padx=8, pady=(8, 4))
+        body = ttk.Frame(win); body.pack(padx=8, pady=4)
+        cv = tk.Canvas(body, width=disp_w, height=disp_h, highlightthickness=1,
+                       highlightbackground="#888", cursor="crosshair")
+        cv.pack(side="left")
+        self._cal_canvas = cv
+        if self._cal_photo is not None:
+            cv.create_image(0, 0, anchor="nw", image=self._cal_photo)
+        legend = ttk.Frame(body); legend.pack(side="left", fill="y", padx=(10, 0))
+        for field, kind, mode, key, color in CALIB_ITEMS:
+            row = ttk.Frame(legend); row.pack(anchor="w", pady=3)
+            sw = tk.Canvas(row, width=16, height=16, highlightthickness=0)
+            sw.pack(side="left"); sw.create_rectangle(2, 2, 14, 14, fill=color, outline=color)
+            ttk.Label(row, text=self.tr(key)).pack(side="left", padx=4)
+        self._cal_active = None
+        cv.bind("<ButtonPress-1>", self._cal_press)
+        cv.bind("<B1-Motion>", self._cal_drag)
+        cv.bind("<ButtonRelease-1>", self._cal_release)
+        btns = ttk.Frame(win); btns.pack(fill="x", padx=8, pady=8)
+        ttk.Button(btns, text=self.tr("cal_save"), command=self._cal_save).pack(side="right", padx=3)
+        ttk.Button(btns, text=self.tr("cal_reset"), command=self._cal_reset).pack(side="right", padx=3)
+        ttk.Button(btns, text=self.tr("cal_cancel"), command=self._cal_close).pack(side="right", padx=3)
+        self._cal_redraw()
+
+    def _cal_redraw(self) -> None:
+        c = self._cal_canvas; sf = self._cal_sf
+        c.delete("ov")
+        for field, kind, mode, key, color in CALIB_ITEMS:
+            v = self._cal[field]
+            if kind == "point":
+                x, y = v[0] * sf, v[1] * sf
+                c.create_line(x - 16, y, x + 16, y, fill=color, width=3, tags="ov")
+                c.create_line(x, y - 16, x, y + 16, fill=color, width=3, tags="ov")
+                c.create_oval(x - 13, y - 13, x + 13, y + 13, outline=color, width=3, tags="ov")
+                c.create_text(x + 17, y - 11, text=self.tr(key), anchor="w", fill=color,
+                              font=("Segoe UI", 8, "bold"), tags="ov")
+            else:
+                x, y, ww, hh = v[0] * sf, v[1] * sf, v[2] * sf, v[3] * sf
+                c.create_rectangle(x, y, x + ww, y + hh, outline=color, width=3, tags="ov")
+                for cx, cy in ((x, y), (x + ww, y), (x, y + hh), (x + ww, y + hh)):
+                    c.create_rectangle(cx - 6, cy - 6, cx + 6, cy + 6, fill=color,
+                                       outline="#ffffff", tags="ov")
+                c.create_text(x + 4, y + 2, text=self.tr(key), anchor="nw", fill=color,
+                              font=("Segoe UI", 8, "bold"), tags="ov")
+
+    def _cal_press(self, e) -> None:
+        sf = self._cal_sf; mx, my = e.x, e.y
+        pick = None; pickd = 22
+        for field, kind, *_ in CALIB_ITEMS:            # points + resize handles first
+            v = self._cal[field]
+            if kind == "point":
+                x, y = v[0] * sf, v[1] * sf
+                d = ((mx - x) ** 2 + (my - y) ** 2) ** 0.5
+                if d < pickd:
+                    pickd = d; pick = (field, "move", mx - x, my - y)
+            else:
+                x, y, ww, hh = v[0] * sf, v[1] * sf, v[2] * sf, v[3] * sf
+                corners = {"tl": (x, y), "tr": (x + ww, y),
+                           "bl": (x, y + hh), "br": (x + ww, y + hh)}
+                for cn, (cx, cy) in corners.items():
+                    if abs(mx - cx) < 13 and abs(my - cy) < 13:
+                        pick = (field, "rs:" + cn, 0, 0); pickd = 0
+        if pick is None:                                # else a region body move
+            for field, kind, *_ in CALIB_ITEMS:
+                if kind != "region":
+                    continue
+                v = self._cal[field]; x, y, ww, hh = v[0] * sf, v[1] * sf, v[2] * sf, v[3] * sf
+                if x <= mx <= x + ww and y <= my <= y + hh:
+                    pick = (field, "move", mx - x, my - y); break
+        self._cal_active = pick
+
+    def _cal_drag(self, e) -> None:
+        if not self._cal_active:
+            return
+        field, mode, ox, oy = self._cal_active
+        sf = self._cal_sf; w, h = self._cal_dev_size
+        v = self._cal[field]
+        if len(v) == 2:                                 # point
+            v[0] = int(min(max((e.x - ox) / sf, 0), w))
+            v[1] = int(min(max((e.y - oy) / sf, 0), h))
+        elif mode.startswith("rs:"):                    # resize from a corner
+            corner = mode[3:]
+            x, y, ww, hh = v
+            mxp, myp = e.x / sf, e.y / sf
+            x1, y1, x2, y2 = x, y, x + ww, y + hh       # keep the opposite corner fixed
+            if corner in ("tl", "bl"):
+                x1 = mxp
+            else:
+                x2 = mxp
+            if corner in ("tl", "tr"):
+                y1 = myp
+            else:
+                y2 = myp
+            xa, xb = sorted((x1, x2)); ya, yb = sorted((y1, y2))
+            xa = max(0, xa); ya = max(0, ya); xb = min(w, xb); yb = min(h, yb)
+            if xb - xa < 20: xb = xa + 20
+            if yb - ya < 20: yb = ya + 20
+            v[0], v[1], v[2], v[3] = int(xa), int(ya), int(xb - xa), int(yb - ya)
+        else:                                           # region move
+            v[0] = int(min(max((e.x - ox) / sf, 0), w - v[2]))
+            v[1] = int(min(max((e.y - oy) / sf, 0), h - v[3]))
+        self._cal_redraw()
+
+    def _cal_release(self, _e) -> None:
+        self._cal_active = None
+
+    def _cal_save(self) -> None:
+        data = {k: [int(n) for n in v] for k, v in self._cal.items()}
+        data["_screen"] = list(self._cal_dev_size)
+        self.manual = data
+        self.save_settings()
+        self._log(self.tr("cal_saved"))
+        self._cal_close()
+
+    def _cal_reset(self) -> None:
+        self._cal = {k: list(v) for k, v in self._cal_def.items()}
+        self.manual = {}
+        self.save_settings()
+        self._log(self.tr("cal_cleared"))
+        self._cal_redraw()
+
+    def _cal_close(self) -> None:
+        win = getattr(self, "_cal_win", None); self._cal_win = None
+        if win is not None:
+            try: win.destroy()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _apply_manual(self, cfg, mode: str):
+        """Overwrite tap points / boxes with the manually-aligned device-pixel values."""
+        m = self.manual
+        if not m or not m.get("_screen"):
+            return cfg
+        if tuple(m["_screen"]) != tuple(cfg.screen):
+            self._log(self.tr("cal_mismatch"))
+            return cfg
+
+        def P(name):
+            v = m.get(name)
+            return tuple(v) if isinstance(v, (list, tuple)) and len(v) == 2 else None
+
+        def R(name):
+            v = m.get(name)
+            return tuple(v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
+
+        if mode == "catch":
+            if P("nearby_slot"):
+                cfg.nearby_slot = P("nearby_slot")
+                cfg.require_anchor = False
+                cfg.force_slot = True
+            if P("ball_fallback"):
+                cfg.ball_fallback = P("ball_fallback")
+            if P("flee_xy"):
+                cfg.flee_xy = P("flee_xy")
+            if R("ball_region"):
+                cfg.ball_region = R("ball_region")
+            if P("pokestop_close_xy"):
+                cfg.pokestop_close_xy = P("pokestop_close_xy")
+            if R("out_of_balls_region"):
+                cfg.out_of_balls_region = R("out_of_balls_region")
+        else:
+            if P("flee_xy"):
+                cfg.flee_xy = P("flee_xy")
+            if R("pill_region"):
+                cfg.pill_region = R("pill_region")
+            if R("camera_region"):
+                cfg.camera_region = R("camera_region")
+            if R("toast_region"):
+                cfg.toast_region = R("toast_region")
+        return cfg
+
     def on_play(self) -> None:
         if self.worker and self.worker.is_alive():
             return
@@ -1005,6 +1272,7 @@ class App:
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
+                cfg = self._apply_manual(cfg, "shundo")
                 self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
             else:
@@ -1018,6 +1286,7 @@ class App:
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
+                cfg = self._apply_manual(cfg, "catch")
                 self.routine = CatchRoutine(self.device, cfg)
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))

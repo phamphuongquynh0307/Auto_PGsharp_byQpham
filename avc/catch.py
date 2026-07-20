@@ -65,6 +65,7 @@ class CatchConfig:
     # Fallback fixed slot, used only if the anchor can't be found and require_anchor is False.
     nearby_slot: tuple[int, int] = (940, 205)
     require_anchor: bool = True     # if True, skip the cycle when the '@' bar isn't on screen
+    force_slot: bool = False        # if True, always tap the fixed nearby_slot (skip '@' detection)
     double_tap_gap_ms: int = 90
 
     # Encounter detection via camera template + fallback throw position.
@@ -488,12 +489,16 @@ class CatchRoutine:
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
-        slot = self._poll(self._slot_in, cfg.anchor_timeout)
-        if slot is None:
-            if cfg.require_anchor:
-                self._interruptible_sleep(cfg.idle_poll)
-                return False
+        if cfg.force_slot:
+            # Manual alignment: tap the fixed slot directly, don't trust the flaky '@' detection.
             slot = cfg.nearby_slot
+        else:
+            slot = self._poll(self._slot_in, cfg.anchor_timeout)
+            if slot is None:
+                if cfg.require_anchor:
+                    self._interruptible_sleep(cfg.idle_poll)
+                    return False
+                slot = cfg.nearby_slot
 
         # Step 2: engage it, then throw. The camera-icon poll only *times* the throw: the swipe
         # goes out the instant the encounter shows up. If the icon never shows we throw anyway
