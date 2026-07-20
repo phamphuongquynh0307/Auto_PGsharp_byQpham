@@ -500,28 +500,26 @@ class CatchRoutine:
                     return False
                 slot = cfg.nearby_slot
 
-        # Step 2: engage it, then throw. The camera-icon poll only *times* the throw: the swipe
-        # goes out the instant the encounter shows up. If the icon never shows we throw anyway
-        # (a stray swipe on the map is harmless), but the cycle still counts as empty so the
-        # AutoWalk dry-spell logic below keeps triggering on a dead map.
+        # Step 2: engage it. The camera-icon poll returns the instant the encounter opens; if it
+        # never shows within encounter_timeout the slot was empty or the Pokémon fled.
         self._double_tap(*slot)
         ball_xy = self._poll(self._ball_in, cfg.encounter_timeout)
         if self.stop_event.is_set():
             return False
-        confirmed = ball_xy is not None
+        if ball_xy is None:
+            # Fled / empty slot: no encounter opened, so there's nothing to throw at and nothing
+            # to wait out. Return straight away instead of throwing blindly and then stalling on
+            # the settle + back-to-map wait — that stall is what made empty cycles so slow.
+            return False
 
-        # Step 3: throw, then wait until the nearby bar's '@' anchor reappears — that's the reliable
-        # "encounter finished, we're back on the map" signal. (Waiting merely for the ball to vanish
-        # fired too early: the ball leaves its rest spot the instant it's thrown, mid-animation.)
-        self._throw(ball_xy or cfg.ball_fallback)
-        # Only a throw on a confirmed encounter counts; the blind fallback swipe on an empty
-        # cycle (no camera icon) is a harmless map tap, not a real ball thrown.
-        if confirmed:
-            self.stats.throws += 1
-        # Give the throw/catch animation a moment so we don't detect the pre-throw map state.
+        # Step 3: throw, then wait only until the encounter ends (the camera icon disappears).
+        # That "back on the map" signal is reliable and fast — far quicker than polling the flaky
+        # '@' anchor, which could stall a whole catch_timeout between catches.
+        self.stats.throws += 1
+        self._throw(ball_xy)
         self._interruptible_sleep(cfg.settle_after_catch)
-        self._poll(self._slot_in, cfg.catch_timeout)
-        return confirmed
+        self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
+        return True
 
     def run(self, on_event=None) -> None:
         """Blocking loop. Honors stop_event / pause_event so a GUI can drive it in a thread."""

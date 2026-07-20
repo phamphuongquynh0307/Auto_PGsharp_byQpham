@@ -151,6 +151,7 @@ LANG = {
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
+    "settle":        {"vi": "Nghỉ giữa 2 con (giây):", "en": "Rest between catches (s):"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
@@ -395,9 +396,10 @@ class App:
         self.wait_catch = self._spin(catch_grp, "wait_catch", 3, 2, 20, 6.0, is_float=True)
         self.idle_aw = self._spin(catch_grp, "idle_aw", 4, 0, 20, 3)
         self.max_catches = self._spin(catch_grp, "max_catches", 5, 0, 9999, 0)
+        self.settle = self._spin(catch_grp, "settle", 6, 0, 15, 1.2, is_float=True)
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        dim_chk.grid(row=7, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
         sh_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_shundo"))
@@ -577,6 +579,7 @@ class App:
         self.wait_catch.set(max(2.0, float(data.get("wait_catch", self.wait_catch.get()))))
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
+        self.settle.set(max(0.0, float(data.get("settle", self.settle.get()))))
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
@@ -602,6 +605,7 @@ class App:
             "wait_catch": float(self.wait_catch.get()),
             "idle_aw": int(self.idle_aw.get()),
             "max_catches": int(self.max_catches.get()),
+            "settle": float(self.settle.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
             "tp_wait": float(self.tp_wait.get()),
@@ -1280,6 +1284,7 @@ class App:
                     catch_timeout=max(2.0, float(self.wait_catch.get())),
                     idle_before_autowalk=int(self.idle_aw.get()),
                     max_catches=int(self.max_catches.get()),
+                    settle_after_catch=max(0.0, float(self.settle.get())),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
