@@ -1,0 +1,42 @@
+name: Build & Release
+
+# Chạy khi push một tag phiên bản (vd: v1.0.2). Commit thường KHÔNG kích hoạt.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write        # cần để tạo Release + upload file
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build executable
+        run: pyinstaller AutoVisionClicker.spec --noconfirm --clean
+
+      - name: Rename with version
+        run: Copy-Item dist/AutoCatchPokemonPGSharp.exe "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create ${{ github.ref_name }}
+          "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
+          --title ${{ github.ref_name }}
+          --notes-file RELEASE_NOTES.md
