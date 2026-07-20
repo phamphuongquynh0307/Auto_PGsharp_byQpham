@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .catch import _load_optional, _resolve
 from .device import Device
-from .vision import find, load_template
+from .layout import (
+    BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
+)
+from .vision import best_matching_scale, find, load_template
 
 
 @dataclass
@@ -131,6 +134,56 @@ class ShundoConfig:
     # Encounter flee button (running-man, top-left) — used to leave a skipped shiny.
     flee_xy: tuple[int, int] = (120, 170)
 
+    # Actual device resolution; see CatchConfig.screen. Coordinate FIELDS above are stored
+    # already re-anchored to this resolution; raw pixel literals in the routine use s()/rect().
+    screen: tuple[int, int] = BASE_RESOLUTION
+    # Device density (dpi). Drives dp-correct scaling; None falls back to width-ratio.
+    density: int | None = None
+
+    @property
+    def layout(self) -> Layout:
+        return Layout(*self.screen, density=self.density)
+
+    def s(self, v: float) -> int:
+        return self.layout.scale(v)
+
+    def pt(self, p: tuple[int, int], anchor: str) -> tuple[int, int]:
+        return self.layout.point(p, anchor)
+
+    def rect(self, r: tuple[int, int, int, int], anchor: str) -> tuple[int, int, int, int]:
+        return self.layout.region(r, anchor)
+
+    def scale_to(self, width: int, height: int, density: int | None = None) -> "ShundoConfig":
+        """Return a copy with every pixel coordinate re-anchored from BASE_RESOLUTION onto
+        (width, height) at `density` dpi. Each field is tagged with the edge/corner it hugs
+        (see avc/layout.py). No-op (returns self) at the base resolution+density."""
+        L = Layout(width, height, density=density)
+        if (width, height) == BASE_RESOLUTION and abs(L.s - 1.0) < 1e-9:
+            return self
+        return replace(
+            self,
+            screen=(width, height),
+            density=density,
+            # anchored regions/positions
+            camera_region=L.region(self.camera_region, "TC"),   # encounter camera, top-centre
+            pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
+            toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
+            flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
+            # pure distances/sizes/offsets
+            feed_slot_dy=L.scale(self.feed_slot_dy),
+            handle_column_tol=L.scale(self.handle_column_tol),
+            slot_offset_y=L.scale(self.slot_offset_y),
+            slot_patch=L.scale(self.slot_patch),
+            bar_half_w=L.scale(self.bar_half_w),
+            bar_scan_top=L.scale(self.bar_scan_top),
+            bar_scan_bottom=L.scale(self.bar_scan_bottom),
+            bar_scan_step=max(1, L.scale(self.bar_scan_step)),
+            glyph_max_gap=L.scale(self.glyph_max_gap),
+            toast_pill_w=(L.scale(self.toast_pill_w[0]), L.scale(self.toast_pill_w[1])),
+            toast_pill_h=(L.scale(self.toast_pill_h[0]), L.scale(self.toast_pill_h[1])),
+            toast_center_tol=L.scale(self.toast_center_tol),
+        )
+
 
 @dataclass
 class ShundoStats:
@@ -145,22 +198,36 @@ class ShundoRoutine:
     def __init__(self, device: Device, config: ShundoConfig | None = None) -> None:
         self.device = device
         self.config = config or ShundoConfig()
-        self._rss = load_template(_resolve(self.config.feed_rss_template))
-        self._handle = load_template(_resolve(self.config.bar_handle_template))
-        self._anchor = load_template(_resolve(self.config.anchor_template))
-        self._camera = load_template(_resolve(self.config.camera_template))
-        self._g1 = load_template(_resolve(self.config.glyph_1_template))
-        self._g5 = load_template(_resolve(self.config.glyph_5_template))
-        self._gs = load_template(_resolve(self.config.glyph_slash_template))
-        self._menu_open = _load_optional(self.config.menu_open_template)
-        self._menu_star = _load_optional(self.config.menu_star_template)
-        self._popup_speed = _load_optional(self.config.popup_speed_template)
-        self._popup_weather = _load_optional(self.config.popup_weather_template)
+        # Templates are authored at BASE_RESOLUTION. The game's UI may or may not scale with the
+        # device (unreliable under a resolution override), so keep templates at base size and let
+        # find() sweep a bracket of scales (bracket_scales). On the base device this is a no-op.
+        # The IV-pill glyph matcher below keeps its own finely-tuned per-glyph scales.
+        self._tpl_s = self.config.layout.s
+        self._scales = bracket_scales(self._tpl_s)
+        self._cal_scale: float | None = None   # measured render scale; None until calibrated
+
+        def load(path):
+            return load_template(_resolve(path))
+
+        def load_opt(path):
+            return _load_optional(path)
+
+        self._rss = load(self.config.feed_rss_template)
+        self._handle = load(self.config.bar_handle_template)
+        self._anchor = load(self.config.anchor_template)
+        self._camera = load(self.config.camera_template)
+        self._g1 = load(self.config.glyph_1_template)
+        self._g5 = load(self.config.glyph_5_template)
+        self._gs = load(self.config.glyph_slash_template)
+        self._menu_open = load_opt(self.config.menu_open_template)
+        self._menu_star = load_opt(self.config.menu_star_template)
+        self._popup_speed = load_opt(self.config.popup_speed_template)
+        self._popup_weather = load_opt(self.config.popup_weather_template)
         self._close_btns = [
             b for b in (
-                _load_optional(self.config.close_btn_template),
-                _load_optional(self.config.close_btn_blue_template),
-                _load_optional(self.config.close_btn_white_template),
+                load_opt(self.config.close_btn_template),
+                load_opt(self.config.close_btn_blue_template),
+                load_opt(self.config.close_btn_white_template),
             ) if b is not None
         ]
         self.stats = ShundoStats()
@@ -197,7 +264,7 @@ class ShundoRoutine:
 
     # -- element lookups ---------------------------------------------------------
     def _anchor_in(self, frame) -> tuple[int, int] | None:
-        m = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1))
+        m = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=self._scales)
         return m[0].center if m else None
 
     def _target_in_bar(self, frame) -> bool:
@@ -225,11 +292,11 @@ class ShundoRoutine:
         removes it, so the next spawn shifts up into the top slot — we always tap slot 1.
         Located as the '≡' handle in the RSS icon's column, plus a fixed dy."""
         cfg = self.config
-        rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=(0.9, 1.0, 1.1))
+        rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=self._scales)
         if not rss:
             return None
         rx, _ry = rss[0].center
-        handles = find(frame, self._handle, threshold=cfg.feed_threshold, scales=(0.9, 1.0, 1.1))
+        handles = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales)
         for h in handles:
             hx, hy = h.center
             if abs(hx - rx) <= cfg.handle_column_tol:
@@ -238,7 +305,7 @@ class ShundoRoutine:
 
     def _camera_in(self, frame) -> bool:
         return bool(find(frame, self._camera, threshold=self.config.camera_threshold,
-                         scales=(0.95, 1.0, 1.05), region=self.config.camera_region))
+                         scales=self._scales, region=self.config.camera_region))
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -266,22 +333,22 @@ class ShundoRoutine:
         frame = self.device.screenshot()
         # PGSharp menu left open — close it by tapping the star it hangs off of.
         if self._menu_open is not None and self._menu_star is not None:
-            m = find(frame, self._menu_open, threshold=0.8, scales=(0.95, 1.0, 1.05))
+            m = find(frame, self._menu_open, threshold=0.8, scales=self._scales)
             if m:
-                star = find(frame, self._menu_star, threshold=0.7, scales=(0.9, 1.0, 1.1), grayscale=False)
+                star = find(frame, self._menu_star, threshold=0.7, scales=self._scales, grayscale=False)
                 if star:
                     self.device.tap(*star[0].center)
                     self.stats.last_event = "popup"
                     return True
         # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
         if self._popup_weather is not None:
-            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._popup_speed is not None:
-            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -293,7 +360,7 @@ class ShundoRoutine:
         if not self._camera_in(frame):
             for btn in self._close_btns:
                 m = find(frame, btn, threshold=self.config.popup_threshold,
-                         scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                         scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
                 if m:
                     self.device.tap(*m[0].center)
                     self.stats.last_event = "popup"
@@ -339,11 +406,25 @@ class ShundoRoutine:
         return False
 
     # -- main loop --------------------------------------------------------------------
+    def _ensure_calibrated(self) -> None:
+        """Measure the device's real UI render scale once (from the always-on PGSharp menu star)
+        and centre the match-scale sweep on it, instead of guessing from resolution/density.
+        Until it locks, the wide bracket from __init__ stays in effect; a missing/hidden star
+        just leaves it to retry next cycle."""
+        if self._cal_scale is not None or self._menu_star is None:
+            return
+        s, score = best_matching_scale(self.device.screenshot(), self._menu_star,
+                                       CALIBRATION_SWEEP, grayscale=False)
+        if s is not None and score >= 0.82:
+            self._cal_scale = s
+            self._scales = scales_around(s)
+
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
         blocked | shiny | shundo | miss | nospawn | idle | popup."""
         cfg = self.config
         self.stats.cycles += 1
+        self._ensure_calibrated()
 
         if self._handle_popups():
             self._interruptible_sleep(1.0)

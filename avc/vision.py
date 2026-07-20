@@ -109,3 +109,30 @@ def load_template(path: str) -> np.ndarray:
     if img is None:
         raise FileNotFoundError(f"template not found or unreadable: {path}")
     return img
+
+
+def best_matching_scale(
+    scene: np.ndarray,
+    template: np.ndarray,
+    scales,
+    *,
+    grayscale: bool = True,
+    region: tuple[int, int, int, int] | None = None,
+) -> tuple[float | None, float]:
+    """Return (scale, score): the scale in `scales` whose resized `template` best matches
+    `scene`. Used once at startup to *measure* how big the UI actually renders on this
+    device, instead of guessing it from the screen resolution or density."""
+    from .layout import resize_template
+
+    best_s: float | None = None
+    best_score = -1.0
+    for s in scales:
+        t = resize_template(template, s)
+        if t is None or min(t.shape[0], t.shape[1]) < 8:
+            continue
+        m = find(scene, t, threshold=0.0, scales=(1.0,), max_matches=1,
+                 grayscale=grayscale, region=region)
+        sc = m[0].score if m else 0.0
+        if sc > best_score:
+            best_s, best_score = s, sc
+    return best_s, best_score

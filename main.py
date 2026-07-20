@@ -96,6 +96,11 @@ def cmd_catch(args) -> None:
         after_throw=args.wait_catch,
         max_catches=args.max,
     )
+    # Rescale the fixed coordinates to the connected phone's actual resolution.
+    try:
+        cfg = cfg.scale_to(*dev.screen_size(), dev.density())
+    except Exception:  # noqa: BLE001
+        pass
     routine = CatchRoutine(dev, cfg)
     print(
         f"Bắt Pokemon (stream realtime) | "

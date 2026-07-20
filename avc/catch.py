@@ -18,13 +18,16 @@ from __future__ import annotations
 import random
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import os
 
 from .device import Device
+from .layout import (
+    BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
+)
 from .resources import resource_path
-from .vision import find, load_template
+from .vision import best_matching_scale, find, load_template
 
 
 def _resolve(template_path: str) -> str:
@@ -133,6 +136,58 @@ class CatchConfig:
     # Stop conditions.
     max_catches: int = 0           # 0 = unlimited
 
+    # Actual device resolution. Left at BASE_RESOLUTION until scale_to() is called with the
+    # connected phone's real size. The coordinate FIELDS above are stored already re-anchored
+    # to this resolution; raw pixel literals inside the routine are in BASE_RESOLUTION units
+    # and converted at use through s()/pt()/rect().
+    screen: tuple[int, int] = BASE_RESOLUTION
+    # Device density (dpi). Drives dp-correct scaling; None falls back to width-ratio.
+    density: int | None = None
+
+    @property
+    def layout(self) -> Layout:
+        return Layout(*self.screen, density=self.density)
+
+    def s(self, v: float) -> int:
+        """Scale a pure distance/size (swipe length, search radius, offset)."""
+        return self.layout.scale(v)
+
+    def pt(self, p: tuple[int, int], anchor: str) -> tuple[int, int]:
+        """Map an absolute point authored in base coords; anchor e.g. 'BC', 'TL'."""
+        return self.layout.point(p, anchor)
+
+    def rect(self, r: tuple[int, int, int, int], anchor: str) -> tuple[int, int, int, int]:
+        """Map an absolute box authored in base coords; anchor e.g. 'BC', 'TC'."""
+        return self.layout.region(r, anchor)
+
+    def scale_to(self, width: int, height: int, density: int | None = None) -> "CatchConfig":
+        """Return a copy with every pixel coordinate re-anchored from BASE_RESOLUTION onto
+        (width, height) at `density` dpi. Each field is tagged with the screen edge/corner it
+        hugs so it lines up on any aspect ratio (see avc/layout.py). Timings, thresholds and
+        template paths are untouched. No-op (returns self) at the base resolution+density."""
+        L = Layout(width, height, density=density)
+        if (width, height) == BASE_RESOLUTION and abs(L.s - 1.0) < 1e-9:
+            return self
+        return replace(
+            self,
+            screen=(width, height),
+            density=density,
+            # anchored positions/regions
+            anchor_region=L.region(self.anchor_region, "TR"),   # nearby bar hugs right edge
+            nearby_slot=L.point(self.nearby_slot, "TR"),
+            ball_fallback=L.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
+            ball_region=L.region(self.ball_region, "TC"),       # encounter camera, top-centre
+            out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
+            flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
+            pokestop_close_xy=L.point(self.pokestop_close_xy, "BC"),
+            # pure distances/sizes/offsets
+            slot_offset_y=L.scale(self.slot_offset_y),
+            throw_dy=L.scale(self.throw_dy),
+            jitter_px=max(1, L.scale(self.jitter_px)),
+            autowalk_offset_x=L.scale(self.autowalk_offset_x),
+            autowalk_offset_y=L.scale(self.autowalk_offset_y),
+        )
+
 
 @dataclass
 class CatchStats:
@@ -146,19 +201,34 @@ class CatchRoutine:
     def __init__(self, device: Device, config: CatchConfig | None = None) -> None:
         self.device = device
         self.config = config or CatchConfig()
-        self._ball = load_template(_resolve(self.config.ball_template))
-        self._anchor = load_template(_resolve(self.config.anchor_template))
-        self._star = load_template(_resolve(self.config.menu_star_template))
+        # Templates are authored at BASE_RESOLUTION. Whether the game renders its UI bigger or
+        # smaller on another device is unreliable (Pokémon GO/PGSharp don't re-layout cleanly
+        # under a resolution override), so instead of baking one guessed size into each template
+        # we keep them at base size and let find() sweep a bracket of scales (bracket_scales)
+        # spanning the density estimate .. no-scaling. On the base device this stays a tight sweep.
+        self._tpl_s = self.config.layout.s
+        self._scales = bracket_scales(self._tpl_s)
+        self._cal_scale: float | None = None   # measured render scale; None until calibrated
+
+        def load(path):
+            return load_template(_resolve(path))
+
+        def load_opt(path):
+            return _load_optional(path)
+
+        self._ball = load(self.config.ball_template)
+        self._anchor = load(self.config.anchor_template)
+        self._star = load(self.config.menu_star_template)
         # Popup templates are optional — a missing one just disables that handler.
-        self._popup_autowalk = _load_optional(self.config.popup_autowalk_template)
-        self._popup_speed = _load_optional(self.config.popup_speed_template)
-        self._popup_weather = _load_optional(self.config.popup_weather_template)
-        self._claim_rewards = _load_optional(self.config.claim_rewards_template)
-        self._close_btn = _load_optional(self.config.close_btn_template)
-        self._close_btn_blue = _load_optional(self.config.close_btn_blue_template)
-        self._close_btn_white = _load_optional(self.config.close_btn_white_template)
-        self._aw_paused = _load_optional(self.config.autowalk_paused_template)
-        self._noball_tpl = _load_optional(self.config.out_of_balls_template)
+        self._popup_autowalk = load_opt(self.config.popup_autowalk_template)
+        self._popup_speed = load_opt(self.config.popup_speed_template)
+        self._popup_weather = load_opt(self.config.popup_weather_template)
+        self._claim_rewards = load_opt(self.config.claim_rewards_template)
+        self._close_btn = load_opt(self.config.close_btn_template)
+        self._close_btn_blue = load_opt(self.config.close_btn_blue_template)
+        self._close_btn_white = load_opt(self.config.close_btn_white_template)
+        self._aw_paused = load_opt(self.config.autowalk_paused_template)
+        self._noball_tpl = load_opt(self.config.out_of_balls_template)
         self.stats = CatchStats()
         self._idle_streak = 0
         self._autowalk_active = False
@@ -192,7 +262,7 @@ class CatchRoutine:
         self.device.double_tap(jx, jy)
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=(0.95, 1.0, 1.05),
+        matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=self._scales,
                        region=self.config.ball_region)
         return self.config.ball_fallback if matches else None
 
@@ -203,11 +273,11 @@ class CatchRoutine:
         if self._noball_tpl is None:
             return False
         matches = find(frame, self._noball_tpl, threshold=self.config.out_of_balls_threshold,
-                       scales=(0.9, 1.0, 1.1), grayscale=False, region=self.config.out_of_balls_region)
+                       scales=self._scales, grayscale=False, region=self.config.out_of_balls_region)
         return bool(matches)
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=(0.9, 1.0, 1.1),
+        matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=self._scales,
                        region=self.config.anchor_region)
         if not matches:
             return None
@@ -239,7 +309,7 @@ class CatchRoutine:
         # Weather warning "Weather conditions are potentially dangerous" -> tap the green
         # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
         if self._popup_weather is not None:
-            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -249,7 +319,7 @@ class CatchRoutine:
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
-            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -257,22 +327,22 @@ class CatchRoutine:
                 return True
         # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
-            m = find(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 cx, cy = m[0].center
-                self.device.tap(cx + 185, cy + 168)
+                self.device.tap(cx + self.config.s(185), cy + self.config.s(168))
                 self.stats.last_event = "popup"
                 return True
         # Level-up "CLAIM REWARDS" screen -> tap claim, then tap screen to dismiss rewards until default screen
         if self._claim_rewards is not None:
-            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=(1.0,))
+            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
                 self.stats.last_event = "popup"
                 
                 # Repeatedly tap center to dismiss items until map screen (nearby anchor) is back
-                cx, cy = 610, 1000
+                cx, cy = self.config.pt((610, 1000), "TC")
                 deadline = time.monotonic() + 15.0
                 while time.monotonic() < deadline and not self.stop_event.is_set():
                     self._interruptible_sleep(0.5)
@@ -282,7 +352,7 @@ class CatchRoutine:
                     # If close button appears in the center bottom region, tap it immediately
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
                         if btn is not None:
-                            m_close = find(f, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                            m_close = find(f, btn, threshold=0.7, scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
                             if m_close:
                                 self.device.tap(*m_close[0].center)
                                 self._interruptible_sleep(0.5)
@@ -296,10 +366,11 @@ class CatchRoutine:
         # (_ball_in guards against a false positive while an encounter is up.)
         if self._is_pokestop_screen(frame) and self._ball_in(frame) is None:
             fx, fy = self.config.pokestop_close_xy
-            region = (fx - 160, fy - 160, 320, 320)
+            r = self.config.s(160)
+            region = (fx - r, fy - r, self.config.s(320), self.config.s(320))
             for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
                 if btn is not None:
-                    m = find(frame, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=region)
+                    m = find(frame, btn, threshold=0.7, scales=self._scales, region=region)
                     if m:
                         fx, fy = m[0].center
                         break
@@ -310,7 +381,7 @@ class CatchRoutine:
         # Supports teal/green, blue, and white variations of the close button.
         for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
             if btn is not None:
-                m = find(frame, btn, threshold=0.7, scales=(0.9, 1.0, 1.1), region=(400, 2000, 420, 712))
+                m = find(frame, btn, threshold=0.7, scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
                 if m:
                     x, y = m[0].center
                     self.device.tap(x, y)
@@ -325,7 +396,7 @@ class CatchRoutine:
         the first start we only tap again when the row shows the paused icon."""
         cfg = self.config
         frame = self.device.screenshot()
-        matches = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=(0.9, 1.0, 1.1), grayscale=False)
+        matches = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=self._scales, grayscale=False)
         if not matches:
             return False
         sx, sy = matches[0].center
@@ -333,8 +404,9 @@ class CatchRoutine:
             if self._aw_paused is None:
                 return False
             # The paused icon sits on the AutoWalk row, a fixed offset below the star.
-            region = (sx - 80, sy + cfg.autowalk_offset_y - 80, 280, 160)
-            paused = find(frame, self._aw_paused, threshold=0.7, scales=(0.9, 1.0, 1.1), grayscale=False, region=region)
+            region = (sx - cfg.s(80), sy + cfg.autowalk_offset_y - cfg.s(80),
+                      cfg.s(280), cfg.s(160))
+            paused = find(frame, self._aw_paused, threshold=0.7, scales=self._scales, grayscale=False, region=region)
             if not paused:
                 return False
         self.device.tap(sx + cfg.autowalk_offset_x, sy + cfg.autowalk_offset_y)
@@ -377,12 +449,26 @@ class CatchRoutine:
         bx, by = self._jitter(*ball_xy)
         ex, ey = self._jitter(bx, by + self.config.throw_dy)
         self.device.swipe(bx, by, ex, ey, duration_ms=self.config.throw_duration_ms)
-        self.stats.throws += 1
+
+    def _ensure_calibrated(self) -> None:
+        """Measure how big the UI actually renders on this device (once), from the always-on
+        PGSharp menu star, and centre the match-scale sweep on it. This sidesteps guessing the
+        scale from resolution/density — which is unreliable because the game doesn't re-layout
+        cleanly. Until it locks, the wide bracket set in __init__ stays in effect, so detection
+        keeps working; a hidden/covered star just leaves it to retry next cycle."""
+        if self._cal_scale is not None or self._star is None:
+            return
+        s, score = best_matching_scale(self.device.screenshot(), self._star,
+                                       CALIBRATION_SWEEP, grayscale=False)
+        if s is not None and score >= 0.82:
+            self._cal_scale = s
+            self._scales = scales_around(s)
 
     def run_once(self) -> bool:
         """One catch cycle. Returns True if a ball was thrown."""
         cfg = self.config
         self.stats.cycles += 1
+        self._ensure_calibrated()
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
         if self._handle_popups():
@@ -423,6 +509,10 @@ class CatchRoutine:
         # "encounter finished, we're back on the map" signal. (Waiting merely for the ball to vanish
         # fired too early: the ball leaves its rest spot the instant it's thrown, mid-animation.)
         self._throw(ball_xy or cfg.ball_fallback)
+        # Only a throw on a confirmed encounter counts; the blind fallback swipe on an empty
+        # cycle (no camera icon) is a harmless map tap, not a real ball thrown.
+        if confirmed:
+            self.stats.throws += 1
         # Give the throw/catch animation a moment so we don't detect the pre-throw map state.
         self._interruptible_sleep(cfg.settle_after_catch)
         self._poll(self._slot_in, cfg.catch_timeout)

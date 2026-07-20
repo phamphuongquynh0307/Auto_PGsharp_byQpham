@@ -31,6 +31,7 @@ from avc.shundo import ShundoConfig, ShundoRoutine
 
 # Donate destinations shown on the Donate tab.
 DONATE_KOFI = "https://ko-fi.com/qpham7286"
+DISCORD_INVITE = "https://discord.gg/QXSfKKPpG6"
 
 LANG = {
     "title":         {"vi": "Auto Catch Pokemon PGSharp", "en": "Auto Catch Pokemon PGSharp"},
@@ -397,6 +398,7 @@ class App:
         donate_msg.pack(anchor="w", padx=14, pady=(16, 12))
         self._i18n.append((donate_msg, "donate_msg"))
         self._donate_row(self.tab_donate, "Ko-fi:", DONATE_KOFI, link=True)
+        self._donate_row(self.tab_donate, "Discord:", DISCORD_INVITE, link=True)
 
         # ---- Guide tab ---- (read-only, scrollable, retranslated on language switch)
         gframe = ttk.Frame(self.tab_guide)
@@ -908,7 +910,13 @@ class App:
             if not (self._sel_serial() or self.device):
                 raise RuntimeError(self.tr("msg_no_device"))
             self._pv_dev = dev
-            self._pv_det = ShundoRoutine(dev)
+            # Scale the annotation config to this phone so the drawn boxes line up.
+            pv_cfg = ShundoConfig()
+            try:
+                pv_cfg = pv_cfg.scale_to(*dev.screen_size(), dev.density())
+            except Exception:  # noqa: BLE001
+                pass
+            self._pv_det = ShundoRoutine(dev, pv_cfg)
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("pv_err").format(e))
             return
@@ -980,6 +988,14 @@ class App:
         self.save_settings()
         try:
             self.device = Device(serial)
+            # Fixed coordinates were tuned on BASE_RESOLUTION; rescale them to this phone's
+            # actual screen so detection lines up on other resolutions. If the size can't be
+            # read, scale_to is skipped (config stays at base) rather than aborting the run.
+            try:
+                dev_size = self.device.screen_size()
+                dev_dens = self.device.density()
+            except Exception:  # noqa: BLE001
+                dev_size = dev_dens = None
             if self.mode == "shundo":
                 cfg = ShundoConfig(
                     teleport_wait=max(2.0, float(self.tp_wait.get())),
@@ -987,6 +1003,8 @@ class App:
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
                 )
+                if dev_size is not None:
+                    cfg = cfg.scale_to(*dev_size, dev_dens)
                 self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
             else:
@@ -998,6 +1016,8 @@ class App:
                     idle_before_autowalk=int(self.idle_aw.get()),
                     max_catches=int(self.max_catches.get()),
                 )
+                if dev_size is not None:
+                    cfg = cfg.scale_to(*dev_size, dev_dens)
                 self.routine = CatchRoutine(self.device, cfg)
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))

@@ -122,13 +122,43 @@ class Device:
         if self._size is not None:
             return self._size
         out = self._run(["shell", "wm", "size"])
-        # e.g. "Physical size: 1220x2712"
-        for token in out.replace("Override size", "Physical size").split():
-            if "x" in token and token.replace("x", "").isdigit():
-                w, h = token.split("x")
-                self._size = (int(w), int(h))
-                return self._size
-        raise AdbError(f"could not parse screen size from: {out!r}")
+        # "Physical size: 1220x2712" and, when the resolution is overridden (e.g. `wm size`),
+        # an extra "Override size: 1080x1920" line. The override is what screencap returns and
+        # what taps address, so it must win — and it can appear *after* the physical line.
+        physical = override = None
+        for line in out.splitlines():
+            key, _, val = line.partition(":")
+            tok = val.strip()
+            if "x" not in tok or not tok.replace("x", "").isdigit():
+                continue
+            w, h = tok.split("x")
+            if key.strip().lower().startswith("override"):
+                override = (int(w), int(h))
+            elif key.strip().lower().startswith("physical"):
+                physical = (int(w), int(h))
+        self._size = override or physical
+        if self._size is None:
+            raise AdbError(f"could not parse screen size from: {out!r}")
+        return self._size
+
+    def density(self) -> int | None:
+        """Display density in dpi, or None if it can't be read. Like `wm size`, `wm density`
+        prints an "Override density" line when set — it wins over "Physical density"."""
+        try:
+            out = self._run(["shell", "wm", "density"])
+        except AdbError:
+            return None
+        physical = override = None
+        for line in out.splitlines():
+            key, _, val = line.partition(":")
+            tok = val.strip()
+            if not tok.isdigit():
+                continue
+            if key.strip().lower().startswith("override"):
+                override = int(tok)
+            elif key.strip().lower().startswith("physical"):
+                physical = int(tok)
+        return override or physical
 
     # -- capture --------------------------------------------------------------
     def screenshot(self, fresh: bool = False) -> np.ndarray:
