@@ -36,15 +36,14 @@ DISCORD_INVITE = "https://discord.gg/QXSfKKPpG6"
 # Manual-alignment items shown in the calibrate window.
 # (config field, kind 'point'|'region', mode 'catch'|'shundo'|'both', i18n key, colour)
 CALIB_ITEMS = [
-    ("nearby_slot",   "point",  "catch",  "cal_nearby",  "#ff3030"),
-    ("ball_fallback", "point",  "catch",  "cal_ball",    "#00c000"),
-    ("flee_xy",       "point",  "both",   "cal_flee",    "#ffcc00"),
-    ("ball_region",        "region", "catch",  "cal_camera",  "#00c000"),
-    ("pokestop_close_xy",  "point",  "catch",  "cal_stop",    "#ff33cc"),
-    ("out_of_balls_region","region", "catch",  "cal_noball",  "#ff8800"),
-    ("pill_region",        "region", "shundo", "cal_pill",    "#3399ff"),
-    ("camera_region",      "region", "shundo", "cal_scamera", "#00ccff"),
-    ("toast_region",       "region", "shundo", "cal_toast",   "#cc66ff"),
+    ("nearby_slot",         "point",  "catch",  "cal_nearby",  "#ff3030"),
+    ("ball_fallback",       "point",  "catch",  "cal_ball",    "#00c000"),
+    ("flee_xy",             "point",  "both",   "cal_flee",    "#ffcc00"),
+    ("pokestop_close_xy",   "point",  "catch",  "cal_stop",    "#ff33cc"),
+    ("camera",              "region", "both",   "cal_camera",  "#00ccff"),   # 1 khung chung cả 2 mode
+    ("out_of_balls_region", "region", "catch",  "cal_noball",  "#ff8800"),
+    ("pill_region",         "region", "shundo", "cal_pill",    "#3399ff"),
+    ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
 ]
 
 LANG = {
@@ -173,9 +172,8 @@ LANG = {
     "cal_nearby":    {"vi": "Điểm bấm Pokémon (nearby)", "en": "Pokémon tap (nearby)"},
     "cal_ball":      {"vi": "Điểm ném bóng", "en": "Ball throw point"},
     "cal_flee":      {"vi": "Nút Flee (thoát)", "en": "Flee button"},
-    "cal_camera":    {"vi": "Khung camera (Bắt)", "en": "Camera box (Catch)"},
+    "cal_camera":    {"vi": "Khung quét camera (chung)", "en": "Camera scan box (shared)"},
     "cal_pill":      {"vi": "Khung IV pill (Shundo)", "en": "IV pill box (Shundo)"},
-    "cal_scamera":   {"vi": "Khung camera (Shundo)", "en": "Camera box (Shundo)"},
     "cal_stop":      {"vi": "Nút đóng Pokéstop (X)", "en": "Pokéstop close (X)"},
     "cal_noball":    {"vi": "Khung 'hết bóng' (x0)", "en": "Out-of-balls box (x0)"},
     "cal_toast":     {"vi": "Khung toast (Shundo)", "en": "Toast box (Shundo)"},
@@ -1031,11 +1029,10 @@ class App:
             "nearby_slot":         list(c.nearby_slot),
             "ball_fallback":       list(c.ball_fallback),
             "flee_xy":             list(c.flee_xy),
-            "ball_region":         list(c.ball_region),
+            "camera":              list(c.ball_region),   # dùng chung: catch=ball_region, shundo=camera_region
             "pokestop_close_xy":   list(c.pokestop_close_xy),
             "out_of_balls_region": list(c.out_of_balls_region),
             "pill_region":         list(s.pill_region),
-            "camera_region":       list(s.camera_region),
             "toast_region":        list(s.toast_region),
         }
 
@@ -1227,8 +1224,8 @@ class App:
                 cfg.ball_fallback = P("ball_fallback")
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
-            if R("ball_region"):
-                cfg.ball_region = R("ball_region")
+            if R("camera"):
+                cfg.ball_region = R("camera")
             if P("pokestop_close_xy"):
                 cfg.pokestop_close_xy = P("pokestop_close_xy")
             if R("out_of_balls_region"):
@@ -1238,8 +1235,8 @@ class App:
                 cfg.flee_xy = P("flee_xy")
             if R("pill_region"):
                 cfg.pill_region = R("pill_region")
-            if R("camera_region"):
-                cfg.camera_region = R("camera_region")
+            if R("camera"):
+                cfg.camera_region = R("camera")
             if R("toast_region"):
                 cfg.toast_region = R("toast_region")
         return cfg
