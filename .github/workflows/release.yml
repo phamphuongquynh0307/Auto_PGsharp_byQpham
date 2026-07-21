@@ -40,3 +40,48 @@ jobs:
           "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
           --title ${{ github.ref_name }}
           --notes-file RELEASE_NOTES.md
+
+      - name: Notify Discord about the new release
+        continue-on-error: true
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
+            Write-Warning "DISCORD_WEBHOOK_URL is not configured; skipping Discord notification."
+            exit 0
+          }
+
+          $embed = @{
+            title       = "Auto Catch Pokemon PGSharp $($env:RELEASE_VERSION)"
+            description = "Bản cập nhật mới đã sẵn sàng. Tải file EXE mới và thay thế bản cũ; không cần cài đặt lại."
+            url         = $env:RELEASE_URL
+            color       = 5763719
+            fields      = @(
+              @{
+                name   = "Tải bản cập nhật"
+                value  = "[AutoCatchPokemonPGSharp-$($env:RELEASE_VERSION).exe]($($env:DOWNLOAD_URL))"
+                inline = $false
+              },
+              @{
+                name   = "Chi tiết thay đổi"
+                value  = "[Xem release notes trên GitHub]($($env:RELEASE_URL))"
+                inline = $false
+              }
+            )
+            footer      = @{ text = "Auto Catch Pokemon PGSharp" }
+            timestamp   = (Get-Date).ToUniversalTime().ToString("o")
+          }
+          $payload = @{
+            username = "Auto Catch Update"
+            embeds   = @($embed)
+          } | ConvertTo-Json -Depth 6
+
+          Invoke-RestMethod `
+            -Uri $env:DISCORD_WEBHOOK_URL `
+            -Method Post `
+            -ContentType "application/json; charset=utf-8" `
+            -Body ([Text.Encoding]::UTF8.GetBytes($payload))

@@ -6,13 +6,15 @@ straight into memory (no temp file on the phone) and decoded with OpenCV.
 from __future__ import annotations
 
 import subprocess
+import socket
+import struct
 import sys
 import time
 
 import cv2
 import numpy as np
 
-from .resources import find_adb
+from .resources import find_adb, resource_path
 
 # adb is a console program; in a windowed (no-console) build every call would otherwise flash
 # a terminal window. CREATE_NO_WINDOW suppresses that. No-op on non-Windows.
@@ -33,6 +35,9 @@ class Device:
         self.serial = serial
         self._size: tuple[int, int] | None = None
         self._stream = None  # ScreenStream when realtime capture is enabled
+        self._control_socket = None
+        self._control_process = None
+        self._control_port = None
 
     # -- realtime streaming ---------------------------------------------------
     def start_stream(self, half: bool = True, bitrate: str = "4M") -> None:
@@ -192,6 +197,122 @@ class Device:
         self._run(
             ["shell", "input", "swipe", str(int(x1)), str(int(y1)), str(int(x2)), str(int(y2)), str(int(duration_ms))]
         )
+
+    def quick_catch(self, berry_start: tuple[int, int], berry_end: tuple[int, int],
+                    ball_start: tuple[int, int], ball_end: tuple[int, int],
+                    flee_xy: tuple[int, int], throw_duration_ms: int = 240) -> None:
+        """Perform a real two-finger Pokemon GO quick-catch via scrcpy control."""
+        bsx, bsy = map(int, berry_start)
+        bex, bey = map(int, berry_end)
+        sx, sy = map(int, ball_start)
+        ex, ey = map(int, ball_end)
+        fx, fy = map(int, flee_xy)
+        self._ensure_control()
+
+        self._touch(0, 0, bsx, bsy)
+        self._touch_line(0, (bsx, bsy), (bex, bey), 140)
+        self._touch(0, 1, sx, sy)
+        self._touch_line(1, (sx, sy), (ex, ey), throw_duration_ms)
+        self._touch(1, 1, ex, ey)
+        self._touch(1, 0, bex, bey)
+        # Let Pokemon GO register the released ball before closing the drawer.
+        # Leaving sooner can cancel the throw on slower devices/Wi-Fi sessions.
+        time.sleep(1.00)
+        self._control_tap(ex, ey)
+        time.sleep(0.25)
+        self._control_tap(fx, fy)
+
+    def _ensure_control(self) -> None:
+        """Start scrcpy-server in control-only mode and connect its local socket."""
+        if self._control_socket is not None:
+            return
+        server = resource_path("tools/scrcpy-server-v4.0")
+        remote = "/data/local/tmp/avc-scrcpy-server-v4.0.jar"
+        self._run(["push", server, remote], timeout=30.0)
+        scid = (int(time.time() * 1000) ^ id(self)) & 0x7fffffff
+        abstract = f"localabstract:scrcpy_{scid:08x}"
+        port = int(self._run(["forward", "tcp:0", abstract]).strip())
+        command = (
+            f"CLASSPATH={remote} app_process / com.genymobile.scrcpy.Server 4.0 "
+            f"scid={scid:08x} log_level=warn video=false audio=false control=true "
+            "tunnel_forward=true cleanup=false"
+        )
+        proc = subprocess.Popen(
+            self._base_cmd() + ["shell", command], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, creationflags=_NO_WINDOW,
+        )
+        deadline = time.monotonic() + 8.0
+        while True:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            try:
+                sock.connect(("127.0.0.1", port))
+                # scrcpy handshake: dummy byte proving the device socket is live,
+                # followed by the fixed 64-byte device-name field.
+                handshake = b""
+                while len(handshake) < 65:
+                    chunk = sock.recv(65 - len(handshake))
+                    if not chunk:
+                        raise ConnectionError("scrcpy control socket closed during handshake")
+                    handshake += chunk
+                if handshake[0] != 0:
+                    raise ConnectionError("invalid scrcpy handshake")
+                break
+            except OSError:
+                sock.close()
+                if time.monotonic() >= deadline or proc.poll() is not None:
+                    proc.terminate()
+                    self._run(["forward", "--remove", f"tcp:{port}"])
+                    raise AdbError("could not start scrcpy multi-touch control")
+                time.sleep(0.1)
+        sock.settimeout(5.0)
+        self._control_socket = sock
+        self._control_process = proc
+        self._control_port = port
+
+    def _touch(self, action: int, pointer_id: int, x: int, y: int) -> None:
+        w, h = self.screen_size()
+        pressure = 0 if action == 1 else 0xffff
+        msg = struct.pack(">BBQiiHHHII", 2, action, pointer_id, int(x), int(y),
+                          w, h, pressure, 0, 0)
+        self._control_socket.sendall(msg)
+
+    def _touch_line(self, pointer_id: int, start: tuple[int, int],
+                    end: tuple[int, int], duration_ms: int) -> None:
+        steps = max(3, min(12, int(duration_ms) // 25))
+        delay = max(0.005, duration_ms / steps / 1000.0)
+        x1, y1 = start
+        x2, y2 = end
+        for i in range(1, steps + 1):
+            x = round(x1 + (x2 - x1) * i / steps)
+            y = round(y1 + (y2 - y1) * i / steps)
+            self._touch(2, pointer_id, x, y)
+            time.sleep(delay)
+
+    def _control_tap(self, x: int, y: int) -> None:
+        self._touch(0, 0, x, y)
+        time.sleep(0.04)
+        self._touch(1, 0, x, y)
+
+    def close_control(self) -> None:
+        if self._control_socket is not None:
+            try:
+                self._control_socket.close()
+            except OSError:
+                pass
+            self._control_socket = None
+        if self._control_process is not None:
+            try:
+                self._control_process.terminate()
+            except OSError:
+                pass
+            self._control_process = None
+        if self._control_port is not None:
+            try:
+                self._run(["forward", "--remove", f"tcp:{self._control_port}"])
+            except Exception:
+                pass
+            self._control_port = None
 
     def key(self, keycode: str) -> None:
         self._run(["shell", "input", "keyevent", keycode])

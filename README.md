@@ -1,92 +1,105 @@
-# Auto Catch Pokemon (PGSharp)
+# Auto Catch Pokemon for PGSharp
 
-Công cụ tự động bắt Pokemon dùng với PGSharp, điều khiển thiết bị Android qua ADB từ máy tính.
+**English** | [Tiếng Việt](README.vi.md)
 
-> **Dự án cá nhân.** Repo này public để tham khảo, **không** nhận đóng góp code.
+A Windows automation tool for catching Pokemon in Pokemon GO with PGSharp. It connects to an Android device through ADB and supports both regular and quick catch workflows.
 
-## Tính năng
+> **Personal project.** This repository is public for reference only and does not accept external code contributions.
 
-- **Bắt Pokémon tự động** – tự bắt các Pokémon ở thanh bên phải màn hình.
-- **Săn Shundo** – chỉ dừng khi gặp shiny / 100% IV theo cấu hình.
-- **Tự né popup** – cảnh báo thời tiết, tốc độ, level-up… và tự đóng màn Pokéstop.
-- **Hết bóng tự xử lý** – thoát encounter, tạm nghỉ, vẫn AutoWalk đi kiếm bóng rồi bắt lại.
-- **Cảnh báo Discord** – trống spawn lâu, báo cáo định kỳ, pin yếu, hết bóng, gặp shiny…
-- **Tự thích nghi màn hình** – đo và căn tọa độ theo từng máy (không cần chỉnh tay).
+## Features
 
-## Yêu cầu
+- **Automatic catching** — catches Pokemon shown in PGSharp's nearby feed.
+- **Quick Catch without a PGSharp key** — uses Android touch control to throw the ball and exit the encounter quickly.
+- **Editable throws** — adjust throw power and flick duration for different phones.
+- **Manual calibration** — fine-tune touch coordinates when automatic scaling is not accurate enough.
+- **Shundo hunting** — stop only for shiny or 100% IV Pokemon, depending on your settings.
+- **Popup handling** — closes weather, speed, level-up, and PokeStop screens automatically.
+- **Out-of-ball recovery** — pauses catching while AutoWalk continues searching for more items, then resumes automatically.
+- **Discord alerts** — notifications for long spawn gaps, periodic reports, low battery, no balls, shiny encounters, and more.
+- **Screen adaptation** — scales coordinates to match different Android screen sizes.
 
-- Máy tính **Windows**.
-- Điện thoại **Android** đã cài **Pokémon GO (PGSharp)**.
-- Điện thoại và máy tính **chung một mạng Wi-Fi**.
+## Requirements
 
-## Hướng dẫn sử dụng
+- A **Windows** PC.
+- An **Android** phone with **Pokemon GO (PGSharp)** installed.
+- The phone and PC connected to the **same Wi-Fi network**.
 
-### 1. Chuẩn bị điện thoại
+## Getting Started
 
-1. Bật **Tùy chọn nhà phát triển** (thường: *Cài đặt → Giới thiệu →* bấm **Số hiệu bản dựng** 7 lần).
-2. Trong đó, bật **Gỡ lỗi USB (USB debugging)**.
-3. Mở **Pokémon GO (PGSharp)** và vào tới màn hình bản đồ.
+### 1. Prepare the phone
 
-### 2. Kết nối
+1. Enable **Developer options** (usually: *Settings → About phone → tap Build number seven times*).
+2. Enable **USB debugging** in Developer options.
+3. Open **Pokemon GO (PGSharp)** and stay on the map screen.
 
-**Lần đầu tiên:**
+### 2. Connect
 
-1. Cắm **cáp USB** từ điện thoại vào máy tính.
-2. Mở app, bấm **Kết nối**.
-3. App tự chuyển sang kết nối **Wi-Fi** và ghi nhớ máy.
-4. Khi app báo *"có thể rút cáp USB"* → rút cáp ra.
+**First connection:**
 
-**Những lần sau** (không cần cáp):
+1. Connect the phone to the PC with a USB cable.
+2. Open the app and click **Connect**.
+3. The app switches the device to Wi-Fi debugging and remembers it.
+4. Unplug the cable when the app confirms that it is safe to do so.
 
-1. Mở app.
-2. Chọn điện thoại trong danh sách, hoặc bấm **Kết nối**.
-3. App tự nối lại qua Wi-Fi.
+**Later connections:**
 
-### 3. Chọn chế độ
+1. Open the app.
+2. Select the saved phone or click **Connect**.
+3. The app reconnects over Wi-Fi automatically.
 
-- **Bắt Pokémon** – tự động bắt các Pokémon hiện ở thanh bên phải.
-- **Shundo** – chỉ săn shiny / 100% IV theo cấu hình bạn đặt.
+### 3. Choose a mode
 
-### 4. Chạy
+- **Catch Pokemon** — catches Pokemon from the nearby feed automatically.
+- **Shundo** — hunts only shiny or 100% IV Pokemon according to your configuration.
 
-- Bấm **Chạy** để bắt đầu, **Tạm dừng** để nghỉ, **Dừng** để kết thúc.
-- Theo dõi hoạt động ở khung **Nhật ký** phía dưới.
+Choose a catch style as well:
 
-### 5. Cài đặt (tab *Cài đặt*)
+- **Regular Catch** — waits for the normal catch sequence.
+- **Quick Catch (No Key)** — performs a quick-catch gesture without requiring a paid PGSharp key.
 
-- **Webhook Discord** – dán *Webhook URL* của một kênh Discord để nhận cảnh báo.
-- **Lực ném** – tăng/giảm nếu bóng ném lệch (quá mạnh sẽ bay qua Pokémon).
-- **Khoảng cách @ → ô đầu** – chỉnh nếu bấm không trúng ô Pokémon đầu tiên.
+### 4. Run
 
-## Khi hết Poké Ball
+Click **Run** to start, **Pause** to pause, or **Stop** to finish. Activity is shown in the log panel.
 
-Khi hết bóng, app tự thoát màn bắt, gửi cảnh báo Discord, **tạm ngừng bắt 10 phút** nhưng vẫn tự di chuyển (**AutoWalk**) để đi kiếm bóng, rồi tự bắt lại.
+### 5. Settings
 
-## Xử lý sự cố
+- **Discord webhook** — paste a Discord channel webhook URL to receive alerts.
+- **Throw power** — increase or decrease the distance of the ball throw.
+- **Quick Catch flick** — adjust how long the quick-catch finger gesture lasts.
+- **Manual calibration** — use the coordinate controls if touches do not land correctly on your phone.
+- **@ to first slot distance** — adjust the offset to the first Pokemon entry when needed.
 
-| Vấn đề | Cách xử lý |
-|--------|------------|
-| Không thấy điện thoại | Kiểm tra đã bật **Gỡ lỗi USB** chưa, và hai máy có **chung Wi-Fi** không. |
-| Mất kết nối giữa chừng | Bấm **Làm mới** hoặc chọn lại máy trong danh sách. |
-| Bấm lệch tọa độ | Bản mới tự căn theo màn hình; nếu vẫn lệch, **tắt/mở lại app** để đo lại. |
-| Máy nóng khi chạy lâu | Cắm sạc; app có thể tự làm tối màn hình cho đỡ nóng (game vẫn chạy nền). |
+## When You Run Out of Poke Balls
 
-## Mẹo
+The app exits the encounter, sends a Discord notification, pauses catching for 10 minutes, and keeps AutoWalk active to collect more items. Catching then resumes automatically.
 
-- Nên **cắm sạc** khi chạy trong thời gian dài.
-- Giữ Pokémon GO ở **màn hình bản đồ** trước khi bấm **Chạy**.
+## Troubleshooting
 
-## Cộng đồng & Ủng hộ
+| Problem | Solution |
+|---|---|
+| Phone is not detected | Confirm that **USB debugging** is enabled and both devices are on the **same Wi-Fi network**. |
+| Connection drops | Click **Refresh** or select the phone again. |
+| Touch coordinates are inaccurate | Open manual calibration and adjust the relevant points for your screen. |
+| Ball throw is too weak or too strong | Adjust **Throw power** and test again. |
+| Phone gets warm | Lower screen brightness, avoid charging when unnecessary, and enable the screen-dimming option for long sessions. |
+
+## Tips
+
+- Keep Pokemon GO on the **map screen** before clicking **Run**.
+- Test one catch after changing throw or calibration settings.
+- Long automation sessions can warm the phone; use moderate brightness and good ventilation.
+
+## Community & Support
 
 - Discord: <https://discord.gg/QXSfKKPpG6>
 - Ko-fi: <https://ko-fi.com/qpham7286>
 
-## Bản quyền
+## License
 
 Copyright © 2026 Qpham. **All Rights Reserved.**
 
-- ✅ Bạn được **xem** mã nguồn và **fork** repo (theo điều khoản GitHub).
-- ❌ **Không** được sử dụng, sao chép, chỉnh sửa, phát hành lại, hay dùng cho mục đích thương mại nếu chưa có sự đồng ý bằng văn bản của tác giả.
-- Pull Request từ bên ngoài **sẽ không được merge**.
+- You may **view** the source code and **fork** the repository under GitHub's terms.
+- You may not use, copy, modify, redistribute, or commercially exploit the code without the author's written permission.
+- External pull requests will not be merged.
 
-Chi tiết xem file [LICENSE](LICENSE). Muốn xin phép: mở một issue trên GitHub.
+See [LICENSE](LICENSE) for details. To request permission, open an issue on GitHub.

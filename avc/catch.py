@@ -94,6 +94,13 @@ class CatchConfig:
     throw_dy: int = -550           # how far up to flick (negative = upward); gentle by default
     throw_duration_ms: int = 240
 
+    # Native Pokemon GO quick catch (no PGSharp key required): keep the Berry drawer
+    # dragged open while throwing, then leave the encounter to skip the animation.
+    quick_catch: bool = False
+    quick_flick_ms: int = 100
+    berry_start: tuple[int, int] = (145, 2410)
+    berry_end: tuple[int, int] = (390, 2410)
+
     # Human-ish jitter so the throw isn't pixel-identical every time.
     jitter_px: int = 8
 
@@ -177,6 +184,8 @@ class CatchConfig:
             anchor_region=L.region(self.anchor_region, "TR"),   # nearby bar hugs right edge
             nearby_slot=L.point(self.nearby_slot, "TR"),
             ball_fallback=L.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
+            berry_start=L.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
+            berry_end=L.point(self.berry_end, "BL"),
             ball_region=L.region(self.ball_region, "TC"),       # encounter camera, top-centre
             out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
             flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
@@ -451,6 +460,15 @@ class CatchRoutine:
         ex, ey = self._jitter(bx, by + self.config.throw_dy)
         self.device.swipe(bx, by, ex, ey, duration_ms=self.config.throw_duration_ms)
 
+    def _quick_throw(self, ball_xy: tuple[int, int]) -> None:
+        bx, by = self._jitter(*ball_xy)
+        ex, ey = self._jitter(bx, by + self.config.throw_dy)
+        self.device.quick_catch(
+            self.config.berry_start, self.config.berry_end,
+            (bx, by), (ex, ey), self.config.flee_xy,
+            self.config.quick_flick_ms,
+        )
+
     def _ensure_calibrated(self) -> None:
         """Measure how big the UI actually renders on this device (once), from the always-on
         PGSharp menu star, and centre the match-scale sweep on it. This sidesteps guessing the
@@ -516,7 +534,18 @@ class CatchRoutine:
         # That "back on the map" signal is reliable and fast — far quicker than polling the flaky
         # '@' anchor, which could stall a whole catch_timeout between catches.
         self.stats.throws += 1
-        self._throw(ball_xy)
+        if cfg.quick_catch:
+            self._quick_throw(ball_xy)
+            # Flee may be ignored while the throw is still being committed. Confirm that the
+            # camera icon is gone; if not, retry Flee rather than starting the next encounter
+            # on top of the current one.
+            for _ in range(3):
+                self._interruptible_sleep(0.55)
+                if self._ball_in(self.device.screenshot()) is None:
+                    break
+                self.device.tap(*cfg.flee_xy)
+        else:
+            self._throw(ball_xy)
         self._interruptible_sleep(cfg.settle_after_catch)
         self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
         return True

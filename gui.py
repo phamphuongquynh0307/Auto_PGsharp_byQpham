@@ -38,6 +38,8 @@ DISCORD_INVITE = "https://discord.gg/QXSfKKPpG6"
 CALIB_ITEMS = [
     ("nearby_slot",         "point",  "catch",  "cal_nearby",  "#ff3030"),
     ("ball_fallback",       "point",  "catch",  "cal_ball",    "#00c000"),
+    ("berry_start",         "point",  "catch",  "cal_berry_start", "#7c4dff"),
+    ("berry_end",           "point",  "catch",  "cal_berry_end",   "#00b894"),
     ("flee_xy",             "point",  "both",   "cal_flee",    "#ffcc00"),
     ("pokestop_close_xy",   "point",  "catch",  "cal_stop",    "#ff33cc"),
     ("camera",              "region", "both",   "cal_camera",  "#00ccff"),   # 1 khung chung cả 2 mode
@@ -147,6 +149,10 @@ LANG = {
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "slot_offset":   {"vi": "Khoảng cách @ → ô đầu (px):", "en": "Distance @ → first slot (px):"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
+    "catch_style":   {"vi": "Kiểu bắt:", "en": "Catch style:"},
+    "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
+    "catch_quick":   {"vi": "Auto bắt nhanh (không cần PGSharp key)", "en": "Quick auto catch (no PGSharp key)"},
+    "quick_flick":   {"vi": "Flick Quick Catch (ms, thấp = nhanh):", "en": "Quick Catch flick (ms, lower = faster):"},
     "wait_enc":      {"vi": "Chờ mở màn bắt tối đa (giây):", "en": "Max wait for encounter (s):"},
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
@@ -172,6 +178,8 @@ LANG = {
                       "en": "⚠ Manual alignment was for a different resolution — ignored. Please re-align."},
     "cal_nearby":    {"vi": "Điểm bấm Pokémon (nearby)", "en": "Pokémon tap (nearby)"},
     "cal_ball":      {"vi": "Điểm ném bóng", "en": "Ball throw point"},
+    "cal_berry_start": {"vi": "Quick Catch: nút Berry", "en": "Quick Catch: Berry button"},
+    "cal_berry_end": {"vi": "Quick Catch: kéo Berry tới", "en": "Quick Catch: Berry drag target"},
     "cal_flee":      {"vi": "Nút Flee (thoát)", "en": "Flee button"},
     "cal_camera":    {"vi": "Khung quét camera (chung)", "en": "Camera scan box (shared)"},
     "cal_pill":      {"vi": "Khung IV pill (Shundo)", "en": "IV pill box (Shundo)"},
@@ -391,15 +399,23 @@ class App:
         catch_grp.pack(fill="x", **pad)
         self._i18n.append((catch_grp, "grp_catch"))
         self.slot_offset = self._spin(catch_grp, "slot_offset", 0, 100, 1500, 770)
-        self.throw_power = self._spin(catch_grp, "throw_power", 1, 200, 1400, 550)
-        self.wait_enc = self._spin(catch_grp, "wait_enc", 2, 2, 15, 3.0, is_float=True)
-        self.wait_catch = self._spin(catch_grp, "wait_catch", 3, 2, 20, 6.0, is_float=True)
-        self.idle_aw = self._spin(catch_grp, "idle_aw", 4, 0, 20, 3)
-        self.max_catches = self._spin(catch_grp, "max_catches", 5, 0, 9999, 0)
-        self.settle = self._spin(catch_grp, "settle", 6, 0, 15, 1.2, is_float=True)
+        self.throw_power = self._spin(catch_grp, "throw_power", 1, 100, 1400, 700)
+        self._label(catch_grp, "catch_style", row=2, column=0, sticky="w", padx=6, pady=2)
+        self.catch_style = "normal"
+        self.catch_style_var = tk.StringVar()
+        self.catch_style_combo = ttk.Combobox(catch_grp, textvariable=self.catch_style_var,
+                                               state="readonly", width=30)
+        self.catch_style_combo.grid(row=2, column=1, sticky="e", padx=6, pady=2)
+        self.catch_style_combo.bind("<<ComboboxSelected>>", self._on_catch_style_change)
+        self.quick_flick = self._spin(catch_grp, "quick_flick", 3, 50, 500, 100)
+        self.wait_enc = self._spin(catch_grp, "wait_enc", 4, 2, 15, 3.0, is_float=True)
+        self.wait_catch = self._spin(catch_grp, "wait_catch", 5, 2, 20, 6.0, is_float=True)
+        self.idle_aw = self._spin(catch_grp, "idle_aw", 6, 0, 20, 3)
+        self.max_catches = self._spin(catch_grp, "max_catches", 7, 0, 9999, 0)
+        self.settle = self._spin(catch_grp, "settle", 8, 0, 15, 1.2, is_float=True)
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=7, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        dim_chk.grid(row=9, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
         sh_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_shundo"))
@@ -505,6 +521,7 @@ class App:
 
     # -- mode / shundo action selectors ----------------------------------------
     MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"))
+    CATCH_STYLES = (("normal", "catch_normal"), ("quick", "catch_quick"))
     ACTIONS = (("pause", "act_pause"), ("stop", "act_stop"))
     SHINY_ACTIONS = (("skip", "act_skip"), ("pause", "act_pause"))
 
@@ -520,6 +537,11 @@ class App:
 
     def _on_mode_change(self, _event=None) -> None:
         self.mode = self._code_from_choice(self.mode_var, self.MODES, self.mode)
+        self.save_settings()
+
+    def _on_catch_style_change(self, _event=None) -> None:
+        self.catch_style = self._code_from_choice(
+            self.catch_style_var, self.CATCH_STYLES, self.catch_style)
         self.save_settings()
 
     def _on_action_change(self, _event=None) -> None:
@@ -553,6 +575,8 @@ class App:
         self.status_var.set(self.tr(self._status_key))
         self.count_var.set(self.tr("thrown").format(self._last_throws))
         self._refresh_choice(self.mode_combo, self.mode_var, self.MODES, self.mode)
+        self._refresh_choice(self.catch_style_combo, self.catch_style_var,
+                             self.CATCH_STYLES, self.catch_style)
         self._refresh_choice(self.action_combo, self.action_var, self.ACTIONS, self.shundo_action)
         self._refresh_choice(self.shiny_action_combo, self.shiny_action_var, self.SHINY_ACTIONS, self.shiny_action)
 
@@ -573,6 +597,7 @@ class App:
             return
         self.slot_offset.set(data.get("slot_offset", int(self.slot_offset.get())))
         self.throw_power.set(data.get("throw_power", int(self.throw_power.get())))
+        self.quick_flick.set(data.get("quick_flick", int(self.quick_flick.get())))
         # Encounters take ~2-3s to open; a stored wait below that makes the routine give up
         # mid-load and re-tap from scratch every cycle, so clamp old too-low values.
         self.wait_enc.set(max(2.0, float(data.get("wait_enc", self.wait_enc.get()))))
@@ -583,6 +608,8 @@ class App:
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
+        if data.get("catch_style") in ("normal", "quick"):
+            self.catch_style = data["catch_style"]
         self.tp_wait.set(max(2.0, float(data.get("tp_wait", self.tp_wait.get()))))
         self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
         if data.get("shundo_action") in ("pause", "stop"):
@@ -601,6 +628,7 @@ class App:
         data = {
             "slot_offset": int(self.slot_offset.get()),
             "throw_power": int(self.throw_power.get()),
+            "quick_flick": int(self.quick_flick.get()),
             "wait_enc": float(self.wait_enc.get()),
             "wait_catch": float(self.wait_catch.get()),
             "idle_aw": int(self.idle_aw.get()),
@@ -608,6 +636,7 @@ class App:
             "settle": float(self.settle.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
+            "catch_style": self.catch_style,
             "tp_wait": float(self.tp_wait.get()),
             "s_enc_wait": float(self.s_enc_wait.get()),
             "shundo_action": self.shundo_action,
@@ -643,6 +672,10 @@ class App:
                 pass
             try:
                 self.device.stop_stream()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.device.close_control()
             except Exception:  # noqa: BLE001
                 pass
             # Frozen one-file build: the adb daemon's image lives in PyInstaller's _MEI temp dir;
@@ -1032,6 +1065,8 @@ class App:
         return {
             "nearby_slot":         list(c.nearby_slot),
             "ball_fallback":       list(c.ball_fallback),
+            "berry_start":         list(c.berry_start),
+            "berry_end":           list(c.berry_end),
             "flee_xy":             list(c.flee_xy),
             "camera":              list(c.ball_region),   # dùng chung: catch=ball_region, shundo=camera_region
             "pokestop_close_xy":   list(c.pokestop_close_xy),
@@ -1101,6 +1136,12 @@ class App:
     def _cal_redraw(self) -> None:
         c = self._cal_canvas; sf = self._cal_sf
         c.delete("ov")
+        # Show the Quick Catch drag direction underneath its two draggable handles.
+        if "berry_start" in self._cal and "berry_end" in self._cal:
+            x1, y1 = (n * sf for n in self._cal["berry_start"])
+            x2, y2 = (n * sf for n in self._cal["berry_end"])
+            c.create_line(x1, y1, x2, y2, fill="#7c4dff", width=4,
+                          arrow="last", dash=(7, 4), tags="ov")
         for field, kind, mode, key, color in CALIB_ITEMS:
             v = self._cal[field]
             if kind == "point":
@@ -1226,6 +1267,10 @@ class App:
                 cfg.force_slot = True
             if P("ball_fallback"):
                 cfg.ball_fallback = P("ball_fallback")
+            if P("berry_start"):
+                cfg.berry_start = P("berry_start")
+            if P("berry_end"):
+                cfg.berry_end = P("berry_end")
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
             if R("camera"):
@@ -1277,14 +1322,17 @@ class App:
                 self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
             else:
+                throw_power = abs(int(self.throw_power.get()))
                 cfg = CatchConfig(
                     slot_offset_y=int(self.slot_offset.get()),
-                    throw_dy=-abs(int(self.throw_power.get())),
+                    throw_dy=-throw_power,
                     encounter_timeout=max(2.0, float(self.wait_enc.get())),
                     catch_timeout=max(2.0, float(self.wait_catch.get())),
                     idle_before_autowalk=int(self.idle_aw.get()),
                     max_catches=int(self.max_catches.get()),
                     settle_after_catch=max(0.0, float(self.settle.get())),
+                    quick_catch=self.catch_style == "quick",
+                    quick_flick_ms=max(50, int(self.quick_flick.get())),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
@@ -1373,6 +1421,7 @@ class App:
             self._send_discord(self.tr("dc_stopped").format(e), shot=True)
         finally:
             self.device.stop_stream()
+            self.device.close_control()
             if dim:
                 self.device.restore_dim()
 

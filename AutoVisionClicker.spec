@@ -12,6 +12,8 @@ a = Analysis(
         ('adb/AdbWinApi.dll', 'adb'),
         ('adb/AdbWinUsbApi.dll', 'adb'),
         ('adb/libwinpthread-1.dll', 'adb'),
+        ('tools/scrcpy-server-v4.0', 'tools'),
+        ('tools/scrcpy-LICENSE.txt', 'tools'),
     ],
     hiddenimports=[],
     hookspath=[],
