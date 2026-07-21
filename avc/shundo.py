@@ -75,16 +75,18 @@ class ShundoConfig:
     spawn_wait_log: float = 20.0    # log a "still waiting" heartbeat this often (s)
 
     # The encounter is requested by ONE double-tap of the bar's first slot (same gesture
-    # as the catch routine). The reliable "shiny" signal is the encounter's camera icon,
-    # which appears and stays; we wait up to encounter_open_wait for it and never re-tap
-    # (a second double-tap would land on the opening encounter screen). No camera in that
+    # as the catch routine). PGSharp only opens the encounter for a shiny, so "encounter
+    # opened" IS the shiny signal; we wait up to encounter_open_wait for it and never re-tap
+    # (a second double-tap would land on the opening encounter screen). No encounter in that
     # window ⇒ the Pokémon is non-shiny and we move on.
     encounter_open_wait: float = 3.0
 
-    # Encounter confirmation: the camera icon at the top of the encounter screen.
-    camera_template: str = "templates/camera.png"
-    camera_threshold: float = 0.7
-    camera_region: tuple[int, int, int, int] = (430, 40, 360, 300)
+    # Encounter confirmation: the bottom-right ball-selector button — an opaque red Poké Ball
+    # shown once the encounter is open, for any loaded ball type. Colour match, so it reads the
+    # same on any background (unlike the old semi-transparent camera icon). Same box as the
+    # catch routine's; see CatchConfig.enc_ball_region.
+    enc_ball_region: tuple[int, int, int, int] = (1030, 2408, 70, 40)
+    enc_ball_red_frac: float = 0.5
 
     # PGSharp info pill glyphs for the 15/15/15 check.
     glyph_1_template: str = "templates/glyph_1.png"
@@ -99,7 +101,7 @@ class ShundoConfig:
     # centre, up for ~1s. The text frame is too fleeting to rely on (we usually catch the
     # blank-pill frame), so detection keys on the PILL SHAPE — a wide, solid, light,
     # horizontally-centred blob. The encounter screen's big white ball also lands in this
-    # region, so the caller must confirm we're NOT in/opening an encounter first (camera
+    # region, so the caller must confirm we're NOT in/opening an encounter first (ball-selector
     # absent AND the '@' bar still visible) before trusting a toast here.
     toast_region: tuple[int, int, int, int] = (150, 2260, 920, 300)   # x, y, w, h
     toast_pill_w: tuple[int, int] = (380, 860)
@@ -165,7 +167,7 @@ class ShundoConfig:
             screen=(width, height),
             density=density,
             # anchored regions/positions
-            camera_region=L.region(self.camera_region, "TC"),   # encounter camera, top-centre
+            enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
             toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
             flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
@@ -215,7 +217,6 @@ class ShundoRoutine:
         self._rss = load(self.config.feed_rss_template)
         self._handle = load(self.config.bar_handle_template)
         self._anchor = load(self.config.anchor_template)
-        self._camera = load(self.config.camera_template)
         self._g1 = load(self.config.glyph_1_template)
         self._g5 = load(self.config.glyph_5_template)
         self._gs = load(self.config.glyph_slash_template)
@@ -303,9 +304,18 @@ class ShundoRoutine:
                 return (rx, hy + cfg.feed_slot_dy)
         return None
 
-    def _camera_in(self, frame) -> bool:
-        return bool(find(frame, self._camera, threshold=self.config.camera_threshold,
-                         scales=self._scales, region=self.config.camera_region))
+    def _enc_ball_visible(self, frame) -> bool:
+        """True when the bottom-right ball-selector's red dome fills its fixed strip — i.e. the
+        encounter is open. Opaque colour, so it reads the same on any Pokémon's background.
+        (Same signal as CatchRoutine._enc_ball_visible.)"""
+        x, y, w, h = self.config.enc_ball_region
+        patch = frame[y:y + h, x:x + w]
+        if patch.size == 0:
+            return False
+        p = patch.astype(int)
+        b, g, r = p[..., 0], p[..., 1], p[..., 2]
+        red = (r > 110) & (r - g > 40) & (r - b > 40)
+        return float(red.mean()) >= self.config.enc_ball_red_frac
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -357,7 +367,7 @@ class ShundoRoutine:
         # A stray Pokéstop screen is closed by its templated X as well; no blind fixed-spot
         # tap here: the catch routine's "two blue side patches" heuristic false-positives on
         # water-heavy maps and would press the map's pokeball menu instead.
-        if not self._camera_in(frame):
+        if not self._enc_ball_visible(frame):
             for btn in self._close_btns:
                 m = find(frame, btn, threshold=self.config.popup_threshold,
                          scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
@@ -435,7 +445,7 @@ class ShundoRoutine:
         # while it's up, so this must be checked before looking for the feed). Grade it
         # now instead of idling forever.
         frame = self.device.screenshot()
-        if self._camera_in(frame):
+        if self._enc_ball_visible(frame):
             self.stats.checked += 1
             return self._grade_encounter()
 
@@ -497,18 +507,18 @@ class ShundoRoutine:
         if not loaded:
             self.stats.last_event = "nospawn"
             return "nospawn"
-        # Step 3: double-tap the bar's first slot ONCE, then watch for the camera icon —
-        # the decisive shiny signal (it appears and stays). Camera up ⇒ shiny. No camera
-        # within the window ⇒ non-shiny; move on. Never a second double-tap: it would land
-        # on the opening encounter screen (the stray taps the user was seeing).
+        # Step 3: double-tap the bar's first slot ONCE, then watch for the encounter to open
+        # (its ball-selector button) — the decisive shiny signal. Ball up ⇒ shiny. None within
+        # the window ⇒ non-shiny; move on. Never a second double-tap: it would land on the
+        # opening encounter screen (the stray taps the user was seeing).
         frame = self.device.screenshot()
-        if self._camera_in(frame):
+        if self._enc_ball_visible(frame):
             answer = "shiny"
         else:
             anchor = self._anchor_in(frame)
             if anchor is not None:
                 self.device.double_tap(anchor[0], anchor[1] - cfg.slot_offset_y)
-            answer = "shiny" if self._poll(self._camera_in, cfg.encounter_open_wait) else "blocked"
+            answer = "shiny" if self._poll(self._enc_ball_visible, cfg.encounter_open_wait) else "blocked"
         self.stats.checked += 1
 
         if answer == "blocked":
@@ -603,7 +613,7 @@ class ShundoRoutine:
         tx, ty, tw, th = cfg.toast_region
         cv2.rectangle(img, (tx, ty), (tx + tw, ty + th), (255, 255, 255), 3)
 
-        if self._camera_in(frame):
+        if self._enc_ball_visible(frame):
             cv2.putText(img, "ENCOUNTER (SHINY)", (60, 150),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 255), 4)
         return img

@@ -3,9 +3,10 @@
 __pycache__/
 *.pyc
 
-# PyInstaller build output (regenerable, and the exe is ~72MB)
+# PyInstaller build output (regenerable, and the exe is ~100MB)
 build/
 dist/
+dist-new/
 *.spec.bak
 
 # Runtime / scratch

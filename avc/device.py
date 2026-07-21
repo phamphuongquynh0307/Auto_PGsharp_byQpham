@@ -220,6 +220,11 @@ class Device:
         time.sleep(1.00)
         self._control_tap(ex, ey)
         time.sleep(0.25)
+        # Flee TWICE: a single tap often lands a hair too early (the throw is still committing)
+        # and is ignored, so the catch resolves into the XP/summary screen and we get stuck. The
+        # second tap catches the brief window once the Flee button is live and leaves cleanly.
+        self._control_tap(fx, fy)
+        time.sleep(0.15)
         self._control_tap(fx, fy)
 
     def _ensure_control(self) -> None:

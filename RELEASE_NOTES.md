@@ -1,50 +1,40 @@
-# v1.1.0
+# v1.1.1
 
 ## Tiếng Việt
 
-### Nổi bật: Quick Catch không cần PGSharp key
+### Nổi bật: Nhận encounter đáng tin cho mọi loại bóng
 
-- Thêm kiểu bắt **Auto bắt nhanh (không cần PGSharp key)**.
-- Mô phỏng thao tác Quick Catch hai ngón thật: giữ và kéo khay Berry, ném bóng, sau đó thoát encounter để bỏ qua hoạt ảnh bắt.
-- Hoạt động với PGSharp Free; không cần kích hoạt tính năng Quick Catch trả phí.
-- Không cần root điện thoại và không cần cài thêm ứng dụng trên máy Android.
-- Bộ điều khiển multi-touch được đóng gói sẵn trong file EXE và tự khởi động khi cần.
+- Bot xác nhận đang trong màn bắt bằng **nút chọn bóng màu đỏ ở góc dưới bên phải** — nút này luôn là Poké Ball đỏ dù bạn đang nạp Poké Ball, Great Ball hay Ultra Ball.
+- Thay cho cách cũ dựa vào icon camera (viền trắng trong suốt), vốn mất tương phản trên nền trời sáng nên nhiều lúc **không nhận ra encounter và không ném bóng**.
+- Là màu đặc nên nhận diện ổn định trên nền của bất kỳ Pokémon nào.
 
-### Tùy chỉnh cú ném
+### Ném xong tự thoát mượt
 
-- Có thể chỉnh **Lực ném** từ 100–1400 px.
-- Có thể chỉnh **Flick Quick Catch** từ 50–500 ms; giá trị càng thấp thì cú vuốt càng nhanh.
-- Giá trị mặc định đã được thử nghiệm: lực 700 px và flick 100 ms.
-- App lưu lại đúng thông số người dùng nhập và không khóa cứng lực ném.
+- Sau khi ném, bot **bấm Flee 2 lần** để chắc chắn thoát kịp trước khi cú bắt hoàn tất — tránh bị kẹt lại ở màn tổng kết.
+- Nếu lỡ vẫn hiện màn **"POKÉMON CAUGHT" (tổng kết XP)**, bot tự bấm nút **OK**.
+- Nếu lỡ nhảy vào **trang thông tin Pokémon**, bot tự bấm nút **tick (✓) xanh** để quay lại.
+- Các nút này được nhắm chính xác, **không bấm nhầm POWER UP / EVOLVE** (tránh tốn Bụi Sao/Kẹo).
 
-### Căn chỉnh tay cho Quick Catch
+### Tự tắt popup Thử thách tuần
 
-- Thêm điểm **Quick Catch: nút Berry**.
-- Thêm điểm **Quick Catch: kéo Berry tới**.
-- Hiển thị mũi tên hướng kéo ngay trên ảnh chụp màn hình điện thoại.
-- Các tọa độ được lưu theo độ phân giải thiết bị và dùng thay cho vị trí tự động khi chạy.
+- Khi hiện hộp **"WEEKLY CHALLENGE"**, bot tự bấm **MAYBE LATER** để đóng.
+- Nhắm đúng dòng chữ, **không bấm nút CHOOSE GROUP** màu xanh.
 
-### Ổn định và sửa lỗi
+### Chế độ Shundo cũng dùng chung cách nhận encounter
 
-- Chờ game ghi nhận bóng đã rời tay trước khi bấm Flee, tránh hủy cú ném vì thoát quá sớm.
-- Tự kiểm tra đã về bản đồ; nếu Flee chưa được nhận, bot sẽ thử lại thay vì chồng encounter mới lên encounter cũ.
-- Sửa quá trình bắt tay với scrcpy control socket để multi-touch hoạt động ổn định qua ADB Wi-Fi.
-- Tự đóng kết nối điều khiển và dọn ADB port-forward khi dừng bot.
-- Đã thử nghiệm nhiều lượt Quick Catch liên tiếp trên thiết bị Android 15 ở độ phân giải 1220×2712.
+- Shundo giờ xác nhận encounter đã mở (tín hiệu shiny) bằng đúng **nút chọn bóng đỏ** như chế độ bắt — không còn phụ thuộc icon camera.
 
-### Thông báo cập nhật Discord
+### Căn chỉnh tay
 
-- GitHub Actions có thể tự gửi thông báo vào Discord sau khi phát hành phiên bản mới.
-- Tin nhắn gồm phiên bản, link tải EXE trực tiếp và link xem release notes.
-- Cần cấu hình repository secret `DISCORD_WEBHOOK_URL` để bật thông báo.
+- Thêm ô **Khung nút bóng phải (nhận encounter)** — dùng chung cho cả chế độ Bắt và Shundo; kéo thả như các ô khác.
+- Gỡ ô "Khung quét camera" cũ vì không còn dùng.
 
 ### Cách cập nhật
 
-1. Tải file `AutoCatchPokemonPGSharp-v1.1.0.exe` trong phần Assets.
+1. Tải file `AutoCatchPokemonPGSharp-v1.1.1.exe` trong phần Assets.
 2. Đóng phiên bản đang chạy.
 3. Thay file EXE cũ bằng file mới và mở lại; không cần cài đặt.
-4. Chọn **Auto bắt nhanh (không cần PGSharp key)** trong phần Kiểu bắt.
-5. Nếu cần, mở **Căn chỉnh tay** để đặt lại hai điểm Berry cho đúng màn hình.
+4. Nếu nút chọn bóng trên máy bạn nằm lệch, mở **Căn chỉnh tay** và kéo ô đỏ vào đúng nút.
 
 > Lưu ý: PGSharp Free không có Guaranteed Hit. Tỷ lệ trúng vẫn phụ thuộc vào lực ném, tốc độ flick, khoảng cách Pokémon và thời điểm Pokémon tấn công hoặc nhảy.
 
@@ -54,49 +44,39 @@ Hỗ trợ: https://discord.gg/QXSfKKPpG6
 
 ## English
 
-### Highlight: Quick Catch without a PGSharp key
+### Highlight: Reliable encounter detection for any ball type
 
-- Added the **Quick auto catch (no PGSharp key)** catch style.
-- Performs a real two-finger Quick Catch gesture: hold and drag the Berry drawer, throw the ball, then leave the encounter to skip the catch animation.
-- Works with PGSharp Free without enabling its paid Quick Catch feature.
-- No root access or additional Android app installation is required.
-- The multi-touch controller is bundled in the EXE and starts automatically when needed.
+- The bot confirms it is in an encounter using the **red ball-selector button at the bottom-right** — which is always a red Poké Ball whether a Poké Ball, Great Ball, or Ultra Ball is loaded.
+- This replaces the old camera-icon check (a semi-transparent white outline) that lost contrast against a bright sky and often **missed the encounter and never threw**.
+- Being an opaque colour, it reads reliably against any Pokémon's background.
 
-### Throw customization
+### Clean exit after every throw
 
-- **Throw power** is editable from 100–1400 px.
-- **Quick Catch flick** is editable from 50–500 ms; lower values produce a faster flick.
-- Tested defaults: 700 px throw power and a 100 ms flick.
-- User-entered values are saved and are not forcibly locked.
+- After throwing, the bot **taps Flee twice** to leave in time before the catch resolves — no more getting stuck on the summary screen.
+- If the **"POKÉMON CAUGHT" XP summary** still slips through, the bot taps **OK** automatically.
+- If it lands on the **Pokémon detail page**, the bot taps the **green check (✓)** to go back.
+- These buttons are matched precisely and **never hit POWER UP / EVOLVE** (so no Stardust/candy is spent).
 
-### Manual Quick Catch alignment
+### Auto-dismiss the Weekly Challenge popup
 
-- Added a **Quick Catch: Berry button** alignment point.
-- Added a **Quick Catch: Berry drag target** alignment point.
-- The drag direction is displayed as an arrow over the phone screenshot.
-- Coordinates are saved per device resolution and override automatic positions while running.
+- When the **"WEEKLY CHALLENGE"** modal appears, the bot taps **MAYBE LATER** to close it.
+- It targets the text and **never taps the green CHOOSE GROUP button**.
 
-### Reliability and fixes
+### Shundo mode shares the same detection
 
-- Waits for Pokémon GO to register the released ball before tapping Flee, preventing early exits from cancelling the throw.
-- Confirms that the map has returned and retries Flee when necessary instead of stacking encounters.
-- Fixed the scrcpy control-socket handshake for reliable multi-touch over ADB Wi-Fi.
-- Closes the control connection and removes ADB port forwarding when the bot stops.
-- Tested across multiple consecutive Quick Catch cycles on an Android 15 device at 1220×2712.
+- Shundo now confirms the encounter opened (its shiny signal) with the same **red ball-selector button** as catch mode — no longer relying on the camera icon.
 
-### Discord update notifications
+### Manual alignment
 
-- GitHub Actions can notify Discord after a new release is published.
-- The notification includes the version, direct EXE download, and release-notes links.
-- Configure the `DISCORD_WEBHOOK_URL` repository secret to enable notifications.
+- Added a **Right ball-selector box (encounter)** region — shared by both Catch and Shundo modes; drag it like the other boxes.
+- Removed the old "Camera scan box" since it is no longer used.
 
 ### How to update
 
-1. Download `AutoCatchPokemonPGSharp-v1.1.0.exe` from the release Assets.
+1. Download `AutoCatchPokemonPGSharp-v1.1.1.exe` from the release Assets.
 2. Close the currently running version.
 3. Replace the old EXE and launch the new one; no installation is required.
-4. Select **Quick auto catch (no PGSharp key)** under Catch style.
-5. If necessary, open **Manual align** and reposition the two Berry points for your screen.
+4. If your device's ball-selector sits in a different spot, open **Manual align** and drag the red box onto it.
 
 > Note: PGSharp Free does not provide Guaranteed Hit. Accuracy still depends on throw power, flick speed, Pokémon distance, and whether the Pokémon attacks or jumps.
 

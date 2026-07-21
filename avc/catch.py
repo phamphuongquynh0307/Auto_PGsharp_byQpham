@@ -4,14 +4,15 @@ Per cycle:
   1. Double-tap the first slot of the nearby-Pokémon sidebar (the top one). The client
      brings that Pokémon up and opens the encounter; after a catch the list auto-advances,
      so the same slot position always holds the next target.
-  2. Confirm we're actually in an encounter by finding the throwable Poké Ball.
+  2. Confirm we're actually in an encounter via the bottom-right ball-selector button (an
+     opaque red Poké Ball shown for any loaded ball type — see _enc_ball_visible).
   3. Swipe up from the ball to throw it.
   4. Wait out the catch animation, then repeat.
 
-The camera icon marks the encounter opening; it only *times* the throw (throw the moment it
-shows). If it never shows the routine throws anyway — a stray swipe on the map is harmless
-and cheaper than a missed catch — but the cycle still counts as empty so the AutoWalk
-dry-spell logic keeps working.
+The ball-selector is opaque, so it reads the same on any Pokémon's background — unlike the
+old semi-transparent camera icon, whose contrast collapsed on bright scenes and silently
+missed the encounter. When it isn't showing we're not in an encounter, so the cycle counts
+as empty and the AutoWalk dry-spell logic keeps working.
 """
 from __future__ import annotations
 
@@ -68,14 +69,17 @@ class CatchConfig:
     force_slot: bool = False        # if True, always tap the fixed nearby_slot (skip '@' detection)
     double_tap_gap_ms: int = 90
 
-    # Encounter detection via camera template + fallback throw position.
-    ball_template: str = "templates/camera.png"
-    ball_threshold: float = 0.7
     # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
     # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
     ball_fallback: tuple[int, int] = (610, 2380)
-    # The encounter camera icon sits at a fixed spot at the top center (~610, 181).
-    ball_region: tuple[int, int, int, int] = (430, 40, 360, 300)
+    # Encounter signal: the bottom-RIGHT ball-selector button. It's a small opaque red Poké Ball
+    # that's shown in every encounter *regardless of which ball is loaded to throw* (Great/Ultra
+    # included) — so colour-matching its red dome detects the encounter for any ball type, unlike
+    # checking the throwable ball (blue Great Balls / yellow Ultra Balls aren't red). Off the
+    # encounter (map, post-catch "Gotcha") the selector is gone, so red here also means "in an
+    # encounter", which doubles as the leave/next-cycle signal.
+    enc_ball_region: tuple[int, int, int, int] = (1030, 2408, 70, 40)
+    enc_ball_red_frac: float = 0.5
 
     # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
     # the bottom center. When it shows we're out of Poké Balls: flee the encounter, alert Discord,
@@ -121,6 +125,23 @@ class CatchConfig:
     close_btn_template: str = "templates/close_btn.png"              # Close "X" button
     close_btn_blue_template: str = "templates/close_btn_blue.png"    # Close "X" button (blue)
     close_btn_white_template: str = "templates/close_btn_white.png"  # Close "X" button (white)
+    # Post-catch safety net: if a throw's Flee lands too late the catch resolves into the Pokémon
+    # detail/summary screen, whose green check (✓) button leaves it. Double-fleeing usually avoids
+    # this screen entirely; this just recovers the odd one that slips through. Searched only in a
+    # tight bottom-centre box so it can't be confused with anything on a live encounter.
+    check_btn_template: str = "templates/check_btn.png"
+    check_btn_region: tuple[int, int, int, int] = (450, 2360, 320, 300)
+    # The "POKÉMON CAUGHT" XP summary that a late Flee resolves into shows first, with a big green
+    # OK pill. Match it (its 'OK' text/width differ from the detail screen's POWER UP/EVOLVE pills)
+    # in a screen-centre box and tap it. The box is centred so the left-aligned POWER UP/EVOLVE
+    # buttons fall outside it — tapping those would spend Stardust/candy.
+    caught_ok_template: str = "templates/caught_ok.png"
+    caught_ok_region: tuple[int, int, int, int] = (250, 1600, 720, 560)
+    # "WEEKLY CHALLENGE" (and similar) invite modal -> dismiss via its white "MAYBE LATER" text,
+    # NOT the green "CHOOSE GROUP" button above it (which would join the challenge). Match the text
+    # in a centre box; the green button sits above the box so it can't be hit.
+    maybe_later_template: str = "templates/maybe_later.png"
+    maybe_later_region: tuple[int, int, int, int] = (250, 1950, 720, 300)
     popup_threshold: float = 0.7
     # The Pokéstop photo-disc screen's own 'X' sits at a fixed spot at the bottom center;
     # used as the tap fallback when template matching misses it (the backdrop varies).
@@ -186,8 +207,11 @@ class CatchConfig:
             ball_fallback=L.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
             berry_start=L.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
             berry_end=L.point(self.berry_end, "BL"),
-            ball_region=L.region(self.ball_region, "TC"),       # encounter camera, top-centre
+            enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
+            check_btn_region=L.region(self.check_btn_region, "BC"),
+            caught_ok_region=L.region(self.caught_ok_region, "MC"),
+            maybe_later_region=L.region(self.maybe_later_region, "MC"),
             flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
             pokestop_close_xy=L.point(self.pokestop_close_xy, "BC"),
             # pure distances/sizes/offsets
@@ -226,7 +250,6 @@ class CatchRoutine:
         def load_opt(path):
             return _load_optional(path)
 
-        self._ball = load(self.config.ball_template)
         self._anchor = load(self.config.anchor_template)
         self._star = load(self.config.menu_star_template)
         # Popup templates are optional — a missing one just disables that handler.
@@ -237,6 +260,9 @@ class CatchRoutine:
         self._close_btn = load_opt(self.config.close_btn_template)
         self._close_btn_blue = load_opt(self.config.close_btn_blue_template)
         self._close_btn_white = load_opt(self.config.close_btn_white_template)
+        self._check_btn = load_opt(self.config.check_btn_template)
+        self._caught_ok = load_opt(self.config.caught_ok_template)
+        self._maybe_later = load_opt(self.config.maybe_later_template)
         self._aw_paused = load_opt(self.config.autowalk_paused_template)
         self._noball_tpl = load_opt(self.config.out_of_balls_template)
         self.stats = CatchStats()
@@ -271,10 +297,23 @@ class CatchRoutine:
         jx, jy = self._jitter(x, y)
         self.device.double_tap(jx, jy)
 
+    def _enc_ball_visible(self, frame) -> bool:
+        """True when the bottom-right ball-selector's red dome fills its fixed strip. That button
+        is an opaque red Poké Ball shown in every encounter whatever ball is loaded, so it detects
+        the encounter for all ball types; a bright background can't wash out an opaque colour."""
+        x, y, w, h = self.config.enc_ball_region
+        patch = frame[y:y + h, x:x + w]
+        if patch.size == 0:
+            return False
+        p = patch.astype(int)
+        b, g, r = p[..., 0], p[..., 1], p[..., 2]
+        red = (r > 110) & (r - g > 40) & (r - b > 40)
+        return float(red.mean()) >= self.config.enc_ball_red_frac
+
     def _ball_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._ball, threshold=self.config.ball_threshold, scales=self._scales,
-                       region=self.config.ball_region)
-        return self.config.ball_fallback if matches else None
+        # In an encounter iff the opaque red ball-selector button is showing (present for any
+        # loaded ball type). Returns the throw start point when so, else None.
+        return self.config.ball_fallback if self._enc_ball_visible(frame) else None
 
     def _is_out_of_balls(self, frame) -> bool:
         """True when the encounter's ball-count badge reads 'x0' (the red pill at the bottom
@@ -335,6 +374,15 @@ class CatchRoutine:
                 self.device.tap(x, y)
                 self.stats.last_event = "popup"
                 return True
+        # "WEEKLY CHALLENGE"/invite modal -> tap its white "MAYBE LATER" text to dismiss (never the
+        # green "CHOOSE GROUP" above it). Searched by text in a centre box, so the button is missed.
+        if self._maybe_later is not None:
+            m = find(frame, self._maybe_later, threshold=self.config.popup_threshold,
+                     scales=self._scales, grayscale=False, region=self.config.maybe_later_region)
+            if m:
+                self.device.tap(*m[0].center)
+                self.stats.last_event = "popup"
+                return True
         # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
             m = find(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=self._scales)
@@ -387,6 +435,25 @@ class CatchRoutine:
             self.device.tap(fx, fy)
             self.stats.last_event = "popup"
             return True
+        # "POKÉMON CAUGHT" XP summary (a slipped-through catch) -> tap its green OK pill. It shows
+        # first, and its ball-selector bleeds through the dialog so the encounter check reads true;
+        # handle it here before anything else touches the screen.
+        if self._caught_ok is not None:
+            m = find(frame, self._caught_ok, threshold=0.72, scales=self._scales,
+                     grayscale=False, region=self.config.caught_ok_region)
+            if m:
+                self.device.tap(*m[0].center)
+                self.stats.last_event = "popup"
+                return True
+        # Pokémon detail/summary screen (a slipped-through catch) -> tap its green check (✓) to
+        # leave. Colour match in a tight bottom-centre box; the ✓ never appears on a live encounter.
+        if self._check_btn is not None and self._ball_in(frame) is None:
+            m = find(frame, self._check_btn, threshold=0.75, scales=self._scales,
+                     grayscale=False, region=self.config.check_btn_region)
+            if m:
+                self.device.tap(*m[0].center)
+                self.stats.last_event = "popup"
+                return True
         # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.7 threshold).
         # Supports teal/green, blue, and white variations of the close button.
         for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):

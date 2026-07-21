@@ -42,8 +42,8 @@ CALIB_ITEMS = [
     ("berry_end",           "point",  "catch",  "cal_berry_end",   "#00b894"),
     ("flee_xy",             "point",  "both",   "cal_flee",    "#ffcc00"),
     ("pokestop_close_xy",   "point",  "catch",  "cal_stop",    "#ff33cc"),
-    ("camera",              "region", "both",   "cal_camera",  "#00ccff"),   # 1 khung chung cả 2 mode
     ("out_of_balls_region", "region", "catch",  "cal_noball",  "#ff8800"),
+    ("enc_ball_region",     "region", "both",   "cal_encball", "#ff5555"),   # 1 khung chung cả 2 mode
     ("pill_region",         "region", "shundo", "cal_pill",    "#3399ff"),
     ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
 ]
@@ -185,6 +185,7 @@ LANG = {
     "cal_pill":      {"vi": "Khung IV pill (Shundo)", "en": "IV pill box (Shundo)"},
     "cal_stop":      {"vi": "Nút đóng Pokéstop (X)", "en": "Pokéstop close (X)"},
     "cal_noball":    {"vi": "Khung 'hết bóng' (x0)", "en": "Out-of-balls box (x0)"},
+    "cal_encball":   {"vi": "Khung nút bóng phải (nhận encounter)", "en": "Right ball-selector box (encounter)"},
     "cal_toast":     {"vi": "Khung toast (Shundo)", "en": "Toast box (Shundo)"},
     "pv_legend":     {"vi": "Xanh lá = ô feed sẽ bấm • Vàng nhạt = thanh @ / ô spawn • Vàng = điểm tap dưới chân • "
                             "Hồng = vòng Pokémon • Cam = vùng đọc IV • Trắng = vùng toast • Đỏ = đang trong màn bắt",
@@ -1068,9 +1069,9 @@ class App:
             "berry_start":         list(c.berry_start),
             "berry_end":           list(c.berry_end),
             "flee_xy":             list(c.flee_xy),
-            "camera":              list(c.ball_region),   # dùng chung: catch=ball_region, shundo=camera_region
             "pokestop_close_xy":   list(c.pokestop_close_xy),
             "out_of_balls_region": list(c.out_of_balls_region),
+            "enc_ball_region":     list(c.enc_ball_region),   # dùng chung cả catch & shundo
             "pill_region":         list(s.pill_region),
             "toast_region":        list(s.toast_region),
         }
@@ -1273,19 +1274,19 @@ class App:
                 cfg.berry_end = P("berry_end")
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
-            if R("camera"):
-                cfg.ball_region = R("camera")
             if P("pokestop_close_xy"):
                 cfg.pokestop_close_xy = P("pokestop_close_xy")
             if R("out_of_balls_region"):
                 cfg.out_of_balls_region = R("out_of_balls_region")
+            if R("enc_ball_region"):
+                cfg.enc_ball_region = R("enc_ball_region")
         else:
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
             if R("pill_region"):
                 cfg.pill_region = R("pill_region")
-            if R("camera"):
-                cfg.camera_region = R("camera")
+            if R("enc_ball_region"):
+                cfg.enc_ball_region = R("enc_ball_region")
             if R("toast_region"):
                 cfg.toast_region = R("toast_region")
         return cfg
