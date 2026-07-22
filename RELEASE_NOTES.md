@@ -1,3 +1,69 @@
+# v1.1.3
+
+## Tiếng Việt
+
+### Popup phản hồi nhanh và không bấm lặp
+
+- Nhận diện nút đóng theo tỷ lệ màn hình, hỗ trợ nhiều độ phân giải và nhiều kiểu nút X.
+- Quét popup trên ảnh thu nhỏ để giảm đáng kể thời gian phân tích.
+- Thêm debounce 0,75 giây: mỗi popup chỉ được bấm một lần, không còn đóng rồi mở lại do frame stream cũ.
+- Có thể xử lý các popup thời tiết, tốc độ, AutoWalk, Weekly Challenge, phần thưởng và màn tổng kết.
+
+### Stream và nhận diện nhanh hơn
+
+- Mỗi vòng chỉ phân tích frame mới; không xử lý lặp lại cùng một ảnh.
+- Decoder chỉ phóng lớn frame thực sự được sử dụng thay vì resize mọi frame nhận được.
+- Một frame được dùng chung cho nhiều phép kiểm tra, đồng thời tái sử dụng ảnh thu nhỏ giữa các detector popup.
+- Nearby giảm từ khoảng 145 ms xuống 8 ms sau lần nhận diện đầu; Feed giảm từ khoảng 506 ms xuống 16 ms.
+- Vị trí Nearby/Feed được xác nhận trong vùng nhỏ và tự quét rộng lại nếu thanh bị di chuyển hoặc biến mất.
+
+### Quick Catch không key ổn định hơn
+
+- Ổn định thao tác hai ngón: giữ Berry, chạm bóng, flick và thả đúng thứ tự.
+- Chờ tối thiểu 0,35 giây để game ghi nhận cú ném trước khi thoát.
+- Bình thường chỉ bấm Flee một lần; chỉ thử lại nếu frame mới xác nhận encounter vẫn còn mở.
+- Không còn các lần Flee thừa rơi xuống bản đồ hoặc vô tình mở lại giao diện.
+
+### Cài đặt và căn chỉnh gọn hơn
+
+- Trang Cài đặt trở lại một trang cuộn, sắp theo thứ tự kiểu bắt, thông số chính, thời gian, Shundo và Discord.
+- Căn chỉnh tay chia theo **Bắt thường (có key)**, **Bắt nhanh (không key)** và **Shundo**; chỉ hiện các điểm cần cho từng luồng.
+- Toàn bộ thời gian trong Cài đặt dùng đơn vị **giây**. Cấu hình cũ dùng ms/phút được tự động chuyển đổi.
+
+---
+
+## English
+
+### Fast popup handling without repeated taps
+
+- Close-button detection now scales with the screen and supports multiple resolutions and X styles.
+- Popup matching runs on reduced frames for substantially lower analysis latency.
+- A 0.75-second debounce ensures each popup is tapped once and prevents stale stream frames from reopening it.
+- Handles weather, speed, AutoWalk, Weekly Challenge, reward, and catch-summary dialogs.
+
+### Faster streaming and detection pipeline
+
+- Analysis waits for a new frame instead of processing the same image repeatedly.
+- The decoder enlarges only frames that are actually consumed instead of resizing every incoming frame.
+- Detectors share one frame and reuse prepared reduced images during each popup pass.
+- Cached Nearby detection drops from roughly 145 ms to 8 ms; cached Feed detection drops from roughly 506 ms to 16 ms.
+- Nearby and Feed positions are validated locally and automatically rediscovered after moving or disappearing.
+
+### More reliable keyless Quick Catch
+
+- Stabilized the two-finger Berry hold, ball touch, flick, and release sequence.
+- Waits at least 0.35 seconds for the throw to commit before leaving.
+- Normally taps Flee once and retries only while a fresh frame confirms the encounter is still open.
+- Prevents extra Flee taps from landing on the map or reopening another screen.
+
+### Cleaner settings and manual alignment
+
+- Settings use one scrollable page ordered by catch style, primary controls, timing, Shundo, and Discord.
+- Manual alignment is split into **Normal catch (with key)**, **Quick catch (no key)**, and **Shundo**, showing only relevant controls.
+- Every timing setting now uses **seconds**. Existing millisecond/minute settings are migrated automatically.
+
+---
+
 # v1.1.2
 
 ## Tiếng Việt
