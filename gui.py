@@ -48,6 +48,14 @@ CALIB_ITEMS = [
     ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
 ]
 
+CALIB_GROUP_FIELDS = {
+    "normal": ("nearby_slot", "ball_fallback", "pokestop_close_xy",
+               "out_of_balls_region", "enc_ball_region"),
+    "quick": ("nearby_slot", "ball_fallback", "berry_start", "berry_end", "flee_xy",
+              "pokestop_close_xy", "out_of_balls_region", "enc_ball_region"),
+    "shundo": ("flee_xy", "enc_ball_region", "pill_region", "toast_region"),
+}
+
 LANG = {
     "title":         {"vi": "Auto Catch Pokemon PGSharp", "en": "Auto Catch Pokemon PGSharp"},
     "tab_main":      {"vi": "Điều khiển", "en": "Control"},
@@ -171,6 +179,8 @@ LANG = {
     "cal_group_catch": {"vi": "Bắt Pokémon", "en": "Catching"},
     "cal_group_both":  {"vi": "Dùng chung", "en": "Shared"},
     "cal_group_shundo":{"vi": "Shundo", "en": "Shundo"},
+    "cal_group_normal": {"vi": "Bắt thường (có key)", "en": "Normal catch (with key)"},
+    "cal_group_quick":  {"vi": "Bắt nhanh (không key)", "en": "Quick catch (no key)"},
     "cal_hint":      {"vi": "Kéo dấu (+) tới đúng nút/pokémon; kéo góc khung để đổi kích thước. "
                             "Lưu xong bot dùng đúng các điểm này (tắt dò '@').",
                       "en": "Drag each (+) onto the right button/pokémon; drag a box corner to resize. "
@@ -403,44 +413,50 @@ class App:
         self.log.config(yscrollcommand=sb.set)
 
         # ---- Settings tab ----
-        settings_nb = ttk.Notebook(self.tab_settings)
-        settings_nb.pack(fill="both", expand=True, **pad)
-        settings_catch = ttk.Frame(settings_nb)
-        settings_shundo = ttk.Frame(settings_nb)
-        settings_alerts = ttk.Frame(settings_nb)
-        settings_nb.add(settings_catch, text=self.tr("grp_catch"))
-        settings_nb.add(settings_shundo, text=self.tr("grp_shundo"))
-        settings_nb.add(settings_alerts, text=self.tr("grp_discord"))
-        self._settings_nb = settings_nb
+        settings_wrap = ttk.Frame(self.tab_settings)
+        settings_wrap.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+        settings_canvas = tk.Canvas(settings_wrap, highlightthickness=0)
+        settings_scroll = ttk.Scrollbar(settings_wrap, orient="vertical", command=settings_canvas.yview)
+        settings_canvas.configure(yscrollcommand=settings_scroll.set)
+        settings_scroll.pack(side="right", fill="y")
+        settings_canvas.pack(side="left", fill="both", expand=True)
+        settings_body = ttk.Frame(settings_canvas)
+        settings_window = settings_canvas.create_window((0, 0), window=settings_body, anchor="nw")
+        settings_body.bind("<Configure>", lambda _e: settings_canvas.configure(
+            scrollregion=settings_canvas.bbox("all")))
+        settings_canvas.bind("<Configure>", lambda e: settings_canvas.itemconfigure(
+            settings_window, width=e.width))
+        settings_canvas.bind("<MouseWheel>", lambda e: settings_canvas.yview_scroll(
+            int(-e.delta / 120), "units"))
 
-        catch_grp = ttk.LabelFrame(settings_catch, text=self.tr("grp_catch"))
+        catch_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_catch"))
         catch_grp.pack(fill="x", **pad)
         self._i18n.append((catch_grp, "grp_catch"))
-        self.slot_offset = self._spin(catch_grp, "slot_offset", 0, 100, 1500, 770)
+        self.slot_offset = self._spin(catch_grp, "slot_offset", 12, 100, 1500, 770)
         self.throw_power = self._spin(catch_grp, "throw_power", 1, 100, 1400, 700)
-        self._label(catch_grp, "catch_style", row=2, column=0, sticky="w", padx=6, pady=2)
+        self._label(catch_grp, "catch_style", row=0, column=0, sticky="w", padx=6, pady=2)
         self.catch_style = "normal"
         self.catch_style_var = tk.StringVar()
         self.catch_style_combo = ttk.Combobox(catch_grp, textvariable=self.catch_style_var,
                                                state="readonly", width=30)
-        self.catch_style_combo.grid(row=2, column=1, sticky="e", padx=6, pady=2)
+        self.catch_style_combo.grid(row=0, column=1, sticky="e", padx=6, pady=2)
         self.catch_style_combo.bind("<<ComboboxSelected>>", self._on_catch_style_change)
-        self.quick_flick = self._spin(catch_grp, "quick_flick", 3, 50, 500, 100)
+        self.quick_flick = self._spin(catch_grp, "quick_flick", 8, 50, 500, 100)
         self.wait_enc = self._spin(catch_grp, "wait_enc", 4, 2, 15, 3.0, is_float=True)
-        self.wait_catch = self._spin(catch_grp, "wait_catch", 5, 2, 20, 6.0, is_float=True)
-        self.idle_aw = self._spin(catch_grp, "idle_aw", 6, 0, 20, 3)
-        self.max_catches = self._spin(catch_grp, "max_catches", 7, 0, 9999, 0)
-        self.settle = self._spin(catch_grp, "settle", 8, 0, 15, 1.2, is_float=True)
-        self.touch_delay = self._spin(catch_grp, "touch_delay", 9, 0, 1000, 200)
-        self.post_throw = self._spin(catch_grp, "post_throw", 10, 0, 3000, 1000)
-        self.flee_taps = self._spin(catch_grp, "flee_taps", 11, 1, 6, 3)
-        self.flee_gap = self._spin(catch_grp, "flee_gap", 12, 50, 1000, 200)
+        self.wait_catch = self._spin(catch_grp, "wait_catch", 6, 2, 20, 6.0, is_float=True)
+        self.idle_aw = self._spin(catch_grp, "idle_aw", 3, 0, 20, 3)
+        self.max_catches = self._spin(catch_grp, "max_catches", 2, 0, 9999, 0)
+        self.settle = self._spin(catch_grp, "settle", 7, 0, 15, 1.2, is_float=True)
+        self.touch_delay = self._spin(catch_grp, "touch_delay", 5, 0, 1000, 200)
+        self.post_throw = self._spin(catch_grp, "post_throw", 9, 0, 3000, 1000)
+        self.flee_taps = self._spin(catch_grp, "flee_taps", 10, 1, 6, 3)
+        self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 50, 1000, 200)
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
         dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
-        sh_grp = ttk.LabelFrame(settings_shundo, text=self.tr("grp_shundo"))
+        sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
         sh_grp.pack(fill="x", **pad)
         self._i18n.append((sh_grp, "grp_shundo"))
         note = ttk.Label(sh_grp, text=self.tr("shundo_note"), wraplength=400, foreground="#666")
@@ -464,7 +480,7 @@ class App:
         # A skipped shiny still alerts Discord (with screenshot), it just isn't waited on.
         self.alert_shiny = tk.BooleanVar(value=True)
 
-        dc_grp = ttk.LabelFrame(settings_alerts, text=self.tr("grp_discord"))
+        dc_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_discord"))
         dc_grp.pack(fill="x", **pad)
         self._i18n.append((dc_grp, "grp_discord"))
         self._label(dc_grp, "webhook", row=0, column=0, sticky="w", padx=6, pady=2)
@@ -590,10 +606,6 @@ class App:
         self.notebook.tab(self.tab_settings, text=self.tr("tab_settings"))
         self.notebook.tab(self.tab_guide, text=self.tr("tab_guide"))
         self.notebook.tab(self.tab_donate, text=self.tr("tab_donate"))
-        if hasattr(self, "_settings_nb"):
-            self._settings_nb.tab(0, text=self.tr("grp_catch"))
-            self._settings_nb.tab(1, text=self.tr("grp_shundo"))
-            self._settings_nb.tab(2, text=self.tr("grp_discord"))
         self._set_guide_text()
         for widget, key in self._i18n:
             widget.config(text=self.tr(key))
@@ -1185,20 +1197,18 @@ class App:
         if self._cal_photo is not None:
             cv.create_image(0, 0, anchor="nw", image=self._cal_photo)
         groups = ttk.Notebook(body); groups.pack(side="left", fill="y", padx=(10, 0))
-        for mode, title in (("catch", "cal_group_catch"), ("both", "cal_group_both"),
+        for mode, title in (("normal", "cal_group_normal"), ("quick", "cal_group_quick"),
                             ("shundo", "cal_group_shundo")):
             page = ttk.Frame(groups)
             groups.add(page, text=self.tr(title))
-            for field, kind, item_mode, key, color in CALIB_ITEMS:
-                if item_mode != mode:
-                    continue
+            for field, kind, item_mode, key, color in self._cal_items(mode):
                 row = ttk.Frame(page); row.pack(anchor="w", padx=6, pady=4)
                 sw = tk.Canvas(row, width=16, height=16, highlightthickness=0)
                 sw.pack(side="left"); sw.create_rectangle(2, 2, 14, 14, fill=color, outline=color)
                 ttk.Label(row, text=self.tr(key), wraplength=190).pack(side="left", padx=4)
         self._cal_groups = groups
-        self._cal_group = "shundo" if self.mode == "shundo" else "catch"
-        groups.select(2 if self._cal_group == "shundo" else 0)
+        self._cal_group = "shundo" if self.mode == "shundo" else self.catch_style
+        groups.select({"normal": 0, "quick": 1, "shundo": 2}[self._cal_group])
         groups.bind("<<NotebookTabChanged>>", self._cal_group_changed)
         self._cal_active = None
         cv.bind("<ButtonPress-1>", self._cal_press)
@@ -1214,14 +1224,12 @@ class App:
         c = self._cal_canvas; sf = self._cal_sf
         c.delete("ov")
         # Show the Quick Catch drag direction underneath its two draggable handles.
-        if self._cal_group == "catch" and "berry_start" in self._cal and "berry_end" in self._cal:
+        if self._cal_group == "quick" and "berry_start" in self._cal and "berry_end" in self._cal:
             x1, y1 = (n * sf for n in self._cal["berry_start"])
             x2, y2 = (n * sf for n in self._cal["berry_end"])
             c.create_line(x1, y1, x2, y2, fill="#7c4dff", width=4,
                           arrow="last", dash=(7, 4), tags="ov")
-        for field, kind, mode, key, color in CALIB_ITEMS:
-            if mode != self._cal_group:
-                continue
+        for field, kind, mode, key, color in self._cal_items():
             v = self._cal[field]
             if kind == "point":
                 x, y = v[0] * sf, v[1] * sf
@@ -1242,9 +1250,7 @@ class App:
     def _cal_press(self, e) -> None:
         sf = self._cal_sf; mx, my = e.x, e.y
         pick = None; pickd = 22
-        for field, kind, item_mode, *_ in CALIB_ITEMS:  # points + resize handles first
-            if item_mode != self._cal_group:
-                continue
+        for field, kind, item_mode, *_ in self._cal_items():  # points + resize handles first
             v = self._cal[field]
             if kind == "point":
                 x, y = v[0] * sf, v[1] * sf
@@ -1259,8 +1265,8 @@ class App:
                     if abs(mx - cx) < 13 and abs(my - cy) < 13:
                         pick = (field, "rs:" + cn, 0, 0); pickd = 0
         if pick is None:                                # else a region body move
-            for field, kind, item_mode, *_ in CALIB_ITEMS:
-                if kind != "region" or item_mode != self._cal_group:
+            for field, kind, item_mode, *_ in self._cal_items():
+                if kind != "region":
                     continue
                 v = self._cal[field]; x, y, ww, hh = v[0] * sf, v[1] * sf, v[2] * sf, v[3] * sf
                 if x <= mx <= x + ww and y <= my <= y + hh:
@@ -1268,9 +1274,13 @@ class App:
         self._cal_active = pick
 
     def _cal_group_changed(self, _event=None) -> None:
-        self._cal_group = ("catch", "both", "shundo")[self._cal_groups.index("current")]
+        self._cal_group = ("normal", "quick", "shundo")[self._cal_groups.index("current")]
         self._cal_active = None
         self._cal_redraw()
+
+    def _cal_items(self, group: str | None = None):
+        fields = set(CALIB_GROUP_FIELDS[group or self._cal_group])
+        return [item for item in CALIB_ITEMS if item[0] in fields]
 
     def _cal_drag(self, e) -> None:
         if not self._cal_active:
