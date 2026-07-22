@@ -264,12 +264,11 @@ class ShundoRoutine:
             if self.stop_event.is_set():
                 return None
             self._wait_if_paused()
-            result = predicate(self.device.screenshot())
+            result = predicate(self.device.screenshot(next_frame=True))
             if result:
                 return result
             if time.monotonic() >= deadline:
                 return None
-            time.sleep(self.config.poll_interval)
 
     # -- element lookups ---------------------------------------------------------
     def _anchor_in(self, frame) -> tuple[int, int] | None:
@@ -378,35 +377,41 @@ class ShundoRoutine:
             return True
         return False
 
-    def _handle_popups(self) -> bool:
+    def _handle_popups(self, frame=None) -> bool:
         if time.monotonic() < self._popup_block_until:
             return False
-        frame = self.device.screenshot()
+        if frame is None:
+            frame = self.device.screenshot()
+        fast_cache = {}
         # PGSharp menu left open — close it by tapping the star it hangs off of.
         if self._menu_open is not None and self._menu_star is not None:
-            m = find(frame, self._menu_open, threshold=0.8, scales=self._scales)
+            m = find_fast(frame, self._menu_open, threshold=0.8, scales=self._scales,
+                          cache=fast_cache)
             if m:
-                star = find(frame, self._menu_star, threshold=0.7, scales=self._scales, grayscale=False)
+                star = find_fast(frame, self._menu_star, threshold=0.7, scales=self._scales,
+                                 grayscale=False, cache=fast_cache)
                 if star:
                     self.device.tap(*star[0].center)
                     self.stats.last_event = "popup"
                     return True
         # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
         if self._popup_weather is not None:
-            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
+                          scales=self._scales, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._popup_speed is not None:
-            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold,
+                          scales=self._scales, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._claim_rewards is not None:
             m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
-                          scales=CALIBRATION_SWEEP)
+                          scales=CALIBRATION_SWEEP, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -430,6 +435,7 @@ class ShundoRoutine:
                 self._close_btns,
                 threshold=self.config.popup_threshold,
                 scales=self._scales,
+                cache=fast_cache,
             )
             if close is not None:
                 self.device.tap(*close.center)
@@ -437,9 +443,9 @@ class ShundoRoutine:
                 return True
         return False
 
-    def _drain_popups(self) -> bool:
+    def _drain_popups(self, frame=None) -> bool:
         """Tap once, then debounce stale stream frames so the same control cannot toggle."""
-        if not self._handle_popups():
+        if not self._handle_popups(frame):
             return False
         self._popup_block_until = time.monotonic() + self.config.popup_debounce
         self._interruptible_sleep(max(0.06, self.config.poll_interval))
@@ -504,14 +510,14 @@ class ShundoRoutine:
         self.stats.cycles += 1
         self._ensure_calibrated()
 
-        if self._drain_popups():
+        frame = self.device.screenshot()
+        if self._drain_popups(frame):
             return "popup"
 
         # An encounter already open at cycle start is a shiny whose answer we missed
         # (it can open a beat after the per-tap wait gave up — PGSharp hides both bars
         # while it's up, so this must be checked before looking for the feed). Grade it
         # now instead of idling forever.
-        frame = self.device.screenshot()
         if self._enc_ball_visible(frame):
             self.stats.checked += 1
             return self._grade_encounter()
@@ -542,11 +548,11 @@ class ShundoRoutine:
         clear_deadline = time.monotonic() + cfg.bar_clear_timeout
         while time.monotonic() < clear_deadline and not self.stop_event.is_set():
             self._wait_if_paused()
-            if not self._target_in_bar(self.device.screenshot()):
+            frame = self.device.screenshot(next_frame=True)
+            if not self._target_in_bar(frame):
                 break
-            if self._drain_popups():
+            if self._drain_popups(frame):
                 continue
-            time.sleep(cfg.poll_interval)
 
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
         # in the bar's first slot. Stays put and waits (spawns can load slowly); it does
@@ -558,10 +564,11 @@ class ShundoRoutine:
         loaded = False
         while not self.stop_event.is_set():
             self._wait_if_paused()
-            if self._target_in_bar(self.device.screenshot()):
+            frame = self.device.screenshot(next_frame=True)
+            if self._target_in_bar(frame):
                 loaded = True
                 break
-            if self._drain_popups():
+            if self._drain_popups(frame):
                 continue
             now = time.monotonic()
             if cfg.spawn_timeout and now - start >= cfg.spawn_timeout:
@@ -569,7 +576,6 @@ class ShundoRoutine:
             if self._on_waiting is not None and now >= next_log:
                 next_log = now + cfg.spawn_wait_log
                 self._on_waiting(int(now - start))
-            time.sleep(cfg.poll_interval)
         if not loaded:
             self.stats.last_event = "nospawn"
             return "nospawn"

@@ -37,6 +37,7 @@ class Device:
         self.serial = serial
         self._size: tuple[int, int] | None = None
         self._stream = None  # ScreenStream when realtime capture is enabled
+        self._last_frame_sequence = 0
         self._control_socket = None
         self._control_process = None
         self._control_port = None
@@ -52,12 +53,14 @@ class Device:
 
         self._stream = ScreenStream(self.serial, self.adb_path, bitrate=bitrate,
                                     native_size=self.screen_size(), half=half)
+        self._last_frame_sequence = 0
         self._stream.start()
 
     def stop_stream(self) -> None:
         if self._stream is not None:
             self._stream.stop()
             self._stream = None
+            self._last_frame_sequence = 0
 
     # -- low level ------------------------------------------------------------
     def _base_cmd(self) -> list[str]:
@@ -193,13 +196,17 @@ class Device:
         return override or physical
 
     # -- capture --------------------------------------------------------------
-    def screenshot(self, fresh: bool = False) -> np.ndarray:
+    def screenshot(self, fresh: bool = False, next_frame: bool = False) -> np.ndarray:
         """Current screen as a BGR image. Uses the live stream if started, else a one-shot capture.
         fresh=True forces a one-shot screencap even when streaming — slower (~1s) but free of
         H.264 compression smear, for when a template match on the stream frame fails."""
         if self._stream is not None and not fresh:
-            frame = self._stream.latest()
+            frame, sequence = self._stream.latest(
+                after_sequence=self._last_frame_sequence if next_frame else None,
+                with_sequence=True,
+            )
             if frame is not None:
+                self._last_frame_sequence = sequence
                 return frame
             # Stream not producing yet — fall through to a one-shot grab.
         png = self._run(["exec-out", "screencap", "-p"], binary=True)

@@ -394,16 +394,19 @@ class CatchRoutine:
                 return False
         return True
 
-    def _handle_popups(self) -> bool:
+    def _handle_popups(self, frame=None) -> bool:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
         if time.monotonic() < self._popup_block_until:
             return False
-        frame = self.device.screenshot()
+        if frame is None:
+            frame = self.device.screenshot()
+        fast_cache = {}
 
         # Weather warning "Weather conditions are potentially dangerous" -> tap the green
         # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
         if self._popup_weather is not None:
-            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
+                          scales=self._scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -413,7 +416,8 @@ class CatchRoutine:
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
-            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold,
+                          scales=self._scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -430,7 +434,8 @@ class CatchRoutine:
                 return True
         # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
-            m = find_fast(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_autowalk, threshold=self.config.popup_threshold,
+                          scales=self._scales, cache=fast_cache)
             if m:
                 cx, cy = m[0].center
                 self.device.tap(cx + self.config.s(185), cy + self.config.s(168))
@@ -441,7 +446,7 @@ class CatchRoutine:
             # The level-up screen renders at a different scale from the PGSharp overlay
             # used for calibration (MuMu: claim ~=0.67, menu star ~=0.55).
             m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
-                          scales=CALIBRATION_SWEEP)
+                          scales=CALIBRATION_SWEEP, cache=fast_cache)
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
@@ -513,6 +518,7 @@ class CatchRoutine:
                 (self._close_btn, self._close_btn_blue, self._close_btn_white),
                 threshold=self.config.popup_threshold,
                 scales=self._scales,
+                cache=fast_cache,
             )
             if close is not None:
                 self.device.tap(*close.center)
@@ -520,9 +526,9 @@ class CatchRoutine:
                 return True
         return False
 
-    def _drain_popups(self) -> bool:
+    def _drain_popups(self, frame=None) -> bool:
         """Tap once, then debounce stale stream frames so the same control cannot toggle."""
-        if not self._handle_popups():
+        if not self._handle_popups(frame):
             return False
         self._popup_block_until = time.monotonic() + self.config.popup_debounce
         self._interruptible_sleep(max(0.06, self.config.poll_interval))
@@ -577,12 +583,11 @@ class CatchRoutine:
             if self.stop_event.is_set():
                 return None
             self._wait_if_paused()
-            result = predicate(self.device.screenshot())
+            result = predicate(self.device.screenshot(next_frame=True))
             if result:
                 return result
             if time.monotonic() >= deadline:
                 return None
-            time.sleep(self.config.poll_interval)
 
     def _throw(self, ball_xy: tuple[int, int]) -> None:
         bx, by = self._jitter(*ball_xy)
@@ -618,16 +623,17 @@ class CatchRoutine:
         cfg = self.config
         self.stats.cycles += 1
         self._ensure_calibrated()
+        frame = self.device.screenshot()
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
-        if self._drain_popups():
+        if self._drain_popups(frame):
             return False
 
         # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
         # reads "x0". Checking here (before hunting the nearby bar) also rescues us when a useless
         # throw left us stuck in the encounter — the nearby bar never returns, but the badge does.
         # Flee via the running-man button and flag the loop to hold off catching.
-        if self._noball_tpl is not None and self._is_out_of_balls(self.device.screenshot()):
+        if self._noball_tpl is not None and self._is_out_of_balls(frame):
             self.device.tap(*cfg.flee_xy)
             self._no_balls = True
             self.stats.last_event = "no_balls"
@@ -640,7 +646,9 @@ class CatchRoutine:
             # Manual alignment: tap the fixed slot directly, don't trust the flaky '@' detection.
             slot = cfg.nearby_slot
         else:
-            slot = self._poll(self._slot_in, cfg.anchor_timeout)
+            slot = self._slot_in(frame)
+            if slot is None:
+                slot = self._poll(self._slot_in, cfg.anchor_timeout)
             if slot is None:
                 if cfg.require_anchor:
                     self._interruptible_sleep(cfg.idle_poll)

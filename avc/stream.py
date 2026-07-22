@@ -49,8 +49,8 @@ class ScreenStream:
         self.bitrate = bitrate
         # Encode at half resolution by default: the phone's H.264 encoder then works on
         # 1/4 of the pixels (much less heat) and the PC decodes 4x faster, so frames never
-        # back up in the pipe and latest() stays truly "now". Frames are upscaled back to
-        # native size after decode so template matching and tap coordinates are unaffected.
+        # back up in the pipe and latest() stays truly "now". Frames are upscaled lazily
+        # only when consumed, so skipped decoder frames cost no resize work.
         # half=False keeps the native resolution — needed when tiny UI text must stay
         # sharp enough for template matching (the shundo IV read).
         self.native_size = native_size
@@ -61,6 +61,9 @@ class ScreenStream:
         self._use_size = self._half_size is not None
         self._frame: np.ndarray | None = None
         self._lock = threading.Lock()
+        self._ready = threading.Condition(self._lock)
+        self._sequence = 0
+        self._native_cache: tuple[int, np.ndarray] | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._proc: subprocess.Popen | None = None
@@ -98,11 +101,12 @@ class ScreenStream:
                     if self._stop.is_set():
                         break
                     img = frame.to_ndarray(format="bgr24")
-                    if self.native_size is not None and (img.shape[1], img.shape[0]) != self.native_size:
-                        img = cv2.resize(img, self.native_size, interpolation=cv2.INTER_LINEAR)
                     got_frame = True
-                    with self._lock:
+                    with self._ready:
                         self._frame = img
+                        self._sequence += 1
+                        self._native_cache = None
+                        self._ready.notify_all()
             except Exception:
                 # Transient decode/adb hiccup: pause briefly and relaunch.
                 time.sleep(0.3)
@@ -123,16 +127,26 @@ class ScreenStream:
                 pass
             self._proc = None
 
-    def latest(self, timeout: float = 5.0) -> np.ndarray | None:
-        """Most recent frame, waiting up to `timeout` for the first one to arrive."""
+    def latest(self, timeout: float = 5.0, *, after_sequence: int | None = None,
+               with_sequence: bool = False):
+        """Return the latest frame, optionally waiting until its sequence is newer."""
         deadline = time.monotonic() + timeout
-        while True:
-            with self._lock:
-                if self._frame is not None:
-                    return self._frame
-            if time.monotonic() >= deadline or self._stop.is_set():
-                return None
-            time.sleep(0.02)
+        with self._ready:
+            while self._frame is None or (after_sequence is not None and self._sequence <= after_sequence):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._stop.is_set():
+                    return (None, self._sequence) if with_sequence else None
+                self._ready.wait(timeout=remaining)
+            sequence = self._sequence
+            img = self._frame
+            # Resize lazily when a consumer asks for the frame, not for every decoded frame.
+            if self.native_size is not None and (img.shape[1], img.shape[0]) != self.native_size:
+                if self._native_cache is None or self._native_cache[0] != sequence:
+                    self._native_cache = (
+                        sequence, cv2.resize(img, self.native_size, interpolation=cv2.INTER_LINEAR)
+                    )
+                img = self._native_cache[1]
+            return (img, sequence) if with_sequence else img
 
     def stop(self) -> None:
         self._stop.set()
@@ -140,5 +154,7 @@ class ScreenStream:
         if self._thread:
             self._thread.join(timeout=2.0)
         self._thread = None
-        with self._lock:
+        with self._ready:
             self._frame = None
+            self._native_cache = None
+            self._ready.notify_all()

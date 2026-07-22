@@ -87,6 +87,7 @@ def find_popup_close(
     threshold: float = 0.7,
     scales: tuple[float, ...] = (1.0,),
     fallback_scales: tuple[float, ...] = (),
+    cache: dict | None = None,
 ) -> Match | None:
     """Find a modal close X without relying on a particular device resolution.
 
@@ -106,7 +107,7 @@ def find_popup_close(
         candidates: list[Match] = []
         for template in usable:
             candidates.extend(find_fast(scene, template, threshold=threshold,
-                                        scales=sweep, max_matches=1, region=region))
+                                        scales=sweep, max_matches=1, region=region, cache=cache))
         if candidates:
             return max(candidates, key=lambda match: match.score)
     return None
@@ -122,6 +123,7 @@ def find_fast(
     grayscale: bool = True,
     region: tuple[int, int, int, int] | None = None,
     reduction: float = 0.3,
+    cache: dict | None = None,
 ) -> list[Match]:
     """A coordinate-preserving, downsampled variant of :func:`find` for large UI controls."""
     height, width = scene.shape[:2]
@@ -133,8 +135,13 @@ def find_fast(
     x1, y1 = min(width, x0 + rw), min(height, y0 + rh)
     if x1 <= x0 or y1 <= y0:
         return []
-    search = cv2.resize(scene[y0:y1, x0:x1], None, fx=reduction, fy=reduction,
-                        interpolation=cv2.INTER_AREA)
+    cache_key = (id(scene), x0, y0, x1, y1, reduction)
+    search = cache.get(cache_key) if cache is not None else None
+    if search is None:
+        search = cv2.resize(scene[y0:y1, x0:x1], None, fx=reduction, fy=reduction,
+                            interpolation=cv2.INTER_AREA)
+        if cache is not None:
+            cache[cache_key] = search
     reduced_scales = tuple(scale * reduction for scale in scales)
     matches = find(search, template, threshold=threshold, scales=reduced_scales,
                    max_matches=max_matches, grayscale=grayscale)
