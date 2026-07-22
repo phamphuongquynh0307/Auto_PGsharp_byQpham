@@ -282,6 +282,28 @@ class Device:
             if i + 1 < tap_count:
                 time.sleep(max(0, int(flee_gap_ms)) / 1000.0)
 
+    def quick_catch_throw(self, berry_start: tuple[int, int], berry_end: tuple[int, int],
+                          ball_start: tuple[int, int], ball_end: tuple[int, int],
+                          throw_duration_ms: int = 100) -> None:
+        """Perform only the two-finger Quick Catch throw; the routine exits adaptively.
+
+        Keeping Flee outside this low-level gesture lets the vision loop confirm that the
+        encounter is still open before retrying, instead of blindly tapping onto the map.
+        """
+        bsx, bsy = map(int, berry_start)
+        bex, bey = map(int, berry_end)
+        sx, sy = map(int, ball_start)
+        ex, ey = map(int, ball_end)
+        self._ensure_control()
+        self._touch(0, 0, bsx, bsy)
+        self._touch_line(0, (bsx, bsy), (bex, bey), 80)
+        time.sleep(0.02)  # let the Berry drawer settle while pointer 0 remains held
+        self._touch(0, 1, sx, sy)
+        time.sleep(0.02)  # make sure pointer 1 owns the ball before the fast flick
+        self._touch_line(1, (sx, sy), (ex, ey), throw_duration_ms)
+        self._touch(1, 1, ex, ey)
+        self._touch(1, 0, bex, bey)
+
     def control_swipe(self, x1: int, y1: int, x2: int, y2: int,
                       duration_ms: int = 240) -> None:
         """Low-latency one-finger swipe over the persistent scrcpy control socket."""

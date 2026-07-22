@@ -104,9 +104,9 @@ class CatchConfig:
     quick_catch: bool = False
     quick_flick_ms: int = 100
     encounter_touch_delay_ms: int = 200
-    post_throw_wait_ms: int = 1000
-    flee_taps: int = 3
-    flee_gap_ms: int = 200
+    post_throw_wait_ms: int = 350
+    flee_taps: int = 2
+    flee_gap_ms: int = 250
     berry_start: tuple[int, int] = (145, 2410)
     berry_end: tuple[int, int] = (390, 2410)
 
@@ -597,12 +597,24 @@ class CatchRoutine:
     def _quick_throw(self, ball_xy: tuple[int, int]) -> None:
         bx, by = self._jitter(*ball_xy)
         ex, ey = self._jitter(bx, by + self.config.throw_dy)
-        self.device.quick_catch(
+        self.device.quick_catch_throw(
             self.config.berry_start, self.config.berry_end,
-            (bx, by), (ex, ey), self.config.flee_xy,
-            self.config.quick_flick_ms, self.config.post_throw_wait_ms,
-            self.config.flee_taps, self.config.flee_gap_ms,
+            (bx, by), (ex, ey), self.config.quick_flick_ms,
         )
+        # MuMu can show the Flee button before the throw is committed. A small floor keeps
+        # the first exit tap safe; configured extra wait is still honoured on slower phones.
+        commit_wait = max(0.35, self.config.post_throw_wait_ms / 1000.0)
+        self._interruptible_sleep(commit_wait)
+        attempts = max(1, self.config.flee_taps)
+        for attempt in range(attempts):
+            if self.stop_event.is_set():
+                return
+            self.device.tap(*self.config.flee_xy)
+            # Stop immediately when a fresh frame confirms the encounter is gone. This is
+            # the debounce that prevents later Flee taps landing on the map.
+            if self._poll(lambda f: True if self._ball_in(f) is None else None,
+                          max(0.25, self.config.flee_gap_ms / 1000.0)):
+                return
 
     def _ensure_calibrated(self) -> None:
         """Measure how big the UI actually renders on this device (once), from the always-on
