@@ -1,3 +1,29 @@
+# v1.1.5
+
+## Tiếng Việt
+
+### Log chẩn đoán nhận diện
+
+- Hiển thị trực tiếp trong khung log từng bước Nearby, mở encounter, chờ bóng và ném.
+- Ghi lại tọa độ ô Pokémon và quả bóng mà detector đã chọn.
+- Báo thời gian encounter phản hồi trễ, thời gian phục hồi còn lại và nguyên nhân timeout.
+- Xác nhận cú ném đã được detector ghi nhận hoặc cảnh báo khi bóng vẫn còn sau thời gian chờ.
+- Debounce các thông báo lặp để log dễ đọc và không ảnh hưởng luồng bắt.
+
+---
+
+## English
+
+### Detection diagnostics
+
+- Shows each Nearby, encounter opening, ball wait, and throw stage directly in the application log.
+- Records the coordinates selected by the Pokémon-slot and ball detectors.
+- Reports delayed encounter timing, remaining recovery time, and timeout reasons.
+- Confirms when the detector observes a committed throw or warns when the ball remains visible.
+- Debounces repeated messages to keep diagnostics readable without affecting the catch loop.
+
+---
+
 # v1.1.4
 
 ## Tiếng Việt

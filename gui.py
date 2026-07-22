@@ -1450,6 +1450,7 @@ class App:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 cfg = self._apply_manual(cfg, "catch")
                 self.routine = CatchRoutine(self.device, cfg)
+                self.routine._on_trace = self.log_queue.put
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))
             return

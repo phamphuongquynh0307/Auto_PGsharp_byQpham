@@ -254,6 +254,9 @@ class CatchRoutine:
         self._nearby_presence_streak = 0
         self._encounter_pending = False
         self._encounter_pending_since = 0.0
+        self._on_trace = None
+        self._trace_last_key = ""
+        self._trace_last_at = 0.0
 
         def load(path):
             return load_template(_resolve(path))
@@ -628,11 +631,31 @@ class CatchRoutine:
                           max(0.25, self.config.flee_gap_ms / 1000.0)):
                 return
 
+    def _trace(self, key: str, message: str, repeat_after: float = 1.5) -> None:
+        """Send a debounced detector trace to the GUI without affecting the catch loop."""
+        callback = self._on_trace
+        if callback is None:
+            return
+        now = time.monotonic()
+        if key == self._trace_last_key and now - self._trace_last_at < repeat_after:
+            return
+        self._trace_last_key = key
+        self._trace_last_at = now
+        try:
+            callback(f"[Nhận diện] {message}")
+        except Exception:  # noqa: BLE001 - diagnostics must never stop automation
+            pass
+
     def _complete_open_encounter(self, ball_xy: tuple[int, int]) -> bool:
         """Finish an encounter once the precise ball detector says it is ready."""
         cfg = self.config
         self._encounter_pending = False
         self._encounter_pending_since = 0.0
+        self._trace(
+            "throw_start",
+            f"Thấy bóng tại {ball_xy}; bắt đầu ném ({'nhanh' if cfg.quick_catch else 'thường'}).",
+            0.0,
+        )
         self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
         if self.stop_event.is_set():
             return False
@@ -641,7 +664,22 @@ class CatchRoutine:
             self._quick_throw(ball_xy)
         else:
             self._throw(ball_xy)
-        self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
+        encounter_closed = self._poll(
+            lambda f: True if self._ball_in(f) is None else None,
+            cfg.catch_timeout,
+        )
+        if encounter_closed:
+            self._trace(
+                "throw_committed",
+                "Bóng đã rời vị trí ném; detector ghi nhận cú ném.",
+                0.0,
+            )
+        else:
+            self._trace(
+                "throw_commit_timeout",
+                f"Hết {cfg.catch_timeout:.1f}s nhưng detector vẫn thấy bóng; có thể thao tác ném không được game nhận.",
+                0.0,
+            )
         if cfg.settle_after_catch > 0:
             self._poll(self._slot_in, cfg.settle_after_catch)
         return True
@@ -690,6 +728,11 @@ class CatchRoutine:
                 - (time.monotonic() - self._encounter_pending_since)
             )
             if recovery_left <= 0:
+                self._trace(
+                    "encounter_recovery_timeout",
+                    f"Không thấy bóng sau {cfg.encounter_recovery_timeout:.1f}s; quay lại quét Nearby.",
+                    0.0,
+                )
                 self._encounter_pending = False
                 self._encounter_pending_since = 0.0
                 return False
@@ -697,8 +740,19 @@ class CatchRoutine:
             if ball_xy is None:
                 ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, recovery_left))
             if ball_xy is not None:
+                waited = time.monotonic() - self._encounter_pending_since
+                self._trace(
+                    "encounter_recovered",
+                    f"Bóng xuất hiện trễ sau {waited:.2f}s; tiếp tục ném.",
+                    0.0,
+                )
                 return self._complete_open_encounter(ball_xy)
             if time.monotonic() - self._encounter_pending_since >= cfg.encounter_recovery_timeout:
+                self._trace(
+                    "encounter_recovery_timeout",
+                    f"Không thấy bóng sau {cfg.encounter_recovery_timeout:.1f}s; quay lại quét Nearby.",
+                    0.0,
+                )
                 self._encounter_pending = False
                 self._encounter_pending_since = 0.0
                 return False
@@ -711,6 +765,7 @@ class CatchRoutine:
         if slot is None:
             slot = self._poll(self._occupied_slot_in, cfg.anchor_timeout)
         if slot is None:
+            self._trace("nearby_empty", "Không tìm thấy ô Nearby có Pokémon.")
             self._interruptible_sleep(cfg.idle_poll)
             return False
 
@@ -719,6 +774,11 @@ class CatchRoutine:
         self._double_tap(*slot)
         self._encounter_pending = True
         self._encounter_pending_since = time.monotonic()
+        self._trace(
+            "nearby_tap",
+            f"Đã xác nhận Pokémon tại {slot} và bấm mở encounter.",
+            0.0,
+        )
         # Start the gesture on the first stream frame where the throwable ball is ready.
         # The early centre-ball signal appears before the selector animation. A short
         # fallback cap prevents a lagging stream from stalling the catch.
@@ -731,6 +791,13 @@ class CatchRoutine:
         if ball_xy is None:
             # No encounter opened (empty nearby slot / Pokémon fled). Never throw blind here:
             # a fallback swipe on the map just drags the camera and burns the cycle.
+            elapsed = time.monotonic() - self._encounter_pending_since
+            remaining = max(0.0, cfg.encounter_recovery_timeout - elapsed)
+            self._trace(
+                "encounter_initial_miss",
+                f"Chưa thấy bóng sau {elapsed:.2f}s; chờ phục hồi thêm tối đa {remaining:.2f}s.",
+                0.0,
+            )
             self._interruptible_sleep(cfg.idle_poll)
             return False
         return self._complete_open_encounter(ball_xy)
