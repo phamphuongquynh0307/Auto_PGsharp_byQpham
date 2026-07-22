@@ -160,11 +160,11 @@ LANG = {
     "catch_style":   {"vi": "Kiểu bắt:", "en": "Catch style:"},
     "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
     "catch_quick":   {"vi": "Auto bắt nhanh (không cần PGSharp key)", "en": "Quick auto catch (no PGSharp key)"},
-    "quick_flick":   {"vi": "Flick Quick Catch (ms, thấp = nhanh):", "en": "Quick Catch flick (ms, lower = faster):"},
-    "touch_delay":   {"vi": "Chờ bóng sẵn sàng trước ném (ms):", "en": "Ball-ready delay before throw (ms):"},
-    "post_throw":    {"vi": "Chờ sau ném trước khi thoát (ms):", "en": "Wait after throw before flee (ms):"},
+    "quick_flick":   {"vi": "Flick Quick Catch (giây):", "en": "Quick Catch flick (s):"},
+    "touch_delay":   {"vi": "Chờ bóng sẵn sàng trước ném (giây):", "en": "Ball-ready delay before throw (s):"},
+    "post_throw":    {"vi": "Chờ sau ném trước khi thoát (giây):", "en": "Wait after throw before flee (s):"},
     "flee_taps":     {"vi": "Số lần nhấn thoát:", "en": "Flee tap count:"},
-    "flee_gap":      {"vi": "Khoảng cách các lần thoát (ms):", "en": "Flee tap gap (ms):"},
+    "flee_gap":      {"vi": "Khoảng cách các lần thoát (giây):", "en": "Flee tap gap (s):"},
     "wait_enc":      {"vi": "Chờ mở màn bắt tối đa (giây):", "en": "Max wait for encounter (s):"},
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
@@ -247,7 +247,7 @@ LANG = {
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
-    "alert_report":  {"vi": "Báo cáo định kỳ (phút, 0=tắt):", "en": "Status report every (min, 0=off):"},
+    "alert_report":  {"vi": "Báo cáo định kỳ (giây, 0=tắt):", "en": "Status report every (s, 0=off):"},
     "alert_batt":    {"vi": "Báo pin yếu dưới (%, 0=tắt):", "en": "Low battery alert below (%, 0=off):"},
     "language":      {"vi": "Ngôn ngữ / Language:", "en": "Language / Ngôn ngữ:"},
     "run":           {"vi": "▶ Chạy", "en": "▶ Run"},
@@ -441,16 +441,20 @@ class App:
                                                state="readonly", width=30)
         self.catch_style_combo.grid(row=0, column=1, sticky="e", padx=6, pady=2)
         self.catch_style_combo.bind("<<ComboboxSelected>>", self._on_catch_style_change)
-        self.quick_flick = self._spin(catch_grp, "quick_flick", 8, 50, 500, 100)
+        self.quick_flick = self._spin(catch_grp, "quick_flick", 8, 0.05, 0.5, 0.1,
+                                      is_float=True, increment=0.05)
         self.wait_enc = self._spin(catch_grp, "wait_enc", 4, 2, 15, 3.0, is_float=True)
         self.wait_catch = self._spin(catch_grp, "wait_catch", 6, 2, 20, 6.0, is_float=True)
         self.idle_aw = self._spin(catch_grp, "idle_aw", 3, 0, 20, 3)
         self.max_catches = self._spin(catch_grp, "max_catches", 2, 0, 9999, 0)
         self.settle = self._spin(catch_grp, "settle", 7, 0, 15, 1.2, is_float=True)
-        self.touch_delay = self._spin(catch_grp, "touch_delay", 5, 0, 1000, 200)
-        self.post_throw = self._spin(catch_grp, "post_throw", 9, 0, 3000, 350)
+        self.touch_delay = self._spin(catch_grp, "touch_delay", 5, 0, 1, 0.2,
+                                      is_float=True, increment=0.05)
+        self.post_throw = self._spin(catch_grp, "post_throw", 9, 0, 3, 0.35,
+                                     is_float=True, increment=0.05)
         self.flee_taps = self._spin(catch_grp, "flee_taps", 10, 1, 6, 2)
-        self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 50, 1000, 250)
+        self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 0.05, 1, 0.25,
+                                   is_float=True, increment=0.05)
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
         dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
@@ -487,7 +491,7 @@ class App:
         self.webhook_url = tk.StringVar()
         ttk.Entry(dc_grp, textvariable=self.webhook_url, width=34).grid(row=0, column=1, sticky="ew", padx=6, pady=2)
         self.alert_idle = self._spin(dc_grp, "alert_idle", 1, 0, 200, 10)
-        self.alert_report = self._spin(dc_grp, "alert_report", 2, 0, 720, 30)
+        self.alert_report = self._spin(dc_grp, "alert_report", 2, 0, 43200, 1800)
         self.alert_batt = self._spin(dc_grp, "alert_batt", 3, 0, 90, 20)
         dc_grp.columnconfigure(1, weight=1)
 
@@ -548,10 +552,10 @@ class App:
         btn.config(text=self.tr("copied"))
         self.root.after(1500, lambda: btn.config(text=self.tr("copy")))
 
-    def _spin(self, parent, key, row, lo, hi, default, is_float=False):
+    def _spin(self, parent, key, row, lo, hi, default, is_float=False, increment=None):
         self._label(parent, key, row=row, column=0, sticky="w", padx=6, pady=2)
         var = tk.DoubleVar(value=default) if is_float else tk.IntVar(value=default)
-        inc = 0.5 if is_float else 1
+        inc = increment if increment is not None else (0.5 if is_float else 1)
         spin = ttk.Spinbox(parent, from_=lo, to=hi, textvariable=var, width=10, increment=inc)
         spin.grid(row=row, column=1, sticky="e", padx=6, pady=2)
         parent.columnconfigure(1, weight=1)
@@ -633,9 +637,15 @@ class App:
     def _apply_settings(self, data: dict) -> None:
         if not data:
             return
+        seconds_format = data.get("timing_unit") == "seconds"
+
+        def timing(name: str, legacy_default: float, seconds_default: float) -> float:
+            value = float(data.get(name, seconds_default if seconds_format else legacy_default))
+            return value if seconds_format else value / 1000.0
+
         self.slot_offset.set(data.get("slot_offset", int(self.slot_offset.get())))
         self.throw_power.set(data.get("throw_power", int(self.throw_power.get())))
-        self.quick_flick.set(data.get("quick_flick", int(self.quick_flick.get())))
+        self.quick_flick.set(timing("quick_flick", 100.0, 0.1))
         # Encounters take ~2-3s to open; a stored wait below that makes the routine give up
         # mid-load and re-tap from scratch every cycle, so clamp old too-low values.
         self.wait_enc.set(max(2.0, float(data.get("wait_enc", self.wait_enc.get()))))
@@ -643,10 +653,10 @@ class App:
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
         self.settle.set(max(0.0, float(data.get("settle", self.settle.get()))))
-        self.touch_delay.set(data.get("touch_delay", int(self.touch_delay.get())))
-        self.post_throw.set(data.get("post_throw", int(self.post_throw.get())))
+        self.touch_delay.set(timing("touch_delay", 200.0, 0.2))
+        self.post_throw.set(timing("post_throw", 350.0, 0.35))
         self.flee_taps.set(data.get("flee_taps", int(self.flee_taps.get())))
-        self.flee_gap.set(data.get("flee_gap", int(self.flee_gap.get())))
+        self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
@@ -661,25 +671,27 @@ class App:
         self.alert_shiny.set(data.get("alert_shiny", True))
         self.webhook_url.set(data.get("webhook", ""))
         self.alert_idle.set(data.get("alert_idle", int(self.alert_idle.get())))
-        self.alert_report.set(data.get("alert_report", int(self.alert_report.get())))
+        report_value = float(data.get("alert_report", 30 if not seconds_format else 1800))
+        self.alert_report.set(int(report_value if seconds_format else report_value * 60))
         self.alert_batt.set(data.get("alert_batt", int(self.alert_batt.get())))
         if data.get("device"):
             self.device_var.set(data["device"])
 
     def save_settings(self) -> None:
         data = {
+            "timing_unit": "seconds",
             "slot_offset": int(self.slot_offset.get()),
             "throw_power": int(self.throw_power.get()),
-            "quick_flick": int(self.quick_flick.get()),
+            "quick_flick": float(self.quick_flick.get()),
             "wait_enc": float(self.wait_enc.get()),
             "wait_catch": float(self.wait_catch.get()),
             "idle_aw": int(self.idle_aw.get()),
             "max_catches": int(self.max_catches.get()),
             "settle": float(self.settle.get()),
-            "touch_delay": int(self.touch_delay.get()),
-            "post_throw": int(self.post_throw.get()),
+            "touch_delay": float(self.touch_delay.get()),
+            "post_throw": float(self.post_throw.get()),
             "flee_taps": int(self.flee_taps.get()),
-            "flee_gap": int(self.flee_gap.get()),
+            "flee_gap": float(self.flee_gap.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
@@ -1047,8 +1059,8 @@ class App:
                     self._batt_fired = False
 
         # Heartbeat report: totals since start. Silence past the interval = something is wrong.
-        report_min = 0 if shundo else int(self.alert_report.get())
-        if report_min > 0 and now - self._last_report >= report_min * 60:
+        report_seconds = 0 if shundo else int(self.alert_report.get())
+        if report_seconds > 0 and now - self._last_report >= report_seconds:
             self._last_report = now
             up_min = int((now - self._run_started) / 60)
             rate = round(done / max((now - self._run_started) / 3600, 1 / 60))
@@ -1428,11 +1440,11 @@ class App:
                     max_catches=int(self.max_catches.get()),
                     settle_after_catch=max(0.0, float(self.settle.get())),
                     quick_catch=self.catch_style == "quick",
-                    quick_flick_ms=max(50, int(self.quick_flick.get())),
-                    encounter_touch_delay_ms=max(0, int(self.touch_delay.get())),
-                    post_throw_wait_ms=max(0, int(self.post_throw.get())),
+                    quick_flick_ms=max(50, int(round(float(self.quick_flick.get()) * 1000))),
+                    encounter_touch_delay_ms=max(0, int(round(float(self.touch_delay.get()) * 1000))),
+                    post_throw_wait_ms=max(0, int(round(float(self.post_throw.get()) * 1000))),
                     flee_taps=max(1, int(self.flee_taps.get())),
-                    flee_gap_ms=max(0, int(self.flee_gap.get())),
+                    flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
