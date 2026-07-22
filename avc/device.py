@@ -30,6 +30,8 @@ class AdbError(RuntimeError):
 
 
 class Device:
+    MUMU_SERIAL = "127.0.0.1:7555"
+
     def __init__(self, serial: str | None = None, adb_path: str | None = None) -> None:
         self.adb_path = adb_path or find_adb()
         self.serial = serial
@@ -79,12 +81,37 @@ class Device:
     @classmethod
     def list_devices(cls, adb_path: str | None = None) -> list[str]:
         adb = adb_path or find_adb()
-        out = _quiet_run([adb, "devices"], capture_output=True, text=True, timeout=15).stdout
-        serials = []
-        for line in out.splitlines()[1:]:
-            line = line.strip()
-            if line and "\tdevice" in line:
-                serials.append(line.split("\t")[0])
+        def query() -> list[str]:
+            out = _quiet_run([adb, "devices"], capture_output=True, text=True, timeout=15).stdout
+            found = []
+            for line in out.splitlines()[1:]:
+                line = line.strip()
+                if line and "\tdevice" in line:
+                    found.append(line.split("\t")[0])
+            return found
+
+        serials = query()
+
+        # MuMu exposes adbd directly on localhost, but it is not added to a newly started
+        # desktop adb server until somebody runs `adb connect`.  The bundled adb daemon is
+        # deliberately independent from MuMu's old adb_server.exe, so make local MuMu
+        # discovery automatic whenever its default endpoint is actually listening.
+        mumu_serial = cls.MUMU_SERIAL
+        if mumu_serial not in serials:
+            try:
+                with socket.create_connection(("127.0.0.1", 7555), timeout=0.2):
+                    pass
+                proc = _quiet_run(
+                    [adb, "connect", mumu_serial],
+                    capture_output=True,
+                    timeout=5,
+                )
+                if proc.returncode == 0:
+                    serials = query()
+            except (OSError, subprocess.SubprocessError):
+                # MuMu is not running (or adb is temporarily busy); keep normal USB/Wi-Fi
+                # discovery working and let the next Refresh try again.
+                pass
         return serials
 
     @classmethod
@@ -184,14 +211,32 @@ class Device:
 
     # -- input ----------------------------------------------------------------
     def tap(self, x: int, y: int) -> None:
-        self._run(["shell", "input", "tap", str(int(x)), str(int(y))])
-
-    def double_tap(self, x: int, y: int) -> None:
-        """Two taps in ONE adb invocation. Two separate tap() calls pay the adb
-        round-trip twice (0.5s+ over Wi-Fi), which the game no longer reads as a
-        double-tap; chained on-device the gap is just the input binary's startup."""
         x, y = int(x), int(y)
-        self._run(["shell", f"input tap {x} {y}; input tap {x} {y}"])
+        try:
+            self._ensure_control()
+            self._control_tap(x, y)
+        except Exception:
+            self.close_control()
+            self._run(["shell", "input", "tap", str(x), str(y)])
+
+    def double_tap(self, x: int, y: int, gap_ms: int = 90) -> None:
+        """Send a real double-tap through scrcpy's persistent control socket.
+
+        MuMu takes roughly 700 ms to execute each ``input tap`` command, even when
+        both are chained inside one adb shell.  That is far beyond Android's
+        double-tap window.  The control socket emits touch down/up events immediately.
+        """
+        x, y = int(x), int(y)
+        gap_s = max(1, int(gap_ms)) / 1000.0
+        try:
+            self._ensure_control()
+            self._control_tap(x, y)
+            time.sleep(gap_s)
+            self._control_tap(x, y)
+        except Exception:
+            # Preserve compatibility with devices where scrcpy control cannot start.
+            self.close_control()
+            self._run(["shell", f"input tap {x} {y}; sleep {gap_s:.3f}; input tap {x} {y}"])
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._run(
@@ -200,7 +245,9 @@ class Device:
 
     def quick_catch(self, berry_start: tuple[int, int], berry_end: tuple[int, int],
                     ball_start: tuple[int, int], ball_end: tuple[int, int],
-                    flee_xy: tuple[int, int], throw_duration_ms: int = 240) -> None:
+                    flee_xy: tuple[int, int], throw_duration_ms: int = 240,
+                    post_throw_wait_ms: int = 1000, flee_taps: int = 3,
+                    flee_gap_ms: int = 200) -> None:
         """Perform a real two-finger Pokemon GO quick-catch via scrcpy control."""
         bsx, bsy = map(int, berry_start)
         bex, bey = map(int, berry_end)
@@ -209,23 +256,36 @@ class Device:
         fx, fy = map(int, flee_xy)
         self._ensure_control()
 
+        # Exact native Quick Catch sequence: drag Berry right and HOLD, throw/release
+        # the ball with the second finger, release Berry, then press Flee three times.
         self._touch(0, 0, bsx, bsy)
-        self._touch_line(0, (bsx, bsy), (bex, bey), 140)
+        self._touch_line(0, (bsx, bsy), (bex, bey), 60)
         self._touch(0, 1, sx, sy)
         self._touch_line(1, (sx, sy), (ex, ey), throw_duration_ms)
         self._touch(1, 1, ex, ey)
         self._touch(1, 0, bex, bey)
-        # Let Pokemon GO register the released ball before closing the drawer.
-        # Leaving sooner can cancel the throw on slower devices/Wi-Fi sessions.
-        time.sleep(1.00)
-        self._control_tap(ex, ey)
-        time.sleep(0.25)
-        # Flee TWICE: a single tap often lands a hair too early (the throw is still committing)
-        # and is ignored, so the catch resolves into the XP/summary screen and we get stuck. The
-        # second tap catches the brief window once the Flee button is live and leaves cleanly.
-        self._control_tap(fx, fy)
-        time.sleep(0.15)
-        self._control_tap(fx, fy)
+        # Let the throw commit, then press Flee exactly three times at 200 ms gaps. No extra tap at the
+        # throw endpoint: that was not part of the gesture and added visible delay.
+        # MuMu needs about a second after pointer-up to commit the throw. Fleeing sooner
+        # cancels the ball gesture even though the swipe events were delivered correctly.
+        time.sleep(max(0, int(post_throw_wait_ms)) / 1000.0)
+        tap_count = max(1, int(flee_taps))
+        for i in range(tap_count):
+            self._control_tap(fx, fy)
+            if i + 1 < tap_count:
+                time.sleep(max(0, int(flee_gap_ms)) / 1000.0)
+
+    def control_swipe(self, x1: int, y1: int, x2: int, y2: int,
+                      duration_ms: int = 240) -> None:
+        """Low-latency one-finger swipe over the persistent scrcpy control socket."""
+        try:
+            self._ensure_control()
+            self._touch(0, 0, int(x1), int(y1))
+            self._touch_line(0, (int(x1), int(y1)), (int(x2), int(y2)), duration_ms)
+            self._touch(1, 0, int(x2), int(y2))
+        except Exception:
+            self.close_control()
+            self.swipe(x1, y1, x2, y2, duration_ms)
 
     def _ensure_control(self) -> None:
         """Start scrcpy-server in control-only mode and connect its local socket."""

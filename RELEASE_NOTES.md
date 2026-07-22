@@ -1,3 +1,69 @@
+# v1.2.0
+
+## Tiếng Việt
+
+### Hỗ trợ và tối ưu MuMu Player
+
+- Tự phát hiện và kết nối MuMu qua `127.0.0.1:7555`; ưu tiên thiết bị MuMu đang online thay cho thiết bị Wi-Fi cũ đã offline.
+- Chuyển tap, double-tap, swipe và Quick Catch sang scrcpy control socket. Sau lần khởi tạo đầu, tap trên MuMu giảm từ khoảng 700 ms xuống còn khoảng 40 ms.
+- Double-tap có khoảng nghỉ chính xác, không còn bị MuMu xử lý thành một click đơn.
+
+### Quick Catch đúng chuỗi thao tác và có thể tinh chỉnh
+
+- Chuỗi thao tác: kéo Berry sang phải và giữ → ném/thả Poké Ball → thả Berry → nhấn Flee.
+- Nhận diện quả bóng lớn để bắt đầu ném sớm hơn; không phải chờ toàn bộ animation của nút chọn bóng.
+- Thêm các cài đặt:
+  - Chờ bóng sẵn sàng trước ném (ms).
+  - Chờ sau ném trước khi thoát (ms).
+  - Số lần nhấn thoát.
+  - Khoảng cách giữa các lần thoát (ms).
+- Mặc định chờ 200 ms trước ném, 1000 ms sau ném, nhấn thoát 3 lần cách nhau 200 ms.
+
+### Nhận diện và xử lý popup chính xác hơn
+
+- Sửa nhận diện encounter khi khung căn tay bao cả phần đỏ và trắng của nút chọn bóng.
+- `CLAIM REWARDS` dùng dải scale riêng và hoạt động trong cả Auto bắt lẫn Shundo.
+- Không còn bấm mù tọa độ đóng PokéStop trùng với nút Poké Ball chính trên map; chỉ đóng khi thấy nút X thật.
+
+### Chu kỳ bắt và Shundo nhanh, nhẹ hơn
+
+- Chờ theo trạng thái màn hình thay cho nhiều khoảng nghỉ cố định giữa các lần bắt.
+- Shundo nhận toast chặn non-shiny để chuyển con tiếp theo sớm hơn.
+- Giảm thời gian chờ cố định sau teleport và giới hạn detector icon `@` vào thanh bên phải.
+- Shundo dùng stream nhẹ; chỉ chụp ảnh nét khi encounter shiny cần đọc IV.
+
+---
+
+## English
+
+### MuMu Player support and performance
+
+- Automatically discovers and connects to MuMu at `127.0.0.1:7555`, preferring an online emulator over stale offline Wi-Fi devices.
+- Tap, double-tap, swipe, and Quick Catch now use the scrcpy control socket. After initial setup, MuMu tap latency drops from roughly 700 ms to about 40 ms.
+- Double-taps now use an accurate gesture gap instead of being interpreted as a single click.
+
+### Configurable native Quick Catch
+
+- Uses the correct sequence: drag and hold Berry → throw/release Poké Ball → release Berry → tap Flee.
+- Detects the large throwable ball to start earlier without waiting for the selector animation to finish.
+- Added settings for ball-ready delay, post-throw wait, Flee tap count, and Flee tap interval.
+- Defaults: 200 ms before throwing, 1000 ms before fleeing, and three Flee taps spaced 200 ms apart.
+
+### Safer detection and popup handling
+
+- Fixed encounter detection when manual alignment frames the complete red-and-white selector button.
+- `CLAIM REWARDS` now uses its own scale sweep and works in both Catch and Shundo modes.
+- Removed the blind PokéStop close fallback that overlapped the map's main Poké Ball button; the bot now requires a visible X template.
+
+### Faster catch and Shundo cycles
+
+- Replaced several fixed sleeps with screen-state-driven waits.
+- Shundo reacts to the non-shiny blocked toast and moves on sooner.
+- Reduced fixed post-teleport delay and restricted `@` anchor searches to the nearby sidebar.
+- Shundo uses a lighter live stream and requests a crisp frame only when a shiny encounter needs IV reading.
+
+---
+
 # v1.1.1
 
 ## Tiếng Việt

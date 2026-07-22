@@ -153,6 +153,10 @@ LANG = {
     "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
     "catch_quick":   {"vi": "Auto bắt nhanh (không cần PGSharp key)", "en": "Quick auto catch (no PGSharp key)"},
     "quick_flick":   {"vi": "Flick Quick Catch (ms, thấp = nhanh):", "en": "Quick Catch flick (ms, lower = faster):"},
+    "touch_delay":   {"vi": "Chờ bóng sẵn sàng trước ném (ms):", "en": "Ball-ready delay before throw (ms):"},
+    "post_throw":    {"vi": "Chờ sau ném trước khi thoát (ms):", "en": "Wait after throw before flee (ms):"},
+    "flee_taps":     {"vi": "Số lần nhấn thoát:", "en": "Flee tap count:"},
+    "flee_gap":      {"vi": "Khoảng cách các lần thoát (ms):", "en": "Flee tap gap (ms):"},
     "wait_enc":      {"vi": "Chờ mở màn bắt tối đa (giây):", "en": "Max wait for encounter (s):"},
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
@@ -414,9 +418,13 @@ class App:
         self.idle_aw = self._spin(catch_grp, "idle_aw", 6, 0, 20, 3)
         self.max_catches = self._spin(catch_grp, "max_catches", 7, 0, 9999, 0)
         self.settle = self._spin(catch_grp, "settle", 8, 0, 15, 1.2, is_float=True)
+        self.touch_delay = self._spin(catch_grp, "touch_delay", 9, 0, 1000, 200)
+        self.post_throw = self._spin(catch_grp, "post_throw", 10, 0, 3000, 1000)
+        self.flee_taps = self._spin(catch_grp, "flee_taps", 11, 1, 6, 3)
+        self.flee_gap = self._spin(catch_grp, "flee_gap", 12, 50, 1000, 200)
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=9, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
         sh_grp = ttk.LabelFrame(self.tab_settings, text=self.tr("grp_shundo"))
@@ -606,6 +614,10 @@ class App:
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
         self.settle.set(max(0.0, float(data.get("settle", self.settle.get()))))
+        self.touch_delay.set(data.get("touch_delay", int(self.touch_delay.get())))
+        self.post_throw.set(data.get("post_throw", int(self.post_throw.get())))
+        self.flee_taps.set(data.get("flee_taps", int(self.flee_taps.get())))
+        self.flee_gap.set(data.get("flee_gap", int(self.flee_gap.get())))
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
@@ -635,6 +647,10 @@ class App:
             "idle_aw": int(self.idle_aw.get()),
             "max_catches": int(self.max_catches.get()),
             "settle": float(self.settle.get()),
+            "touch_delay": int(self.touch_delay.get()),
+            "post_throw": int(self.post_throw.get()),
+            "flee_taps": int(self.flee_taps.get()),
+            "flee_gap": int(self.flee_gap.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
@@ -728,13 +744,18 @@ class App:
         options = attached + [s + self.OFFLINE_TAG for s in self.known if s not in attached]
         self.device_combo["values"] = options
         cur = self._sel_serial()
-        if cur:
-            self.device_var.set(cur if cur in attached else
-                                (cur + self.OFFLINE_TAG if cur in self.known else cur))
+        if cur in attached:
+            self.device_var.set(cur)
         elif attached:
+            # Prefer a device that is online now over a stale remembered Wi-Fi phone.
+            # This is especially important when MuMu is first discovered on localhost.
             self.device_var.set(attached[0])
+        elif cur and cur in self.known:
+            self.device_var.set(cur + self.OFFLINE_TAG)
         elif options:
             self.device_var.set(options[0])
+        else:
+            self.device_var.set("")
         if not attached:
             self._set_status("st_no_device")
         # Known Wi-Fi devices that aren't attached (adb server restarted, PC rebooted):
@@ -768,9 +789,29 @@ class App:
         • Later (no cable): reconnect the remembered Wi-Fi device — the same thing that picking
           it from the list does.
         If Wi-Fi can't be enabled it still connects over the cable, so you're never stuck."""
-        if self._usb_devices():
+        # A single discovery pass also auto-registers MuMu's localhost ADB endpoint.
+        # Adopt an online TCP device directly instead of showing the phone/USB instructions.
+        try:
+            attached = Device.list_devices()
+        except Exception as e:  # noqa: BLE001
+            self._log(self.tr("msg_dev_err").format(e))
+            attached = []
+
+        tcp_devices = [s for s in attached if ":" in s]
+        if tcp_devices:
+            current = self._sel_serial()
+            serial = current if current in tcp_devices else (
+                Device.MUMU_SERIAL if Device.MUMU_SERIAL in tcp_devices else tcp_devices[0]
+            )
+            self.device_var.set(serial)
+            self._remember_device(serial)
+            self.refresh_devices()
+            self._log(self.tr("conn_re_ok").format(serial))
+            return
+
+        if any(":" not in s for s in attached):
             # Cable plugged in → set up (or refresh) Wi-Fi so future connects are cable-free.
-            self._connect_wifi()
+            self._connect_wifi(attached)
             return
         # No cable → bring back a remembered Wi-Fi device (its adbd is still in TCP mode).
         wifi_known = [s for s in self.known if ":" in s]
@@ -840,7 +881,7 @@ class App:
                        command=lambda s=serial: (dlg.destroy(), then(s))).pack(padx=16, pady=3)
         ttk.Frame(dlg).pack(pady=6)
 
-    def _connect_wifi(self) -> None:
+    def _connect_wifi(self, attached: list[str] | None = None) -> None:
         """Turn on adb-over-Wi-Fi via the USB cable, then hand the GUI the Wi-Fi serial.
         Runs on a thread: tcpip + connect take a few seconds and must not freeze the UI."""
 
@@ -876,7 +917,15 @@ class App:
 
             threading.Thread(target=work, daemon=True).start()
 
-        self._pick_usb(start)
+        # Reuse the discovery result from Connect to avoid another adb round-trip.
+        usb = [s for s in attached if ":" not in s] if attached is not None else None
+        if usb is None or len(usb) > 1:
+            self._pick_usb(start)
+        elif usb:
+            start(usb[0])
+        else:
+            self._log(self.tr("conn_need_usb"))
+            self._set_status("st_no_device")
 
     # -- Discord alert ----------------------------------------------------------
     def _send_discord(self, content: str, shot: bool = False) -> None:
@@ -1334,6 +1383,10 @@ class App:
                     settle_after_catch=max(0.0, float(self.settle.get())),
                     quick_catch=self.catch_style == "quick",
                     quick_flick_ms=max(50, int(self.quick_flick.get())),
+                    encounter_touch_delay_ms=max(0, int(self.touch_delay.get())),
+                    post_throw_wait_ms=max(0, int(self.post_throw.get())),
+                    flee_taps=max(1, int(self.flee_taps.get())),
+                    flee_gap_ms=max(0, int(self.flee_gap.get())),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
@@ -1408,10 +1461,10 @@ class App:
             if dim:
                 self.device.enable_dim()
                 self.log_queue.put(self.tr("msg_dim"))
-            # Realtime H.264 capture. Shundo mode streams at native resolution with a
-            # higher bitrate: the IV digits are too small to survive the half-res encode.
+            # Keep the continuous stream light in both modes. Shundo requests a crisp
+            # one-shot capture only when an encounter opens and IV digits must be read.
             if self.mode == "shundo":
-                self.device.start_stream(half=False, bitrate="8M")
+                self.device.start_stream(half=True, bitrate="4M")
             else:
                 self.device.start_stream()
             self.routine.run(on_event=on_shundo_event if self.mode == "shundo" else on_event)

@@ -51,6 +51,7 @@ class ShundoConfig:
     # (gray std ~15) while a Pokémon sprite is busy (std ~45+).
     anchor_template: str = "templates/nearby_anchor.png"
     anchor_threshold: float = 0.7
+    anchor_region: tuple[int, int, int, int] = (760, 200, 460, 1800)
     slot_offset_y: int = 770        # '@' anchor -> first (top) slot center; the double-tap target
     slot_patch: int = 110           # square patch height inspected per band
     # "Spawn loaded" is decided by scanning the whole nearby-bar column (not one fixed
@@ -66,7 +67,7 @@ class ShundoConfig:
     # Waiting for that clear keeps a stale entry from the previous location from being
     # mistaken for the new spawn (the icons all look alike on event days). If the bar
     # never clears (short hop), proceed after this cap.
-    bar_clear_timeout: float = 10.0
+    bar_clear_timeout: float = 2.0
     # Loading can be slow (hot phone, teleport cooldown), so stay put and keep waiting
     # for the spawn instead of teleporting away to another feed entry. 0 = wait until it
     # loads or the user stops (the user's explicit preference); a positive value caps the
@@ -85,7 +86,7 @@ class ShundoConfig:
     # shown once the encounter is open, for any loaded ball type. Colour match, so it reads the
     # same on any background (unlike the old semi-transparent camera icon). Same box as the
     # catch routine's; see CatchConfig.enc_ball_region.
-    enc_ball_region: tuple[int, int, int, int] = (1030, 2408, 70, 40)
+    enc_ball_region: tuple[int, int, int, int] = (1016, 2369, 70, 40)
     enc_ball_red_frac: float = 0.5
 
     # PGSharp info pill glyphs for the 15/15/15 check.
@@ -117,6 +118,7 @@ class ShundoConfig:
     # Popups. Teleporting long distances reliably triggers the speed warning.
     popup_speed_template: str = "templates/popup_speed.png"
     popup_weather_template: str = "templates/popup_weather.png"     # "I AM SAFE" green button (weather warning)
+    claim_rewards_template: str = "templates/claim_rewards.png"
     close_btn_template: str = "templates/close_btn.png"
     close_btn_blue_template: str = "templates/close_btn_blue.png"
     close_btn_white_template: str = "templates/close_btn_white.png"
@@ -124,7 +126,7 @@ class ShundoConfig:
 
     # Timing (seconds).
     teleport_wait: float = 4.0      # after the feed tap, let spawns + nearby bar load
-    poll_interval: float = 0.15
+    poll_interval: float = 0.08
     idle_poll: float = 1.5          # pause between cycles when the feed bar is missing
 
     # What to do when a shundo is found: "pause" (default) or "stop".
@@ -166,6 +168,7 @@ class ShundoConfig:
             self,
             screen=(width, height),
             density=density,
+            anchor_region=L.region(self.anchor_region, "TR"),
             # anchored regions/positions
             enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
@@ -224,6 +227,7 @@ class ShundoRoutine:
         self._menu_star = load_opt(self.config.menu_star_template)
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
+        self._claim_rewards = load_opt(self.config.claim_rewards_template)
         self._close_btns = [
             b for b in (
                 load_opt(self.config.close_btn_template),
@@ -265,7 +269,8 @@ class ShundoRoutine:
 
     # -- element lookups ---------------------------------------------------------
     def _anchor_in(self, frame) -> tuple[int, int] | None:
-        m = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=self._scales)
+        m = find(frame, self._anchor, threshold=self.config.anchor_threshold,
+                 scales=self._scales, region=self.config.anchor_region, max_matches=1)
         return m[0].center if m else None
 
     def _target_in_bar(self, frame) -> bool:
@@ -315,7 +320,8 @@ class ShundoRoutine:
         p = patch.astype(int)
         b, g, r = p[..., 0], p[..., 1], p[..., 2]
         red = (r > 110) & (r - g > 40) & (r - b > 40)
-        return float(red.mean()) >= self.config.enc_ball_red_frac
+        dome = red[:max(1, red.shape[0] // 2)]
+        return float(dome.mean()) >= self.config.enc_ball_red_frac
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -362,6 +368,22 @@ class ShundoRoutine:
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
+                return True
+        if self._claim_rewards is not None:
+            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold,
+                     scales=CALIBRATION_SWEEP)
+            if m:
+                self.device.tap(*m[0].center)
+                self.stats.last_event = "popup"
+                # Advance through the reward cards until the nearby bar returns.
+                cx, cy = self.config.pt((610, 1000), "TC")
+                deadline = time.monotonic() + 15.0
+                while time.monotonic() < deadline and not self.stop_event.is_set():
+                    self._interruptible_sleep(0.5)
+                    f = self.device.screenshot()
+                    if self._anchor_in(f) is not None:
+                        break
+                    self.device.tap(cx, cy)
                 return True
         # Never tap a close button while an encounter is up — that region overlaps game UI.
         # A stray Pokéstop screen is closed by its templated X as well; no blind fixed-spot
@@ -437,7 +459,7 @@ class ShundoRoutine:
         self._ensure_calibrated()
 
         if self._handle_popups():
-            self._interruptible_sleep(1.0)
+            self._interruptible_sleep(0.25)
             return "popup"
 
         # An encounter already open at cycle start is a shiny whose answer we missed
@@ -460,13 +482,15 @@ class ShundoRoutine:
             self.stats.last_event = "idle"
             return "idle"
         self.device.tap(*slot)
-        self._interruptible_sleep(cfg.teleport_wait)
+        # The clear/load loops below already wait on real screen state. Only allow a
+        # short transition head-start instead of always burning the full 4 seconds.
+        self._interruptible_sleep(min(0.75, cfg.teleport_wait))
         if self.stop_event.is_set():
             return "idle"
 
         # Teleporting far reliably raises the speed warning — clear it before tapping on.
         if self._handle_popups():
-            self._interruptible_sleep(1.0)
+            self._interruptible_sleep(0.25)
 
         # Step 2a: the far teleport reloads spawns and empties the nearby '@' bar.
         # Wait for that clear first, so an entry left over from the previous location
@@ -477,7 +501,7 @@ class ShundoRoutine:
             if not self._target_in_bar(self.device.screenshot()):
                 break
             if self._handle_popups():
-                self._interruptible_sleep(0.8)
+                self._interruptible_sleep(0.25)
                 continue
             time.sleep(cfg.poll_interval)
 
@@ -495,7 +519,7 @@ class ShundoRoutine:
                 loaded = True
                 break
             if self._handle_popups():
-                self._interruptible_sleep(0.8)
+                self._interruptible_sleep(0.25)
                 continue
             now = time.monotonic()
             if cfg.spawn_timeout and now - start >= cfg.spawn_timeout:
@@ -518,7 +542,14 @@ class ShundoRoutine:
             anchor = self._anchor_in(frame)
             if anchor is not None:
                 self.device.double_tap(anchor[0], anchor[1] - cfg.slot_offset_y)
-            answer = "shiny" if self._poll(self._enc_ball_visible, cfg.encounter_open_wait) else "blocked"
+            def encounter_answer(f):
+                if self._enc_ball_visible(f):
+                    return "shiny"
+                if self._blocked_toast_in(f):
+                    return "blocked"
+                return None
+
+            answer = self._poll(encounter_answer, cfg.encounter_open_wait) or "blocked"
         self.stats.checked += 1
 
         if answer == "blocked":
@@ -535,7 +566,9 @@ class ShundoRoutine:
         for _ in range(cfg.iv_read_tries):
             if self.stop_event.is_set():
                 return "shiny"
-            if self._is_hundo(self.device.screenshot()):
+            # The normal stream is intentionally half-resolution for smooth MuMu
+            # operation. A rare shiny gets a crisp one-shot frame for tiny IV glyphs.
+            if self._is_hundo(self.device.screenshot(fresh=True)):
                 self.stats.shundos += 1
                 self.stats.last_event = "shundo"
                 return "shundo"

@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, replace
 
 import os
+import numpy as np
 
 from .device import Device
 from .layout import (
@@ -78,7 +79,7 @@ class CatchConfig:
     # checking the throwable ball (blue Great Balls / yellow Ultra Balls aren't red). Off the
     # encounter (map, post-catch "Gotcha") the selector is gone, so red here also means "in an
     # encounter", which doubles as the leave/next-cycle signal.
-    enc_ball_region: tuple[int, int, int, int] = (1030, 2408, 70, 40)
+    enc_ball_region: tuple[int, int, int, int] = (1016, 2369, 70, 40)
     enc_ball_red_frac: float = 0.5
 
     # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
@@ -102,6 +103,10 @@ class CatchConfig:
     # dragged open while throwing, then leave the encounter to skip the animation.
     quick_catch: bool = False
     quick_flick_ms: int = 100
+    encounter_touch_delay_ms: int = 200
+    post_throw_wait_ms: int = 1000
+    flee_taps: int = 3
+    flee_gap_ms: int = 200
     berry_start: tuple[int, int] = (145, 2410)
     berry_end: tuple[int, int] = (390, 2410)
 
@@ -111,7 +116,7 @@ class CatchConfig:
     # Timing (seconds). These are *max* waits — the routine polls the screen and proceeds the
     # instant the expected state appears, so short cases stay fast and slow ones don't get missed.
     anchor_timeout: float = 3.0     # max wait for the nearby bar to (re)appear at cycle start
-    encounter_timeout: float = 3.0  # max wait for the Poké Ball to appear after double-tapping
+    encounter_timeout: float = 3.0  # retained for compatibility with saved settings
     catch_timeout: float = 6.0      # max wait for the encounter to end (ball gone) after a throw
     settle_after_catch: float = 1.2  # let the nearby list refresh before the next cycle
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
@@ -295,7 +300,7 @@ class CatchRoutine:
         # One adb invocation for both taps — two tap() round-trips over Wi-Fi adb are
         # too far apart (~0.5s) for the game to read them as a double-tap.
         jx, jy = self._jitter(x, y)
-        self.device.double_tap(jx, jy)
+        self.device.double_tap(jx, jy, self.config.double_tap_gap_ms)
 
     def _enc_ball_visible(self, frame) -> bool:
         """True when the bottom-right ball-selector's red dome fills its fixed strip. That button
@@ -308,12 +313,36 @@ class CatchRoutine:
         p = patch.astype(int)
         b, g, r = p[..., 0], p[..., 1], p[..., 2]
         red = (r > 110) & (r - g > 40) & (r - b > 40)
-        return float(red.mean()) >= self.config.enc_ball_red_frac
+        # Manual calibration usually frames the whole selector button, including its
+        # white lower hemisphere. Judge the red dome (upper half) so a correctly framed
+        # Poké Ball is not capped below 50% merely because its bottom half is white.
+        dome = red[:max(1, red.shape[0] // 2)]
+        return float(dome.mean()) >= self.config.enc_ball_red_frac
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
-        # In an encounter iff the opaque red ball-selector button is showing (present for any
-        # loaded ball type). Returns the throw start point when so, else None.
-        return self.config.ball_fallback if self._enc_ball_visible(frame) else None
+        # The large throwable ball becomes interactive before the small red selector finishes
+        # animating in. Using either signal starts Quick Catch earlier on slower MuMu instances.
+        ready = self._enc_ball_visible(frame) or self._throw_ball_visible(frame)
+        return self.config.ball_fallback if ready else None
+
+    def _throw_ball_visible(self, frame) -> bool:
+        """True when the bright, low-saturation centre of the throwable ball is visible.
+
+        Sample above ``ball_fallback`` so the map's main Poke Ball button (lower down) cannot
+        trigger it. This signal appears earlier than the bottom-right selector button.
+        """
+        bx, by = self.config.ball_fallback
+        cy = by - self.config.s(140)
+        radius = max(8, self.config.s(50))
+        patch = frame[max(0, cy - radius):cy + radius,
+                      max(0, bx - radius):bx + radius]
+        if patch.size == 0:
+            return False
+        p = patch.astype(int)
+        b, g, r = p[..., 0], p[..., 1], p[..., 2]
+        spread = np.maximum.reduce((b, g, r)) - np.minimum.reduce((b, g, r))
+        white = (r > 170) & (g > 170) & (b > 170) & (spread < 55)
+        return float(white.mean()) >= 0.55
 
     def _is_out_of_balls(self, frame) -> bool:
         """True when the encounter's ball-count badge reads 'x0' (the red pill at the bottom
@@ -327,7 +356,7 @@ class CatchRoutine:
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
         matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=self._scales,
-                       region=self.config.anchor_region)
+                       region=self.config.anchor_region, max_matches=1)
         if not matches:
             return None
         ax, ay = matches[0].center
@@ -393,7 +422,10 @@ class CatchRoutine:
                 return True
         # Level-up "CLAIM REWARDS" screen -> tap claim, then tap screen to dismiss rewards until default screen
         if self._claim_rewards is not None:
-            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold, scales=self._scales)
+            # The level-up screen renders at a different scale from the PGSharp overlay
+            # used for calibration (MuMu: claim ~=0.67, menu star ~=0.55).
+            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold,
+                     scales=CALIBRATION_SWEEP)
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
@@ -426,15 +458,17 @@ class CatchRoutine:
             fx, fy = self.config.pokestop_close_xy
             r = self.config.s(160)
             region = (fx - r, fy - r, self.config.s(320), self.config.s(320))
+            close = None
             for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
                 if btn is not None:
                     m = find(frame, btn, threshold=0.7, scales=self._scales, region=region)
                     if m:
-                        fx, fy = m[0].center
+                        close = m[0].center
                         break
-            self.device.tap(fx, fy)
-            self.stats.last_event = "popup"
-            return True
+            if close is not None:
+                self.device.tap(*close)
+                self.stats.last_event = "popup"
+                return True
         # "POKÉMON CAUGHT" XP summary (a slipped-through catch) -> tap its green OK pill. It shows
         # first, and its ball-selector bleeds through the dialog so the encounter check reads true;
         # handle it here before anything else touches the screen.
@@ -525,7 +559,7 @@ class CatchRoutine:
     def _throw(self, ball_xy: tuple[int, int]) -> None:
         bx, by = self._jitter(*ball_xy)
         ex, ey = self._jitter(bx, by + self.config.throw_dy)
-        self.device.swipe(bx, by, ex, ey, duration_ms=self.config.throw_duration_ms)
+        self.device.control_swipe(bx, by, ex, ey, duration_ms=self.config.throw_duration_ms)
 
     def _quick_throw(self, ball_xy: tuple[int, int]) -> None:
         bx, by = self._jitter(*ball_xy)
@@ -533,7 +567,8 @@ class CatchRoutine:
         self.device.quick_catch(
             self.config.berry_start, self.config.berry_end,
             (bx, by), (ex, ey), self.config.flee_xy,
-            self.config.quick_flick_ms,
+            self.config.quick_flick_ms, self.config.post_throw_wait_ms,
+            self.config.flee_taps, self.config.flee_gap_ms,
         )
 
     def _ensure_calibrated(self) -> None:
@@ -558,7 +593,7 @@ class CatchRoutine:
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
         if self._handle_popups():
-            self._interruptible_sleep(1.0)
+            self._interruptible_sleep(0.25)
             return False
 
         # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
@@ -588,14 +623,17 @@ class CatchRoutine:
         # Step 2: engage it. The camera-icon poll returns the instant the encounter opens; if it
         # never shows within encounter_timeout the slot was empty or the Pokémon fled.
         self._double_tap(*slot)
-        ball_xy = self._poll(self._ball_in, cfg.encounter_timeout)
+        # Start the gesture on the first stream frame where the throwable ball is ready.
+        # The early centre-ball signal appears before the selector animation. A short
+        # fallback cap prevents a lagging stream from stalling the catch.
+        ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, 1.5))
         if self.stop_event.is_set():
             return False
         if ball_xy is None:
-            # Fled / empty slot: no encounter opened, so there's nothing to throw at and nothing
-            # to wait out. Return straight away instead of throwing blindly and then stalling on
-            # the settle + back-to-map wait — that stall is what made empty cycles so slow.
-            return False
+            ball_xy = cfg.ball_fallback
+        else:
+            # The first visible ball frame can precede touch readiness slightly on MuMu.
+            self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
 
         # Step 3: throw, then wait only until the encounter ends (the camera icon disappears).
         # That "back on the map" signal is reliable and fast — far quicker than polling the flaky
@@ -603,18 +641,13 @@ class CatchRoutine:
         self.stats.throws += 1
         if cfg.quick_catch:
             self._quick_throw(ball_xy)
-            # Flee may be ignored while the throw is still being committed. Confirm that the
-            # camera icon is gone; if not, retry Flee rather than starting the next encounter
-            # on top of the current one.
-            for _ in range(3):
-                self._interruptible_sleep(0.55)
-                if self._ball_in(self.device.screenshot()) is None:
-                    break
-                self.device.tap(*cfg.flee_xy)
         else:
             self._throw(ball_xy)
-        self._interruptible_sleep(cfg.settle_after_catch)
+        # Wait on real state instead of an unconditional post-catch sleep. Once the
+        # encounter disappears, the next cycle can immediately watch for the nearby bar.
         self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
+        if cfg.settle_after_catch > 0:
+            self._poll(self._slot_in, cfg.settle_after_catch)
         return True
 
     def run(self, on_event=None) -> None:
