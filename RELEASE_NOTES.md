@@ -1,3 +1,27 @@
+# v1.1.4
+
+## Tiếng Việt
+
+### Phục hồi encounter bị trễ
+
+- Ghi nhớ trạng thái sau khi bấm Pokémon, không quay lại quét Nearby khi encounter đang che giao diện.
+- Tiếp tục chờ và ném khi quả bóng xuất hiện trễ do stream MuMu bị lag hoặc nhòe frame.
+- Chỉ dùng detector quả bóng chính xác hiện có, không quét màu rộng nên tránh ném nhầm trên bản đồ.
+- Giới hạn tổng thời gian phục hồi encounter còn 4,5 giây để chuyển sang Pokémon tiếp theo nhanh hơn.
+
+---
+
+## English
+
+### Delayed encounter recovery
+
+- Remembers the pending encounter after tapping a Pokémon instead of returning to Nearby while the encounter covers the UI.
+- Keeps watching and throws when the ball appears late because of MuMu stream lag or a smeared frame.
+- Reuses the existing precise ball detector without broad color scanning, preventing blind throws on the map.
+- Caps total encounter recovery at 4.5 seconds so the routine advances to the next Pokémon sooner.
+
+---
+
 # v1.1.3
 
 ## Tiếng Việt

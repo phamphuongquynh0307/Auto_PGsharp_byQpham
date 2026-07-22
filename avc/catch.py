@@ -117,6 +117,7 @@ class CatchConfig:
     # instant the expected state appears, so short cases stay fast and slow ones don't get missed.
     anchor_timeout: float = 3.0     # max wait for the nearby bar to (re)appear at cycle start
     encounter_timeout: float = 3.0  # retained for compatibility with saved settings
+    encounter_recovery_timeout: float = 4.5  # total time from slot tap, including the initial wait
     catch_timeout: float = 6.0      # max wait for the encounter to end (ball gone) after a throw
     settle_after_catch: float = 1.2  # let the nearby list refresh before the next cycle
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
@@ -251,6 +252,8 @@ class CatchRoutine:
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._nearby_presence_streak = 0
+        self._encounter_pending = False
+        self._encounter_pending_since = 0.0
 
         def load(path):
             return load_template(_resolve(path))
@@ -625,6 +628,24 @@ class CatchRoutine:
                           max(0.25, self.config.flee_gap_ms / 1000.0)):
                 return
 
+    def _complete_open_encounter(self, ball_xy: tuple[int, int]) -> bool:
+        """Finish an encounter once the precise ball detector says it is ready."""
+        cfg = self.config
+        self._encounter_pending = False
+        self._encounter_pending_since = 0.0
+        self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
+        if self.stop_event.is_set():
+            return False
+        self.stats.throws += 1
+        if cfg.quick_catch:
+            self._quick_throw(ball_xy)
+        else:
+            self._throw(ball_xy)
+        self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
+        if cfg.settle_after_catch > 0:
+            self._poll(self._slot_in, cfg.settle_after_catch)
+        return True
+
     def _ensure_calibrated(self) -> None:
         """Measure how big the UI actually renders on this device (once), from the always-on
         PGSharp menu star, and centre the match-scale sweep on it. This sidesteps guessing the
@@ -661,6 +682,29 @@ class CatchRoutine:
             self._interruptible_sleep(1.0)
             return False
 
+        # If the initial open timeout missed a late/smeared ball frame, keep waiting for
+        # this encounter instead of returning to the now-covered Nearby bar.
+        if self._encounter_pending:
+            recovery_left = (
+                cfg.encounter_recovery_timeout
+                - (time.monotonic() - self._encounter_pending_since)
+            )
+            if recovery_left <= 0:
+                self._encounter_pending = False
+                self._encounter_pending_since = 0.0
+                return False
+            ball_xy = self._ball_in(frame)
+            if ball_xy is None:
+                ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, recovery_left))
+            if ball_xy is not None:
+                return self._complete_open_encounter(ball_xy)
+            if time.monotonic() - self._encounter_pending_since >= cfg.encounter_recovery_timeout:
+                self._encounter_pending = False
+                self._encounter_pending_since = 0.0
+                return False
+            self._interruptible_sleep(cfg.idle_poll)
+            return False
+
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
         slot = self._occupied_slot_in(frame)
@@ -673,6 +717,8 @@ class CatchRoutine:
         # Step 2: engage it. The camera-icon poll returns the instant the encounter opens; if it
         # never shows within encounter_timeout the slot was empty or the Pokémon fled.
         self._double_tap(*slot)
+        self._encounter_pending = True
+        self._encounter_pending_since = time.monotonic()
         # Start the gesture on the first stream frame where the throwable ball is ready.
         # The early centre-ball signal appears before the selector animation. A short
         # fallback cap prevents a lagging stream from stalling the catch.
@@ -687,23 +733,7 @@ class CatchRoutine:
             # a fallback swipe on the map just drags the camera and burns the cycle.
             self._interruptible_sleep(cfg.idle_poll)
             return False
-        # The first visible ball frame can precede touch readiness slightly on MuMu.
-        self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
-
-        # Step 3: throw, then wait only until the encounter ends (the camera icon disappears).
-        # That "back on the map" signal is reliable and fast — far quicker than polling the flaky
-        # '@' anchor, which could stall a whole catch_timeout between catches.
-        self.stats.throws += 1
-        if cfg.quick_catch:
-            self._quick_throw(ball_xy)
-        else:
-            self._throw(ball_xy)
-        # Wait on real state instead of an unconditional post-catch sleep. Once the
-        # encounter disappears, the next cycle can immediately watch for the nearby bar.
-        self._poll(lambda f: True if self._ball_in(f) is None else None, cfg.catch_timeout)
-        if cfg.settle_after_catch > 0:
-            self._poll(self._slot_in, cfg.settle_after_catch)
-        return True
+        return self._complete_open_encounter(ball_xy)
 
     def run(self, on_event=None) -> None:
         """Blocking loop. Honors stop_event / pause_event so a GUI can drive it in a thread."""
