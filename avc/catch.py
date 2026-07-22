@@ -29,7 +29,7 @@ from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
 from .resources import resource_path
-from .vision import best_matching_scale, find, load_template
+from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template
 
 
 def _resolve(template_path: str) -> str:
@@ -148,6 +148,7 @@ class CatchConfig:
     maybe_later_template: str = "templates/maybe_later.png"
     maybe_later_region: tuple[int, int, int, int] = (250, 1950, 720, 300)
     popup_threshold: float = 0.7
+    popup_debounce: float = 0.75  # ignore stale stream frames after one popup tap
     # The Pokéstop photo-disc screen's own 'X' sits at a fixed spot at the bottom center;
     # used as the tap fallback when template matching misses it (the backdrop varies).
     pokestop_close_xy: tuple[int, int] = (610, 2540)
@@ -248,6 +249,7 @@ class CatchRoutine:
         self._tpl_s = self.config.layout.s
         self._scales = bracket_scales(self._tpl_s)
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
+        self._anchor_cache: tuple[int, int] | None = None
 
         def load(path):
             return load_template(_resolve(path))
@@ -274,6 +276,7 @@ class CatchRoutine:
         self._idle_streak = 0
         self._autowalk_active = False
         self._no_balls = False   # set by run_once when the "x0" badge is seen; consumed by run()
+        self._popup_block_until = 0.0
         # Control flags used by the GUI; ignored by the plain CLI loop.
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
@@ -355,12 +358,23 @@ class CatchRoutine:
         return bool(matches)
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
-        matches = find(frame, self._anchor, threshold=self.config.anchor_threshold, scales=self._scales,
-                       region=self.config.anchor_region, max_matches=1)
+        cfg = self.config
+        region = cfg.anchor_region
+        if self._anchor_cache is not None:
+            ax, ay = self._anchor_cache
+            radius = cfg.s(110)
+            region = (ax - radius, ay - radius, radius * 2, radius * 2)
+        matches = find(frame, self._anchor, threshold=cfg.anchor_threshold, scales=self._scales,
+                       region=region, max_matches=1)
+        if not matches and self._anchor_cache is not None:
+            self._anchor_cache = None
+            matches = find(frame, self._anchor, threshold=cfg.anchor_threshold, scales=self._scales,
+                           region=cfg.anchor_region, max_matches=1)
         if not matches:
             return None
         ax, ay = matches[0].center
-        return (ax, ay - self.config.slot_offset_y)
+        self._anchor_cache = (ax, ay)
+        return (ax, ay - cfg.slot_offset_y)
 
     def _is_pokestop_screen(self, frame) -> bool:
         """True when the Pokéstop photo-disc screen is up. Its giant blue pin fills both
@@ -382,12 +396,14 @@ class CatchRoutine:
 
     def _handle_popups(self) -> bool:
         """Dismiss blocking dialogs. Returns True if one was handled (and acted on)."""
+        if time.monotonic() < self._popup_block_until:
+            return False
         frame = self.device.screenshot()
 
         # Weather warning "Weather conditions are potentially dangerous" -> tap the green
         # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
         if self._popup_weather is not None:
-            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -397,7 +413,7 @@ class CatchRoutine:
         # Speed warning "You're going too fast" -> tap the green "I'M A PASSENGER" button.
         # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
-            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -406,15 +422,15 @@ class CatchRoutine:
         # "WEEKLY CHALLENGE"/invite modal -> tap its white "MAYBE LATER" text to dismiss (never the
         # green "CHOOSE GROUP" above it). Searched by text in a centre box, so the button is missed.
         if self._maybe_later is not None:
-            m = find(frame, self._maybe_later, threshold=self.config.popup_threshold,
-                     scales=self._scales, grayscale=False, region=self.config.maybe_later_region)
+            m = find_fast(frame, self._maybe_later, threshold=self.config.popup_threshold,
+                          scales=self._scales, grayscale=False, region=self.config.maybe_later_region)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
-            m = find(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_autowalk, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 cx, cy = m[0].center
                 self.device.tap(cx + self.config.s(185), cy + self.config.s(168))
@@ -424,8 +440,8 @@ class CatchRoutine:
         if self._claim_rewards is not None:
             # The level-up screen renders at a different scale from the PGSharp overlay
             # used for calibration (MuMu: claim ~=0.67, menu star ~=0.55).
-            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold,
-                     scales=CALIBRATION_SWEEP)
+            m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
+                          scales=CALIBRATION_SWEEP)
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
@@ -442,7 +458,8 @@ class CatchRoutine:
                     # If close button appears in the center bottom region, tap it immediately
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
                         if btn is not None:
-                            m_close = find(f, btn, threshold=0.7, scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
+                            m_close = find_fast(f, btn, threshold=0.7, scales=self._scales,
+                                                region=self.config.rect((400, 2000, 420, 712), "BC"))
                             if m_close:
                                 self.device.tap(*m_close[0].center)
                                 self._interruptible_sleep(0.5)
@@ -461,7 +478,7 @@ class CatchRoutine:
             close = None
             for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
                 if btn is not None:
-                    m = find(frame, btn, threshold=0.7, scales=self._scales, region=region)
+                    m = find_fast(frame, btn, threshold=0.7, scales=self._scales, region=region)
                     if m:
                         close = m[0].center
                         break
@@ -473,8 +490,8 @@ class CatchRoutine:
         # first, and its ball-selector bleeds through the dialog so the encounter check reads true;
         # handle it here before anything else touches the screen.
         if self._caught_ok is not None:
-            m = find(frame, self._caught_ok, threshold=0.72, scales=self._scales,
-                     grayscale=False, region=self.config.caught_ok_region)
+            m = find_fast(frame, self._caught_ok, threshold=0.72, scales=self._scales,
+                          grayscale=False, region=self.config.caught_ok_region)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -482,23 +499,34 @@ class CatchRoutine:
         # Pokémon detail/summary screen (a slipped-through catch) -> tap its green check (✓) to
         # leave. Colour match in a tight bottom-centre box; the ✓ never appears on a live encounter.
         if self._check_btn is not None and self._ball_in(frame) is None:
-            m = find(frame, self._check_btn, threshold=0.75, scales=self._scales,
-                     grayscale=False, region=self.config.check_btn_region)
+            m = find_fast(frame, self._check_btn, threshold=0.75, scales=self._scales,
+                          grayscale=False, region=self.config.check_btn_region)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
-        # Close button ('X') -> tap it to dismiss any other popup (searched in the center region with 0.7 threshold).
-        # Supports teal/green, blue, and white variations of the close button.
-        for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
-            if btn is not None:
-                m = find(frame, btn, threshold=0.7, scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
-                if m:
-                    x, y = m[0].center
-                    self.device.tap(x, y)
-                    self.stats.last_event = "popup"
-                    return True
+        # Generic modal X. The safe search area is derived from this frame's dimensions,
+        # and a wide scale fallback covers phones/emulators whose game UI ignores density.
+        if self._ball_in(frame) is None:
+            close = find_popup_close(
+                frame,
+                (self._close_btn, self._close_btn_blue, self._close_btn_white),
+                threshold=self.config.popup_threshold,
+                scales=self._scales,
+            )
+            if close is not None:
+                self.device.tap(*close.center)
+                self.stats.last_event = "popup"
+                return True
         return False
+
+    def _drain_popups(self) -> bool:
+        """Tap once, then debounce stale stream frames so the same control cannot toggle."""
+        if not self._handle_popups():
+            return False
+        self._popup_block_until = time.monotonic() + self.config.popup_debounce
+        self._interruptible_sleep(max(0.06, self.config.poll_interval))
+        return True
 
     def _try_autowalk(self) -> bool:
         """Make AutoWalk walk. Finds the yellow menu star (colour match on its tight core crop,
@@ -537,7 +565,7 @@ class CatchRoutine:
             self._wait_if_paused()
             if self.stop_event.is_set():
                 return
-            self._handle_popups()
+            self._drain_popups()
             if self._try_autowalk():
                 self._autowalk_active = True
             self._interruptible_sleep(cfg.no_balls_walk_interval)
@@ -592,8 +620,7 @@ class CatchRoutine:
         self._ensure_calibrated()
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
-        if self._handle_popups():
-            self._interruptible_sleep(0.25)
+        if self._drain_popups():
             return False
 
         # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
@@ -627,13 +654,18 @@ class CatchRoutine:
         # The early centre-ball signal appears before the selector animation. A short
         # fallback cap prevents a lagging stream from stalling the catch.
         ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, 1.5))
+        if ball_xy is None:
+            # Slow MuMu streams can lag the ball in; spend the rest of encounter_timeout on it.
+            ball_xy = self._poll(self._ball_in, max(0.0, cfg.encounter_timeout - 1.5))
         if self.stop_event.is_set():
             return False
         if ball_xy is None:
-            ball_xy = cfg.ball_fallback
-        else:
-            # The first visible ball frame can precede touch readiness slightly on MuMu.
-            self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
+            # No encounter opened (empty nearby slot / Pokémon fled). Never throw blind here:
+            # a fallback swipe on the map just drags the camera and burns the cycle.
+            self._interruptible_sleep(cfg.idle_poll)
+            return False
+        # The first visible ball frame can precede touch readiness slightly on MuMu.
+        self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
 
         # Step 3: throw, then wait only until the encounter ends (the camera icon disappears).
         # That "back on the map" signal is reliable and fast — far quicker than polling the flaky

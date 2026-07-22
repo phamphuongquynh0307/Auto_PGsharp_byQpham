@@ -80,6 +80,73 @@ def find(
     return _suppress(results, max_matches)
 
 
+def find_popup_close(
+    scene: np.ndarray,
+    templates: list[np.ndarray | None] | tuple[np.ndarray | None, ...],
+    *,
+    threshold: float = 0.7,
+    scales: tuple[float, ...] = (1.0,),
+    fallback_scales: tuple[float, ...] = (),
+) -> Match | None:
+    """Find a modal close X without relying on a particular device resolution.
+
+    Pokemon GO places dismiss X buttons in the lower, horizontally-centred part of the
+    viewport.  Expressing that safe area as frame percentages avoids the aspect-ratio
+    drift caused by mapping a box authored for one phone.  The normal calibrated scale
+    sweep is tried first; a wider sweep is only paid for after it misses.
+    """
+    height, width = scene.shape[:2]
+    x0, y0 = int(width * 0.15), int(height * 0.52)
+    x1, y1 = int(width * 0.85), int(height * 0.99)
+    region = (x0, y0, x1 - x0, y1 - y0)
+    usable = [template for template in templates if template is not None]
+    for sweep in (scales, fallback_scales):
+        if not sweep:
+            continue
+        candidates: list[Match] = []
+        for template in usable:
+            candidates.extend(find_fast(scene, template, threshold=threshold,
+                                        scales=sweep, max_matches=1, region=region))
+        if candidates:
+            return max(candidates, key=lambda match: match.score)
+    return None
+
+
+def find_fast(
+    scene: np.ndarray,
+    template: np.ndarray,
+    *,
+    threshold: float = 0.8,
+    scales: tuple[float, ...] = (1.0,),
+    max_matches: int = 10,
+    grayscale: bool = True,
+    region: tuple[int, int, int, int] | None = None,
+    reduction: float = 0.3,
+) -> list[Match]:
+    """A coordinate-preserving, downsampled variant of :func:`find` for large UI controls."""
+    height, width = scene.shape[:2]
+    if region is None:
+        x0, y0, rw, rh = 0, 0, width, height
+    else:
+        x0, y0, rw, rh = region
+        x0, y0 = max(0, x0), max(0, y0)
+    x1, y1 = min(width, x0 + rw), min(height, y0 + rh)
+    if x1 <= x0 or y1 <= y0:
+        return []
+    search = cv2.resize(scene[y0:y1, x0:x1], None, fx=reduction, fy=reduction,
+                        interpolation=cv2.INTER_AREA)
+    reduced_scales = tuple(scale * reduction for scale in scales)
+    matches = find(search, template, threshold=threshold, scales=reduced_scales,
+                   max_matches=max_matches, grayscale=grayscale)
+    return [Match(
+        x=x0 + int(round(match.x / reduction)),
+        y=y0 + int(round(match.y / reduction)),
+        width=int(round(match.width / reduction)),
+        height=int(round(match.height / reduction)),
+        score=match.score,
+    ) for match in matches]
+
+
 def _iou(a: Match, b: Match) -> float:
     ax2, ay2 = a.x + a.width, a.y + a.height
     bx2, by2 = b.x + b.width, b.y + b.height

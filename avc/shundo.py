@@ -30,7 +30,7 @@ from .device import Device
 from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
-from .vision import best_matching_scale, find, load_template
+from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template
 
 
 @dataclass
@@ -123,6 +123,7 @@ class ShundoConfig:
     close_btn_blue_template: str = "templates/close_btn_blue.png"
     close_btn_white_template: str = "templates/close_btn_white.png"
     popup_threshold: float = 0.7
+    popup_debounce: float = 0.75  # ignore stale stream frames after one popup tap
 
     # Timing (seconds).
     teleport_wait: float = 4.0      # after the feed tap, let spawns + nearby bar load
@@ -210,6 +211,8 @@ class ShundoRoutine:
         self._tpl_s = self.config.layout.s
         self._scales = bracket_scales(self._tpl_s)
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
+        self._anchor_cache: tuple[int, int] | None = None
+        self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
 
         def load(path):
             return load_template(_resolve(path))
@@ -236,6 +239,7 @@ class ShundoRoutine:
             ) if b is not None
         ]
         self.stats = ShundoStats()
+        self._popup_block_until = 0.0
         # Optional callback(seconds_waited) so the GUI can log a "still waiting for spawn"
         # heartbeat during a long load without the routine knowing about the UI.
         self._on_waiting = None
@@ -269,9 +273,22 @@ class ShundoRoutine:
 
     # -- element lookups ---------------------------------------------------------
     def _anchor_in(self, frame) -> tuple[int, int] | None:
-        m = find(frame, self._anchor, threshold=self.config.anchor_threshold,
-                 scales=self._scales, region=self.config.anchor_region, max_matches=1)
-        return m[0].center if m else None
+        cfg = self.config
+        region = cfg.anchor_region
+        if self._anchor_cache is not None:
+            ax, ay = self._anchor_cache
+            radius = cfg.s(110)
+            region = (ax - radius, ay - radius, radius * 2, radius * 2)
+        m = find(frame, self._anchor, threshold=cfg.anchor_threshold,
+                 scales=self._scales, region=region, max_matches=1)
+        if not m and self._anchor_cache is not None:
+            self._anchor_cache = None
+            m = find(frame, self._anchor, threshold=cfg.anchor_threshold,
+                     scales=self._scales, region=cfg.anchor_region, max_matches=1)
+        if not m:
+            return None
+        self._anchor_cache = m[0].center
+        return self._anchor_cache
 
     def _target_in_bar(self, frame) -> bool:
         """True when a Pokémon icon is present anywhere in the nearby '@' bar (spawn
@@ -298,15 +315,31 @@ class ShundoRoutine:
         removes it, so the next spawn shifts up into the top slot — we always tap slot 1.
         Located as the '≡' handle in the RSS icon's column, plus a fixed dy."""
         cfg = self.config
+        if self._feed_cache is not None:
+            (rx, ry), (hx, hy), slot = self._feed_cache
+            radius = cfg.s(100)
+            rss_region = (rx - radius, ry - radius, radius * 2, radius * 2)
+            handle_region = (hx - radius, hy - radius, radius * 2, radius * 2)
+            rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=self._scales,
+                       region=rss_region, max_matches=1)
+            handle = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales,
+                          region=handle_region, max_matches=1)
+            if rss and handle:
+                return slot
+            self._feed_cache = None
         rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=self._scales)
         if not rss:
             return None
-        rx, _ry = rss[0].center
-        handles = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales)
+        rx, ry = rss[0].center
+        column = (rx - cfg.handle_column_tol * 2, 0, cfg.handle_column_tol * 4, frame.shape[0])
+        handles = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales,
+                       region=column)
         for h in handles:
             hx, hy = h.center
             if abs(hx - rx) <= cfg.handle_column_tol:
-                return (rx, hy + cfg.feed_slot_dy)
+                slot = (rx, hy + cfg.feed_slot_dy)
+                self._feed_cache = ((rx, ry), (hx, hy), slot)
+                return slot
         return None
 
     def _enc_ball_visible(self, frame) -> bool:
@@ -346,6 +379,8 @@ class ShundoRoutine:
         return False
 
     def _handle_popups(self) -> bool:
+        if time.monotonic() < self._popup_block_until:
+            return False
         frame = self.device.screenshot()
         # PGSharp menu left open — close it by tapping the star it hangs off of.
         if self._menu_open is not None and self._menu_star is not None:
@@ -358,20 +393,20 @@ class ShundoRoutine:
                     return True
         # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
         if self._popup_weather is not None:
-            m = find(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._popup_speed is not None:
-            m = find(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
+            m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold, scales=self._scales)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._claim_rewards is not None:
-            m = find(frame, self._claim_rewards, threshold=self.config.popup_threshold,
-                     scales=CALIBRATION_SWEEP)
+            m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
+                          scales=CALIBRATION_SWEEP)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -390,14 +425,25 @@ class ShundoRoutine:
         # tap here: the catch routine's "two blue side patches" heuristic false-positives on
         # water-heavy maps and would press the map's pokeball menu instead.
         if not self._enc_ball_visible(frame):
-            for btn in self._close_btns:
-                m = find(frame, btn, threshold=self.config.popup_threshold,
-                         scales=self._scales, region=self.config.rect((400, 2000, 420, 712), "BC"))
-                if m:
-                    self.device.tap(*m[0].center)
-                    self.stats.last_event = "popup"
-                    return True
+            close = find_popup_close(
+                frame,
+                self._close_btns,
+                threshold=self.config.popup_threshold,
+                scales=self._scales,
+            )
+            if close is not None:
+                self.device.tap(*close.center)
+                self.stats.last_event = "popup"
+                return True
         return False
+
+    def _drain_popups(self) -> bool:
+        """Tap once, then debounce stale stream frames so the same control cannot toggle."""
+        if not self._handle_popups():
+            return False
+        self._popup_block_until = time.monotonic() + self.config.popup_debounce
+        self._interruptible_sleep(max(0.06, self.config.poll_interval))
+        return True
 
     # -- IV reading ---------------------------------------------------------------
     def _read_pill_glyphs(self, frame) -> list[tuple[float, str]]:
@@ -458,8 +504,7 @@ class ShundoRoutine:
         self.stats.cycles += 1
         self._ensure_calibrated()
 
-        if self._handle_popups():
-            self._interruptible_sleep(0.25)
+        if self._drain_popups():
             return "popup"
 
         # An encounter already open at cycle start is a shiny whose answer we missed
@@ -489,8 +534,7 @@ class ShundoRoutine:
             return "idle"
 
         # Teleporting far reliably raises the speed warning — clear it before tapping on.
-        if self._handle_popups():
-            self._interruptible_sleep(0.25)
+        self._drain_popups()
 
         # Step 2a: the far teleport reloads spawns and empties the nearby '@' bar.
         # Wait for that clear first, so an entry left over from the previous location
@@ -500,8 +544,7 @@ class ShundoRoutine:
             self._wait_if_paused()
             if not self._target_in_bar(self.device.screenshot()):
                 break
-            if self._handle_popups():
-                self._interruptible_sleep(0.25)
+            if self._drain_popups():
                 continue
             time.sleep(cfg.poll_interval)
 
@@ -518,8 +561,7 @@ class ShundoRoutine:
             if self._target_in_bar(self.device.screenshot()):
                 loaded = True
                 break
-            if self._handle_popups():
-                self._interruptible_sleep(0.25)
+            if self._drain_popups():
                 continue
             now = time.monotonic()
             if cfg.spawn_timeout and now - start >= cfg.spawn_timeout:
