@@ -29,7 +29,7 @@ from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
 from .resources import resource_path
-from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template
+from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template, slot_has_pokemon
 
 
 def _resolve(template_path: str) -> str:
@@ -250,6 +250,7 @@ class CatchRoutine:
         self._scales = bracket_scales(self._tpl_s)
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
+        self._nearby_presence_streak = 0
 
         def load(path):
             return load_template(_resolve(path))
@@ -375,6 +376,14 @@ class CatchRoutine:
         ax, ay = matches[0].center
         self._anchor_cache = (ax, ay)
         return (ax, ay - cfg.slot_offset_y)
+
+    def _occupied_slot_in(self, frame) -> tuple[int, int] | None:
+        slot = self.config.nearby_slot if self.config.force_slot else self._slot_in(frame)
+        present = slot is not None and slot_has_pokemon(
+            frame, slot, half_width=self.config.s(70), height=self.config.s(110)
+        )
+        self._nearby_presence_streak = self._nearby_presence_streak + 1 if present else 0
+        return slot if present and self._nearby_presence_streak >= 2 else None
 
     def _is_pokestop_screen(self, frame) -> bool:
         """True when the Pokéstop photo-disc screen is up. Its giant blue pin fills both
@@ -654,18 +663,12 @@ class CatchRoutine:
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
-        if cfg.force_slot:
-            # Manual alignment: tap the fixed slot directly, don't trust the flaky '@' detection.
-            slot = cfg.nearby_slot
-        else:
-            slot = self._slot_in(frame)
-            if slot is None:
-                slot = self._poll(self._slot_in, cfg.anchor_timeout)
-            if slot is None:
-                if cfg.require_anchor:
-                    self._interruptible_sleep(cfg.idle_poll)
-                    return False
-                slot = cfg.nearby_slot
+        slot = self._occupied_slot_in(frame)
+        if slot is None:
+            slot = self._poll(self._occupied_slot_in, cfg.anchor_timeout)
+        if slot is None:
+            self._interruptible_sleep(cfg.idle_poll)
+            return False
 
         # Step 2: engage it. The camera-icon poll returns the instant the encounter opens; if it
         # never shows within encounter_timeout the slot was empty or the Pokémon fled.

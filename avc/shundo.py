@@ -30,7 +30,7 @@ from .device import Device
 from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
-from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template
+from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template, slot_has_pokemon
 
 
 @dataclass
@@ -213,6 +213,8 @@ class ShundoRoutine:
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
+        self._nearby_presence_streak = 0
+        self._feed_presence_streak = 0
 
         def load(path):
             return load_template(_resolve(path))
@@ -290,24 +292,17 @@ class ShundoRoutine:
         return self._anchor_cache
 
     def _target_in_bar(self, frame) -> bool:
-        """True when a Pokémon icon is present anywhere in the nearby '@' bar (spawn
-        loaded). Scans the whole bar column and takes the busiest band, so it doesn't
-        depend on the spawn sitting at one exact slot."""
-        import cv2
+        """True after two fresh frames show a centered Pokémon sprite in the first slot."""
         cfg = self.config
         anchor = self._anchor_in(frame)
         if anchor is None:
             return False
         ax, ay = anchor
-        x0, x1 = max(0, ax - cfg.bar_half_w), ax + cfg.bar_half_w
-        for top in range(ay - cfg.bar_scan_top, ay - cfg.bar_scan_bottom, cfg.bar_scan_step):
-            patch = frame[max(0, top):top + cfg.slot_patch, x0:x1]
-            if patch.size == 0:
-                continue
-            gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
-            if float(gray.std()) > cfg.slot_busy_std:
-                return True
-        return False
+        slot = (ax, ay - cfg.slot_offset_y)
+        present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
+                                   height=cfg.slot_patch)
+        self._nearby_presence_streak = self._nearby_presence_streak + 1 if present else 0
+        return present and self._nearby_presence_streak >= 2
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
         """First feed slot. The feed is a QUEUE: tapping the top entry teleports to it and
@@ -324,8 +319,12 @@ class ShundoRoutine:
             handle = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales,
                           region=handle_region, max_matches=1)
             if rss and handle:
-                return slot
+                present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
+                                           height=cfg.slot_patch)
+                self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
+                return slot if present and self._feed_presence_streak >= 2 else None
             self._feed_cache = None
+            self._feed_presence_streak = 0
         rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=self._scales)
         if not rss:
             return None
@@ -338,7 +337,11 @@ class ShundoRoutine:
             if abs(hx - rx) <= cfg.handle_column_tol:
                 slot = (rx, hy + cfg.feed_slot_dy)
                 self._feed_cache = ((rx, ry), (hx, hy), slot)
-                return slot
+                present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
+                                           height=cfg.slot_patch)
+                self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
+                return slot if present and self._feed_presence_streak >= 2 else None
+        self._feed_presence_streak = 0
         return None
 
     def _enc_ball_visible(self, frame) -> bool:

@@ -154,6 +154,45 @@ def find_fast(
     ) for match in matches]
 
 
+def slot_has_pokemon(
+    scene: np.ndarray,
+    center: tuple[int, int],
+    *,
+    half_width: int,
+    height: int,
+    min_core_std: float = 22.0,
+    min_core_edge: float = 0.055,
+    min_edge_prominence: float = 0.015,
+) -> bool:
+    """Detect a Pokemon sprite in the exact sidebar slot that will be tapped.
+
+    A translucent empty sidebar inherits colour/variance from the moving map and can easily
+    pass a whole-patch standard-deviation test. Pokemon sprites instead produce a compact
+    cluster of edges in the middle of the slot. Requiring both absolute core texture and
+    prominence over the surrounding sidebar rejects colourful map backgrounds.
+    """
+    cx, cy = center
+    y0, y1 = max(0, cy - height // 2), min(scene.shape[0], cy + height // 2)
+    x0, x1 = max(0, cx - half_width), min(scene.shape[1], cx + half_width)
+    patch = scene[y0:y1, x0:x1]
+    if patch.size == 0 or patch.shape[0] < 12 or patch.shape[1] < 12:
+        return False
+    gray = _to_gray(patch)
+    edges = cv2.Canny(gray, 60, 140) > 0
+    h, w = gray.shape[:2]
+    core = (slice(h // 6, max(h // 6 + 1, 5 * h // 6)),
+            slice(w // 4, max(w // 4 + 1, 3 * w // 4)))
+    surround = np.ones(gray.shape, dtype=bool)
+    surround[core] = False
+    core_edge = float(edges[core].mean())
+    side_edge = float(edges[surround].mean()) if surround.any() else 0.0
+    return (
+        float(gray[core].std()) >= min_core_std
+        and core_edge >= min_core_edge
+        and core_edge - side_edge >= min_edge_prominence
+    )
+
+
 def _iou(a: Match, b: Match) -> float:
     ax2, ay2 = a.x + a.width, a.y + a.height
     bx2, by2 = b.x + b.width, b.y + b.height
