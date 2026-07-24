@@ -1,3 +1,51 @@
+# v1.1.6
+
+## Tiếng Việt
+
+### Quick Catch và thoát encounter ổn định hơn
+
+- Giữ đủ thời gian để game ghi nhận cú ném trước khi bấm Flee.
+- Gửi thao tác thả bóng dự phòng để tránh trạng thái giữ bóng bị kẹt khi điều khiển qua Wi-Fi.
+- Bấm Flee trực tiếp bằng ADB và luôn thực hiện đủ số lần đã cấu hình để trở về Map.
+- Khi lỡ mở trang thông tin Pokémon, chỉ bấm nút tick bằng template chính xác; không còn dùng vùng màu rộng có thể bấm nhầm Poké Ball giữa màn hình.
+
+### Quét Nearby chính xác trên nhiều thiết bị
+
+- Nhận diện thêm các sprite màu tối, màu trầm nhưng vẫn giữ điều kiện cạnh để hạn chế nhận nhầm nền.
+- Vùng kiểm tra điểm Nearby chỉnh tay giữ kích thước gọn theo pixel thực, không bị phóng quá rộng trên điện thoại độ phân giải cao.
+- Bỏ cài đặt **Khoảng cách @ → ô đầu**; dấu `@` chỉ xác nhận thanh Nearby đang hiện, không còn dùng để suy ra điểm bấm.
+- Tọa độ và vùng chỉnh tay tự quy đổi theo kích thước màn hình, giúp dùng lại cấu hình trên thiết bị có độ phân giải khác.
+
+### Giao diện và hiệu năng
+
+- Đưa các nút lưu/reset/hủy của cửa sổ căn chỉnh tay lên phía trên và cho phép thay đổi kích thước cửa sổ.
+- Giảm bitrate stream mặc định từ 4 Mbps xuống 2 Mbps để giảm tải và nhiệt độ thiết bị.
+
+---
+
+## English
+
+### More reliable Quick Catch and encounter exit
+
+- Waits long enough for the game to commit the throw before tapping Flee.
+- Sends fallback pointer-release events to prevent a held-ball state over Wi-Fi control.
+- Uses direct ADB taps for Flee and always sends the configured number of exit taps.
+- On accidentally opened Pokémon details, accepts only the precise tick template and no longer uses broad color matching that could tap the central Map Poké Ball.
+
+### Accurate Nearby scanning across devices
+
+- Detects darker, muted Pokémon sprites while retaining edge requirements to limit background false positives.
+- Keeps the manually calibrated Nearby inspection area tight in native pixels instead of over-scaling it on high-resolution phones.
+- Removes the **Distance @ → first slot** setting; `@` now confirms sidebar presence only and never determines the tap point.
+- Scales manual points and regions to the current screen size so calibration remains usable across resolutions.
+
+### Interface and performance
+
+- Moves manual-calibration save/reset/cancel controls to the top and makes the window resizable.
+- Reduces the default stream bitrate from 4 Mbps to 2 Mbps to lower device load and heat.
+
+---
+
 # v1.1.5
 
 ## Tiếng Việt

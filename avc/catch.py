@@ -317,23 +317,32 @@ class CatchRoutine:
         is an opaque red Poké Ball shown in every encounter whatever ball is loaded, so it detects
         the encounter for all ball types; a bright background can't wash out an opaque colour."""
         x, y, w, h = self.config.enc_ball_region
+        # Respect the exact manually calibrated frame. Expanding this region can overlap
+        # the PGSharp Pokémon sidebar and mistake one of its red icons for the selector.
         patch = frame[y:y + h, x:x + w]
         if patch.size == 0:
             return False
         p = patch.astype(int)
         b, g, r = p[..., 0], p[..., 1], p[..., 2]
         red = (r > 110) & (r - g > 40) & (r - b > 40)
-        # Manual calibration usually frames the whole selector button, including its
-        # white lower hemisphere. Judge the red dome (upper half) so a correctly framed
-        # Poké Ball is not capped below 50% merely because its bottom half is white.
-        dome = red[:max(1, red.shape[0] // 2)]
-        return float(dome.mean()) >= self.config.enc_ball_red_frac
+        ys, xs = np.nonzero(red)
+        minimum = max(60, self.config.s(10) ** 2)
+        if len(xs) < minimum:
+            return False
+        # On this layout the calibrated box clips the selector's broad red dome along
+        # its lower edge. The sidebar only contributes a narrow vertical red sliver that
+        # runs through the whole box. Require both the broad dome and its bottom-heavy shape.
+        bottom_start = max(0, int(red.shape[0] * 0.65))
+        bottom_share = float(red[bottom_start:].sum()) / max(1, len(xs))
+        return np.ptp(xs) >= self.config.s(22) and bottom_share >= 0.55
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
-        # The large throwable ball becomes interactive before the small red selector finishes
-        # animating in. Using either signal starts Quick Catch earlier on slower MuMu instances.
-        ready = self._enc_ball_visible(frame) or self._throw_ball_visible(frame)
-        return self.config.ball_fallback if ready else None
+        # Only the red ball-selector at bottom-right is an encounter-safe signal.  The old
+        # early signal sampled the large white throwable ball; bright map scenery and the
+        # map's centre Poké Ball could satisfy it, causing a blind Quick Catch gesture that
+        # opened the centre menu.  Waiting for the selector costs a fraction of a second but
+        # guarantees we never throw/tap from the map.
+        return self.config.ball_fallback if self._enc_ball_visible(frame) else None
 
     def _throw_ball_visible(self, frame) -> bool:
         """True when the bright, low-saturation centre of the throwable ball is visible.
@@ -381,12 +390,20 @@ class CatchRoutine:
             return None
         ax, ay = matches[0].center
         self._anchor_cache = (ax, ay)
-        return (ax, ay - cfg.slot_offset_y)
+        # The anchor now only confirms that the Nearby sidebar is present. The tap
+        # coordinate comes from the calibrated/scaled slot point, never from an
+        # error-prone fixed vertical distance to '@'.
+        return cfg.nearby_slot
 
     def _occupied_slot_in(self, frame) -> tuple[int, int] | None:
         slot = self.config.nearby_slot if self.config.force_slot else self._slot_in(frame)
+        # The manually calibrated point is already expressed in native screen pixels.
+        # Keep its inspection window tight as well: scaling 70x110 once more on a
+        # high-resolution phone dilutes a small/dark sprite with adjacent sidebar rows.
+        half_width = 70 if self.config.force_slot else self.config.s(70)
+        height = 110 if self.config.force_slot else self.config.s(110)
         present = slot is not None and slot_has_pokemon(
-            frame, slot, half_width=self.config.s(70), height=self.config.s(110)
+            frame, slot, half_width=half_width, height=height
         )
         self._nearby_presence_streak = self._nearby_presence_streak + 1 if present else 0
         return slot if present and self._nearby_presence_streak >= 2 else None
@@ -518,7 +535,10 @@ class CatchRoutine:
                 return True
         # Pokémon detail/summary screen (a slipped-through catch) -> tap its green check (✓) to
         # leave. Colour match in a tight bottom-centre box; the ✓ never appears on a live encounter.
-        if self._check_btn is not None and self._ball_in(frame) is None:
+        # Do not gate this on _ball_in(): the large white detail card can resemble the
+        # throwable ball's bright centre.  The tight bottom-centre region plus the teal
+        # button/template is already specific and excludes the encounter's controls.
+        if self._check_btn is not None:
             m = find_fast(frame, self._check_btn, threshold=0.75, scales=self._scales,
                           grayscale=False, region=self.config.check_btn_region)
             if m:
@@ -618,18 +638,32 @@ class CatchRoutine:
         )
         # MuMu can show the Flee button before the throw is committed. A small floor keeps
         # the first exit tap safe; configured extra wait is still honoured on slower phones.
-        commit_wait = max(0.35, self.config.post_throw_wait_ms / 1000.0)
+        # MuMu commonly needs close to one second before Flee becomes actionable.  An
+        # earlier tap is delivered but ignored (or cancels the throw), leaving the bot
+        # visibly stuck in the encounter.
+        commit_wait = max(1.0, self.config.post_throw_wait_ms / 1000.0)
         self._interruptible_sleep(commit_wait)
+        # Start Flee on a clean control session.  MuMu may keep the just-finished
+        # multi-touch pointer state attached to this scrcpy socket, causing an otherwise
+        # valid tap at flee_xy to be silently ignored.  A standalone tap on a new socket
+        # is accepted immediately.
+        self.device.close_control()
         attempts = max(1, self.config.flee_taps)
         for attempt in range(attempts):
             if self.stop_event.is_set():
                 return
-            self.device.tap(*self.config.flee_xy)
-            # Stop immediately when a fresh frame confirms the encounter is gone. This is
-            # the debounce that prevents later Flee taps landing on the map.
-            if self._poll(lambda f: True if self._ball_in(f) is None else None,
-                          max(0.25, self.config.flee_gap_ms / 1000.0)):
-                return
+            # Keep Flee independent from the multi-touch socket used by the throw.  On
+            # Wi-Fi devices that socket can retain/lossily deliver pointer state, while a
+            # standalone Android input tap reliably exits the encounter.
+            self.device.adb_tap(*self.config.flee_xy)
+            # Always send every configured Flee tap.  A held/moved ball makes _ball_in()
+            # return None even though the encounter is still open; using that detector to
+            # stop early caused the bot to mistake a failed first tap for a successful exit.
+            # flee_xy is an inert top-left area after returning to the map, so retries are safe.
+            if attempt + 1 < attempts:
+                self._interruptible_sleep(
+                    max(0.25, self.config.flee_gap_ms / 1000.0)
+                )
 
     def _trace(self, key: str, message: str, repeat_after: float = 1.5) -> None:
         """Send a debounced detector trace to the GUI without affecting the catch loop."""
@@ -658,6 +692,19 @@ class CatchRoutine:
         )
         self._interruptible_sleep(cfg.encounter_touch_delay_ms / 1000.0)
         if self.stop_event.is_set():
+            return False
+        # Reconfirm on a new frame immediately before touching the screen.  This closes
+        # the stale-frame race where the encounter vanished during touch_delay and the
+        # queued throw landed on the map's centre Poké Ball.
+        ready_frame = self.device.screenshot(next_frame=True)
+        if not self._enc_ball_visible(ready_frame):
+            self._trace(
+                "throw_safety_cancel",
+                "Hủy ném: frame mới không còn thấy bóng đỏ trong đúng khung căn tay.",
+                0.0,
+            )
+            self._encounter_pending = False
+            self._encounter_pending_since = 0.0
             return False
         self.stats.throws += 1
         if cfg.quick_catch:
@@ -784,6 +831,23 @@ class CatchRoutine:
         # fallback cap prevents a lagging stream from stalling the catch.
         ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, 1.5))
         if ball_xy is None:
+            # Do not rely on the user's device behaving like ours. If a fresh frame still
+            # shows the same occupied Nearby slot, the first double-tap did not open it.
+            # Retry once with a plain tap; if the sidebar has disappeared, never tap blindly.
+            retry_frame = self.device.screenshot(next_frame=True)
+            retry_slot = self._occupied_slot_in(retry_frame)
+            same_slot = (
+                retry_slot is not None
+                and abs(retry_slot[0] - slot[0]) <= cfg.s(80)
+                and abs(retry_slot[1] - slot[1]) <= cfg.s(80)
+            )
+            if same_slot:
+                self.device.tap(*retry_slot)
+                self._trace(
+                    "nearby_tap_retry",
+                    f"Nearby vẫn còn sau double-click; thử lại một tap tại {retry_slot}.",
+                    0.0,
+                )
             # Slow MuMu streams can lag the ball in; spend the rest of encounter_timeout on it.
             ball_xy = self._poll(self._ball_in, max(0.0, cfg.encounter_timeout - 1.5))
         if self.stop_event.is_set():

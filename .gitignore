@@ -17,3 +17,6 @@ _*.png
 
 # Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
 # Note: adb/ IS committed so the project builds out of the box.
+/build-tcl-runtime
+/build-dist
+/build-fixed

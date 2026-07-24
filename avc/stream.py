@@ -40,7 +40,7 @@ class ScreenStream:
         self,
         serial: str | None,
         adb_path: str,
-        bitrate: str = "4M",
+        bitrate: str = "2M",
         native_size: tuple[int, int] | None = None,
         half: bool = True,
     ) -> None:

@@ -94,7 +94,7 @@ LANG = {
         "\n"
         "⑦ MẸO\n"
         "• Cắm sạc khi chạy lâu; app có thể tự làm tối màn hình cho đỡ nóng (game vẫn chạy nền).\n"
-        "• Nếu ném lệch: chỉnh \"Lực ném\" và \"Khoảng cách @ → ô đầu\" trong tab Cài đặt.\n"
+        "• Nếu ném lệch: chỉnh \"Lực ném\" trong tab Cài đặt.\n"
         "• Mất kết nối: bấm \"Làm mới\" hoặc chọn lại máy trong danh sách để nối lại Wi-Fi.\n"
     ), "en": (
         "📖 USER GUIDE\n"
@@ -138,6 +138,17 @@ LANG = {
     "copied":        {"vi": "Đã chép ✓", "en": "Copied ✓"},
     "device":        {"vi": "Thiết bị:", "en": "Device:"},
     "refresh":       {"vi": "Làm mới", "en": "Refresh"},
+    "test_control":  {"vi": "Kiểm tra ADB/scrcpy", "en": "Test ADB/scrcpy"},
+    "test_running":  {"vi": "Đang kiểm tra ADB, stream và scrcpy…", "en": "Testing ADB, stream, and scrcpy…"},
+    "test_stop_first": {"vi": "Hãy dừng bot trước khi kiểm tra kết nối.",
+                          "en": "Stop the bot before testing the connection."},
+    "test_adb_ok":   {"vi": "✓ ADB hoạt động: {} ({}x{}), chụp màn hình thành công.",
+                      "en": "✓ ADB works: {} ({}x{}), screenshot succeeded."},
+    "test_stream_ok": {"vi": "✓ Stream realtime hoạt động: nhận frame sau {:.2f}s.",
+                       "en": "✓ Realtime stream works: frame received in {:.2f}s."},
+    "test_control_ok": {"vi": "✓ Socket điều khiển scrcpy hoạt động (không gửi tap).",
+                        "en": "✓ scrcpy control socket works (no tap sent)."},
+    "test_fail":     {"vi": "✗ Kiểm tra thất bại tại {}: {}", "en": "✗ Test failed at {}: {}"},
     "connect":       {"vi": "Kết nối", "en": "Connect"},
     "conn_msg":      {"vi": "Điện thoại đang nối với máy tính bằng gì?", "en": "How is the phone connected?"},
     "conn_usb":      {"vi": "USB (cắm cáp)", "en": "USB (cable)"},
@@ -155,7 +166,6 @@ LANG = {
                       "en": "Reconnect failed — plug in the USB cable to re-enable Wi-Fi."},
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
-    "slot_offset":   {"vi": "Khoảng cách @ → ô đầu (px):", "en": "Distance @ → first slot (px):"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
     "catch_style":   {"vi": "Kiểu bắt:", "en": "Catch style:"},
     "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
@@ -369,6 +379,13 @@ class App:
         self.refresh_btn = ttk.Button(top, text=self.tr("refresh"), command=self.refresh_devices)
         self.refresh_btn.pack(side="left", padx=4)
         self._i18n.append((self.refresh_btn, "refresh"))
+        test_row = ttk.Frame(self.tab_main)
+        test_row.pack(fill="x", padx=8, pady=(0, 2))
+        self.test_control_btn = ttk.Button(
+            test_row, text=self.tr("test_control"), command=self._test_device_control,
+        )
+        self.test_control_btn.pack(side="right")
+        self._i18n.append((self.test_control_btn, "test_control"))
 
         mode_row = ttk.Frame(self.tab_main)
         mode_row.pack(fill="x", **pad)
@@ -432,7 +449,6 @@ class App:
         catch_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_catch"))
         catch_grp.pack(fill="x", **pad)
         self._i18n.append((catch_grp, "grp_catch"))
-        self.slot_offset = self._spin(catch_grp, "slot_offset", 12, 100, 1500, 770)
         self.throw_power = self._spin(catch_grp, "throw_power", 1, 100, 1400, 700)
         self._label(catch_grp, "catch_style", row=0, column=0, sticky="w", padx=6, pady=2)
         self.catch_style = "normal"
@@ -643,7 +659,6 @@ class App:
             value = float(data.get(name, seconds_default if seconds_format else legacy_default))
             return value if seconds_format else value / 1000.0
 
-        self.slot_offset.set(data.get("slot_offset", int(self.slot_offset.get())))
         self.throw_power.set(data.get("throw_power", int(self.throw_power.get())))
         self.quick_flick.set(timing("quick_flick", 100.0, 0.1))
         # Encounters take ~2-3s to open; a stored wait below that makes the routine give up
@@ -680,7 +695,6 @@ class App:
     def save_settings(self) -> None:
         data = {
             "timing_unit": "seconds",
-            "slot_offset": int(self.slot_offset.get()),
             "throw_power": int(self.throw_power.get()),
             "quick_flick": float(self.quick_flick.get()),
             "wait_enc": float(self.wait_enc.get()),
@@ -822,6 +836,61 @@ class App:
                     self.root.after(0, self.refresh_devices)
 
             threading.Thread(target=rejoin, daemon=True).start()
+
+    def _test_device_control(self) -> None:
+        """Verify capture, realtime frames, and scrcpy control without touching the screen."""
+        if self.worker and self.worker.is_alive():
+            self._log(self.tr("test_stop_first"))
+            return
+        serial = self._sel_serial()
+        if not serial:
+            self._log(self.tr("msg_no_device"))
+            return
+
+        self.test_control_btn.config(state="disabled")
+        self._log(self.tr("test_running"))
+
+        def run_test() -> None:
+            dev = Device(serial)
+            stage = "ADB"
+            try:
+                state = str(dev._run(["get-state"], timeout=5.0)).strip()
+                if state != "device":
+                    raise RuntimeError(f"get-state={state or 'empty'}")
+                frame = dev.screenshot(fresh=True)
+                height, width = frame.shape[:2]
+                self.log_queue.put(self.tr("test_adb_ok").format(serial, width, height))
+
+                stage = "stream realtime"
+                started_at = time.monotonic()
+                dev.start_stream(half=True, bitrate="2M")
+                stream_frame = dev._stream.latest(timeout=7.0)
+                if stream_frame is None or stream_frame.size == 0:
+                    raise RuntimeError("không nhận được frame trong 7 giây")
+                self.log_queue.put(
+                    self.tr("test_stream_ok").format(time.monotonic() - started_at)
+                )
+                dev.stop_stream()
+
+                stage = "scrcpy control"
+                dev._ensure_control()
+                if dev._control_socket is None:
+                    raise RuntimeError("socket không được tạo")
+                self.log_queue.put(self.tr("test_control_ok"))
+            except Exception as exc:  # noqa: BLE001
+                self.log_queue.put(self.tr("test_fail").format(stage, exc))
+            finally:
+                try:
+                    dev.stop_stream()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    dev.close_control()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.root.after(0, lambda: self.test_control_btn.config(state="normal"))
+
+        threading.Thread(target=run_test, daemon=True).start()
 
     def _connect_smart(self) -> None:
         """One-tap connect, no USB/Wi-Fi question asked.
@@ -1196,15 +1265,21 @@ class App:
         ok, png = cv2.imencode(".png", small)
         self._cal_photo = tk.PhotoImage(data=base64.b64encode(png.tobytes())) if ok else None
 
-        win = tk.Toplevel(self.root); win.title(self.tr("cal_title")); win.resizable(False, False)
+        win = tk.Toplevel(self.root); win.title(self.tr("cal_title")); win.resizable(True, True)
         self._cal_win = win
         win.protocol("WM_DELETE_WINDOW", self._cal_close)
         ttk.Label(win, text=self.tr("cal_hint"), wraplength=disp_w + 200,
                   foreground="#555", justify="left").pack(anchor="w", padx=8, pady=(8, 4))
-        body = ttk.Frame(win); body.pack(padx=8, pady=4)
+        # Keep the actions visible at the top even when a tall phone screenshot extends
+        # below the desktop.  The window itself can now be maximized or resized.
+        btns = ttk.Frame(win); btns.pack(fill="x", padx=8, pady=(2, 6))
+        ttk.Button(btns, text=self.tr("cal_save"), command=self._cal_save).pack(side="right", padx=3)
+        ttk.Button(btns, text=self.tr("cal_reset"), command=self._cal_reset).pack(side="right", padx=3)
+        ttk.Button(btns, text=self.tr("cal_cancel"), command=self._cal_close).pack(side="right", padx=3)
+        body = ttk.Frame(win); body.pack(fill="both", expand=True, padx=8, pady=4)
         cv = tk.Canvas(body, width=disp_w, height=disp_h, highlightthickness=1,
                        highlightbackground="#888", cursor="crosshair")
-        cv.pack(side="left")
+        cv.pack(side="left", fill="both", expand=True)
         self._cal_canvas = cv
         if self._cal_photo is not None:
             cv.create_image(0, 0, anchor="nw", image=self._cal_photo)
@@ -1226,10 +1301,6 @@ class App:
         cv.bind("<ButtonPress-1>", self._cal_press)
         cv.bind("<B1-Motion>", self._cal_drag)
         cv.bind("<ButtonRelease-1>", self._cal_release)
-        btns = ttk.Frame(win); btns.pack(fill="x", padx=8, pady=8)
-        ttk.Button(btns, text=self.tr("cal_save"), command=self._cal_save).pack(side="right", padx=3)
-        ttk.Button(btns, text=self.tr("cal_reset"), command=self._cal_reset).pack(side="right", padx=3)
-        ttk.Button(btns, text=self.tr("cal_cancel"), command=self._cal_close).pack(side="right", padx=3)
         self._cal_redraw()
 
     def _cal_redraw(self) -> None:
@@ -1356,17 +1427,25 @@ class App:
         m = self.manual
         if not m or not m.get("_screen"):
             return cfg
-        if tuple(m["_screen"]) != tuple(cfg.screen):
-            self._log(self.tr("cal_mismatch"))
-            return cfg
+        source_w, source_h = (int(v) for v in m["_screen"])
+        target_w, target_h = cfg.screen
+        scale_x = target_w / source_w if source_w else 1.0
+        scale_y = target_h / source_h if source_h else 1.0
 
         def P(name):
             v = m.get(name)
-            return tuple(v) if isinstance(v, (list, tuple)) and len(v) == 2 else None
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return None
+            return (int(round(v[0] * scale_x)), int(round(v[1] * scale_y)))
 
         def R(name):
             v = m.get(name)
-            return tuple(v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
+            if not isinstance(v, (list, tuple)) or len(v) != 4:
+                return None
+            return (
+                int(round(v[0] * scale_x)), int(round(v[1] * scale_y)),
+                int(round(v[2] * scale_x)), int(round(v[3] * scale_y)),
+            )
 
         if mode == "catch":
             if P("nearby_slot"):
@@ -1432,7 +1511,6 @@ class App:
             else:
                 throw_power = abs(int(self.throw_power.get()))
                 cfg = CatchConfig(
-                    slot_offset_y=int(self.slot_offset.get()),
                     throw_dy=-throw_power,
                     encounter_timeout=max(2.0, float(self.wait_enc.get())),
                     catch_timeout=max(2.0, float(self.wait_catch.get())),
@@ -1523,7 +1601,7 @@ class App:
             # Keep the continuous stream light in both modes. Shundo requests a crisp
             # one-shot capture only when an encounter opens and IV digits must be read.
             if self.mode == "shundo":
-                self.device.start_stream(half=True, bitrate="4M")
+                self.device.start_stream(half=True, bitrate="2M")
             else:
                 self.device.start_stream()
             self.routine.run(on_event=on_shundo_event if self.mode == "shundo" else on_event)

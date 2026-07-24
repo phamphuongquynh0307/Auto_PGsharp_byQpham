@@ -43,7 +43,7 @@ class Device:
         self._control_port = None
 
     # -- realtime streaming ---------------------------------------------------
-    def start_stream(self, half: bool = True, bitrate: str = "4M") -> None:
+    def start_stream(self, half: bool = True, bitrate: str = "2M") -> None:
         """Switch screenshot() to pull frames from a live H.264 stream (near-zero latency).
         half=False streams at native resolution (sharper, hotter) — use when small text
         must survive the encode, e.g. the shundo IV read."""
@@ -226,6 +226,10 @@ class Device:
             self.close_control()
             self._run(["shell", "input", "tap", str(x), str(y)])
 
+    def adb_tap(self, x: int, y: int) -> None:
+        """Send an independent Android input tap without reusing scrcpy touch state."""
+        self._run(["shell", "input", "tap", str(int(x)), str(int(y))])
+
     def double_tap(self, x: int, y: int, gap_ms: int = 90) -> None:
         """Send a real double-tap through scrcpy's persistent control socket.
 
@@ -270,7 +274,15 @@ class Device:
         self._touch(0, 1, sx, sy)
         self._touch_line(1, (sx, sy), (ex, ey), throw_duration_ms)
         self._touch(1, 1, ex, ey)
+        time.sleep(0.08)
         self._touch(1, 0, bex, bey)
+        time.sleep(0.08)
+        # Wi-Fi control can occasionally lose an UP while accepting all preceding MOVE
+        # packets, leaving the ball visibly held at the flick endpoint. Duplicate UPs are
+        # harmless when already released and recover that lost-packet state when needed.
+        self._touch(1, 1, ex, ey)
+        self._touch(1, 0, bex, bey)
+        time.sleep(0.08)
         # Let the throw commit, then press Flee exactly three times at 200 ms gaps. No extra tap at the
         # throw endpoint: that was not part of the gesture and added visible delay.
         # MuMu needs about a second after pointer-up to commit the throw. Fleeing sooner

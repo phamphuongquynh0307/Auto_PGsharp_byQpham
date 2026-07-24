@@ -162,7 +162,7 @@ def slot_has_pokemon(
     height: int,
     min_core_std: float = 22.0,
     min_core_edge: float = 0.055,
-    min_edge_prominence: float = 0.015,
+    min_edge_prominence: float = 0.0,
 ) -> bool:
     """Detect a Pokemon sprite in the exact sidebar slot that will be tapped.
 
@@ -178,6 +178,7 @@ def slot_has_pokemon(
     if patch.size == 0 or patch.shape[0] < 12 or patch.shape[1] < 12:
         return False
     gray = _to_gray(patch)
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
     edges = cv2.Canny(gray, 60, 140) > 0
     h, w = gray.shape[:2]
     core = (slice(h // 6, max(h // 6 + 1, 5 * h // 6)),
@@ -186,8 +187,17 @@ def slot_has_pokemon(
     surround[core] = False
     core_edge = float(edges[core].mean())
     side_edge = float(edges[surround].mean()) if surround.any() else 0.0
+    core_gray_std = float(gray[core].std())
+    core_sat = hsv[core][..., 1]
+    # Dark blue/brown sprites can have little grayscale contrast while remaining
+    # strongly coloured. Accept that colour texture as an alternative to brightness
+    # texture, but still require the same compact edge cluster below.
+    textured = (
+        core_gray_std >= min_core_std
+        or (float(core_sat.std()) >= 35.0 and float(core_sat.mean()) >= 80.0)
+    )
     return (
-        float(gray[core].std()) >= min_core_std
+        textured
         and core_edge >= min_core_edge
         and core_edge - side_edge >= min_edge_prominence
     )
