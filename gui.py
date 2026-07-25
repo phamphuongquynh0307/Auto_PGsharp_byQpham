@@ -24,6 +24,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import cv2
+import numpy as np
 
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
@@ -43,17 +44,17 @@ CALIB_ITEMS = [
     ("flee_xy",             "point",  "both",   "cal_flee",    "#ffcc00"),
     ("pokestop_close_xy",   "point",  "catch",  "cal_stop",    "#ff33cc"),
     ("out_of_balls_region", "region", "catch",  "cal_noball",  "#ff8800"),
-    ("enc_ball_region",     "region", "both",   "cal_encball", "#ff5555"),   # 1 khung chung cả 2 mode
     ("pill_region",         "region", "shundo", "cal_pill",    "#3399ff"),
     ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
 ]
 
 CALIB_GROUP_FIELDS = {
-    "normal": ("nearby_slot", "ball_fallback", "pokestop_close_xy",
-               "out_of_balls_region", "enc_ball_region"),
+    # enc_ball_region is deliberately absent: the encounter's ball-selector is found by its
+    # own shape now (vision.find_enc_ball), so there is nothing left to line up by hand.
+    "normal": ("nearby_slot", "ball_fallback", "pokestop_close_xy", "out_of_balls_region"),
     "quick": ("nearby_slot", "ball_fallback", "berry_start", "berry_end", "flee_xy",
-              "pokestop_close_xy", "out_of_balls_region", "enc_ball_region"),
-    "shundo": ("flee_xy", "enc_ball_region", "pill_region", "toast_region"),
+              "pokestop_close_xy", "out_of_balls_region"),
+    "shundo": ("flee_xy", "pill_region", "toast_region"),
 }
 
 LANG = {
@@ -219,13 +220,27 @@ LANG = {
     "cal_pill":      {"vi": "Khung IV pill (Shundo)", "en": "IV pill box (Shundo)"},
     "cal_stop":      {"vi": "Nút đóng Pokéstop (X)", "en": "Pokéstop close (X)"},
     "cal_noball":    {"vi": "Khung 'hết bóng' (x0)", "en": "Out-of-balls box (x0)"},
-    "cal_encball":   {"vi": "Khung nút bóng phải (nhận encounter)", "en": "Right ball-selector box (encounter)"},
     "cal_toast":     {"vi": "Khung toast (Shundo)", "en": "Toast box (Shundo)"},
-    "pv_legend":     {"vi": "Xanh lá = ô feed sẽ bấm • Vàng nhạt = thanh @ / ô spawn • Vàng = điểm tap dưới chân • "
-                            "Hồng = vòng Pokémon • Cam = vùng đọc IV • Trắng = vùng toast • Đỏ = đang trong màn bắt",
-                      "en": "Green = feed tap • Pale yellow = @ bar / spawn slot • Yellow = feet tap point • "
-                            "Pink = Pokémon rings • Orange = IV read area • White = toast area • Red = in encounter"},
+    "pv_legend":     {"vi": "Bắt: vàng = ô Nearby sẽ bấm • xanh lá = điểm ném + hướng ném • cam = thanh feed "
+                            "(chỉ khi Nearby trống) • đỏ = khung nhận encounter • hồng = nút thoát.   "
+                            "Shundo: xanh lá = ô feed • vàng nhạt = thanh @ • cam = vùng đọc IV • trắng = vùng toast.",
+                      "en": "Catch: yellow = Nearby slot it will tap • green = throw point + direction • orange = "
+                            "feed bar (only when Nearby is empty) • red = encounter box • pink = flee button.   "
+                            "Shundo: green = feed slot • pale yellow = @ bar • orange = IV area • white = toast area."},
     "pv_err":        {"vi": "Không mở được xem trực tiếp: {}", "en": "Could not open live view: {}"},
+    "pv_overlay":    {"vi": "Vẽ vùng bot nhìn", "en": "Draw what the bot sees"},
+    "pv_control":    {"vi": "Điều khiển bằng chuột", "en": "Control with mouse"},
+    "pv_back":       {"vi": "◀ Back", "en": "◀ Back"},
+    "pv_home":       {"vi": "⌂ Home", "en": "⌂ Home"},
+    "pv_zoom":       {"vi": "⤢", "en": "⤢"},
+    "pv_on":         {"vi": "bật", "en": "on"},
+    "pv_off":        {"vi": "tắt", "en": "off"},
+    "pv_status":     {"vi": "{:.1f} fps • màn hình {}x{} • điều khiển: {}",
+                      "en": "{:.1f} fps • screen {}x{} • control: {}"},
+    "pv_hint":       {"vi": "Kéo chuột trên ảnh để vuốt/điều khiển máy như scrcpy. "
+                            "Tắt 'Điều khiển bằng chuột' nếu chỉ muốn xem.",
+                      "en": "Drag on the image to swipe/control the phone like scrcpy. "
+                            "Untick 'Control with mouse' to just watch."},
     "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
     "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
     "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
@@ -1159,9 +1174,14 @@ class App:
             self._send_discord(self.tr("dc_report").format(up_min, done, rate, stats.cycles, part))
 
     # -- live view -------------------------------------------------------------
+    # -- live view -------------------------------------------------------------
+    PV_WIDTHS = (340, 460, 600)
+
     def toggle_preview(self) -> None:
-        """A small window mirroring the phone with the shundo detections drawn on it:
-        where the feed tap goes, the '@' slot state, the feet tap point, spawn rings."""
+        """Mirror the phone in real time, with the running mode's own detections drawn over
+        it, and let the mouse drive the phone through the same scrcpy control socket the
+        routines use. Frames come from the H.264 stream, so this is a live mirror rather than
+        the old one-shot screenshot every 800 ms."""
         if getattr(self, "_pv_win", None):
             self._close_preview()
             return
@@ -1170,71 +1190,255 @@ class App:
             if not (self._sel_serial() or self.device):
                 raise RuntimeError(self.tr("msg_no_device"))
             self._pv_dev = dev
-            # Scale the annotation config to this phone so the drawn boxes line up.
-            pv_cfg = ShundoConfig()
-            try:
-                pv_cfg = pv_cfg.scale_to(*dev.screen_size(), dev.density())
-            except Exception:  # noqa: BLE001
-                pass
-            self._pv_det = ShundoRoutine(dev, pv_cfg)
+            self._pv_size = dev.screen_size()
+            dens = dev.density()
+            # One detector per mode, scaled to this phone so the drawn boxes line up. The
+            # overlay must show what the *running* mode sees, not always shundo's boxes.
+            catch_cfg = self._apply_manual(CatchConfig().scale_to(*self._pv_size, dens), "catch")
+            shundo_cfg = self._apply_manual(ShundoConfig().scale_to(*self._pv_size, dens), "shundo")
+            self._pv_dets = {"catch": CatchRoutine(dev, catch_cfg),
+                             "shundo": ShundoRoutine(dev, shundo_cfg)}
+            # Only stop the stream on close if we were the ones who started it; while the bot
+            # runs it owns the stream and pulling it out from under the routine would stall it.
+            self._pv_owns_stream = dev._stream is None
+            if self._pv_owns_stream:
+                dev.start_stream(half=True, bitrate="2M")
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("pv_err").format(e))
             return
+
         win = tk.Toplevel(self.root)
         win.title(self.tr("preview"))
-        win.resizable(False, False)
         self._pv_win = win
-        self._pv_label = ttk.Label(win)
-        self._pv_label.pack(padx=4, pady=4)
-        ttk.Label(win, text=self.tr("pv_legend"), wraplength=330, justify="left").pack(padx=8, pady=(0, 8))
         win.protocol("WM_DELETE_WINDOW", self._close_preview)
-        self._pv_busy = False
+
+        bar = ttk.Frame(win)
+        bar.pack(fill="x", padx=6, pady=(6, 2))
+        self.pv_overlay = tk.BooleanVar(value=True)
+        self.pv_control = tk.BooleanVar(value=True)
+        # Tk variables must not be read from the worker threads (tkinter is not thread-safe —
+        # doing so silently killed every frame), so mirror them into plain flags here, on the
+        # UI thread, and let the threads read those.
+        self._pv_overlay_on = True
+        self._pv_control_on = True
+
+        def sync_flags() -> None:
+            self._pv_overlay_on = bool(self.pv_overlay.get())
+            self._pv_control_on = bool(self.pv_control.get())
+
+        ov = ttk.Checkbutton(bar, text=self.tr("pv_overlay"), variable=self.pv_overlay,
+                             command=sync_flags)
+        ov.pack(side="left")
+        ct = ttk.Checkbutton(bar, text=self.tr("pv_control"), variable=self.pv_control,
+                             command=sync_flags)
+        ct.pack(side="left", padx=(10, 0))
+        ttk.Button(bar, text=self.tr("pv_back"), width=7,
+                   command=lambda: self._pv_key("KEYCODE_BACK")).pack(side="right", padx=2)
+        ttk.Button(bar, text=self.tr("pv_home"), width=7,
+                   command=lambda: self._pv_key("KEYCODE_HOME")).pack(side="right", padx=2)
+        ttk.Button(bar, text=self.tr("pv_zoom"), width=4,
+                   command=self._pv_cycle_size).pack(side="right", padx=(10, 2))
+
+        self._pv_label = ttk.Label(win, cursor="hand2")
+        self._pv_label.pack(padx=4, pady=4)
+        self._pv_status = tk.StringVar(value="…")
+        ttk.Label(win, textvariable=self._pv_status, foreground="#666").pack(anchor="w", padx=8)
+        ttk.Label(win, text=self.tr("pv_hint"), wraplength=self.PV_WIDTHS[-1],
+                  justify="left", foreground="#555").pack(anchor="w", padx=8, pady=(2, 0))
+        ttk.Label(win, text=self.tr("pv_legend"), wraplength=self.PV_WIDTHS[-1],
+                  justify="left").pack(padx=8, pady=(4, 8))
+
+        for seq, handler in (("<ButtonPress-1>", self._pv_press),
+                             ("<B1-Motion>", self._pv_drag),
+                             ("<ButtonRelease-1>", self._pv_release)):
+            self._pv_label.bind(seq, handler)
+
+        self._pv_width = self.PV_WIDTHS[0]
         self._pv_img = None
-        self._pv_tick()
+        self._pv_layer = None          # (layer, mask) at full device resolution
+        self._pv_error = None
+        self._pv_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._pv_stop = threading.Event()
+        self._pv_threads = [threading.Thread(target=t, daemon=True)
+                            for t in (self._pv_loop, self._pv_overlay_loop)]
+        for t in self._pv_threads:
+            t.start()
+        self._pv_pump()
+
+    def _pv_pump(self) -> None:
+        """Drain the newest mirrored frame onto the window. Runs on the UI thread."""
+        if getattr(self, "_pv_win", None) is None:
+            return
+        try:
+            data, shown, status = self._pv_queue.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            img = tk.PhotoImage(data=data)
+            self._pv_img = img              # keep a reference or Tk drops it
+            self._pv_shown = shown
+            self._pv_label.config(image=img)
+            self._pv_status.set(f"{status}   ⚠ {self._pv_error}" if self._pv_error else status)
+        self.root.after(30, self._pv_pump)
 
     def _close_preview(self) -> None:
         win = getattr(self, "_pv_win", None)
         self._pv_win = None
+        stop = getattr(self, "_pv_stop", None)
+        if stop is not None:
+            stop.set()
+        for thread in getattr(self, "_pv_threads", []) or []:
+            thread.join(timeout=2.0)
+        self._pv_threads = []
+        self._pv_layer = None
+        if getattr(self, "_pv_owns_stream", False) and getattr(self, "_pv_dev", None) is not None:
+            try:
+                self._pv_dev.stop_stream()
+            except Exception:  # noqa: BLE001
+                pass
+        self._pv_owns_stream = False
         if win is not None:
             try:
                 win.destroy()
             except Exception:  # noqa: BLE001
                 pass
 
-    def _pv_tick(self) -> None:
-        if getattr(self, "_pv_win", None) is None:
+    def _pv_cycle_size(self) -> None:
+        widths = self.PV_WIDTHS
+        self._pv_width = widths[(widths.index(self._pv_width) + 1) % len(widths)]
+
+    # -- live view: pointer forwarding ----------------------------------------
+    def _pv_to_device(self, event) -> tuple[int, int] | None:
+        """Map a click on the mirrored image to real device pixels."""
+        shown = getattr(self, "_pv_shown", None)
+        if shown is None:
+            return None
+        disp_w, disp_h = shown
+        dev_w, dev_h = self._pv_size
+        if disp_w <= 0 or disp_h <= 0:
+            return None
+        x = int(event.x * dev_w / disp_w)
+        y = int(event.y * dev_h / disp_h)
+        if not (0 <= x < dev_w and 0 <= y < dev_h):
+            return None
+        return x, y
+
+    def _pv_device(self):
+        return self.device if self.device is not None else self._pv_dev
+
+    def _pv_press(self, event) -> None:
+        if not self.pv_control.get():
             return
-        if not self._pv_busy:
-            self._pv_busy = True
-            threading.Thread(target=self._pv_work, daemon=True).start()
-        self.root.after(800, self._pv_tick)
-
-    def _pv_work(self) -> None:
-        """Grab + annotate + display one frame. Runs off the UI thread; only the final
-        image swap is marshalled back. Uses the routine's live stream when running,
-        else one-shot captures (slower but fine for a preview)."""
+        pt = self._pv_to_device(event)
+        if pt is None:
+            return
+        self._pv_last_pt = pt
         try:
-            dev = self.device if self.device is not None else self._pv_dev
-            frame = dev.screenshot()
-            ann = self._pv_det.annotate(frame)
-            h, w = ann.shape[:2]
-            scale = 340 / w
-            small = cv2.resize(ann, (340, int(h * scale)))
-            ok, png = cv2.imencode(".png", small)
-            if ok:
-                data = base64.b64encode(png.tobytes())
+            self._pv_device().touch_down(*pt)
+        except Exception as e:  # noqa: BLE001
+            self._pv_status.set(self.tr("pv_err").format(e))
 
-                def show() -> None:
-                    if getattr(self, "_pv_win", None) is not None:
-                        img = tk.PhotoImage(data=data)
-                        self._pv_img = img          # keep a reference or Tk drops it
-                        self._pv_label.config(image=img)
-
-                self.root.after(0, show)
+    def _pv_drag(self, event) -> None:
+        if not self.pv_control.get():
+            return
+        pt = self._pv_to_device(event)
+        if pt is None:
+            return
+        self._pv_last_pt = pt
+        try:
+            self._pv_device().touch_move(*pt)
         except Exception:  # noqa: BLE001
             pass
-        finally:
-            self._pv_busy = False
+
+    def _pv_release(self, event) -> None:
+        if not self.pv_control.get():
+            return
+        pt = self._pv_to_device(event) or getattr(self, "_pv_last_pt", None)
+        if pt is None:
+            return
+        try:
+            self._pv_device().touch_up(*pt)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _pv_key(self, keycode: str) -> None:
+        try:
+            self._pv_device().key(keycode)
+        except Exception as e:  # noqa: BLE001
+            self._pv_status.set(self.tr("pv_err").format(e))
+
+    # -- live view: frame pump -------------------------------------------------
+    def _pv_overlay_loop(self) -> None:
+        """Recompute the detection overlay on its own slow cadence.
+
+        A full annotate pass costs ~200 ms because it runs the real detectors; doing that per
+        displayed frame would drop the mirror to 4 fps and make it useless for control. Instead
+        it is drawn onto a blank canvas here, and the display loop composites that layer onto
+        live frames — so the overlay lags by up to a second while the video stays smooth.
+        """
+        while not self._pv_stop.is_set():
+            if not self._pv_overlay_on:
+                self._pv_layer = None
+                self._pv_stop.wait(0.2)
+                continue
+            try:
+                frame = self._pv_device().screenshot()
+                det = self._pv_dets["shundo" if self.mode == "shundo" else "catch"]
+                layer = np.zeros_like(frame)
+                det.annotate(frame, canvas=layer)
+                # Anything the annotate pass drew is non-black; that is the composite mask.
+                mask = layer.any(axis=2)
+                self._pv_layer = (layer, mask)
+            except Exception as e:  # noqa: BLE001
+                self._pv_layer = None
+                self._pv_error = f"overlay {type(e).__name__}: {e}"
+            self._pv_stop.wait(0.8)
+
+    def _pv_loop(self) -> None:
+        """Pump stream frames to the UI, compositing the cached overlay layer onto each one."""
+        frames = 0
+        fps_since = time.monotonic()
+        fps = 0.0
+        while not self._pv_stop.is_set():
+            try:
+                frame = self._pv_device().screenshot(next_frame=True)
+                h, w = frame.shape[:2]
+                target_w = self._pv_width
+                small = cv2.resize(frame, (target_w, int(h * target_w / w)))
+                layer = self._pv_layer if self._pv_overlay_on else None
+                if layer is not None:
+                    # Composite after downscaling: a few hundred KB instead of 10 MB per frame.
+                    lay, mask = layer
+                    size = (small.shape[1], small.shape[0])
+                    lay_s = cv2.resize(lay, size, interpolation=cv2.INTER_NEAREST)
+                    mask_s = cv2.resize(mask.astype(np.uint8), size,
+                                        interpolation=cv2.INTER_NEAREST).astype(bool)
+                    small[mask_s] = lay_s[mask_s]
+                ok, png = cv2.imencode(".png", small)
+                if not ok:
+                    continue
+                data = base64.b64encode(png.tobytes())
+                shown = (small.shape[1], small.shape[0])
+                frames += 1
+                if time.monotonic() - fps_since >= 1.0:
+                    fps = frames / (time.monotonic() - fps_since)
+                    frames, fps_since = 0, time.monotonic()
+                status = self.tr("pv_status").format(
+                    fps, self._pv_size[0], self._pv_size[1],
+                    self.tr("pv_on") if self._pv_control_on else self.tr("pv_off"))
+                # Hand the finished frame over through a queue drained on the UI thread,
+                # the way the log already works. Touching Tk from here (even via after())
+                # is not safe, and a slow UI would otherwise pile up callbacks.
+                try:
+                    self._pv_queue.get_nowait()     # only the newest frame is worth showing
+                except queue.Empty:
+                    pass
+                self._pv_queue.put_nowait((data, shown, status))
+            except Exception as e:  # noqa: BLE001
+                # A mirror that silently shows nothing is impossible to diagnose; keep the
+                # last failure where the status line (and a bug report) can see it.
+                self._pv_error = f"{type(e).__name__}: {e}"
+                self._pv_stop.wait(0.3)
 
     # -- run control ----------------------------------------------------------
     # -- manual alignment -----------------------------------------------------
@@ -1250,7 +1454,6 @@ class App:
             "flee_xy":             list(c.flee_xy),
             "pokestop_close_xy":   list(c.pokestop_close_xy),
             "out_of_balls_region": list(c.out_of_balls_region),
-            "enc_ball_region":     list(c.enc_ball_region),   # dùng chung cả catch & shundo
             "pill_region":         list(s.pill_region),
             "toast_region":        list(s.toast_region),
         }
@@ -1535,15 +1738,11 @@ class App:
                 cfg.pokestop_close_xy = P("pokestop_close_xy")
             if R("out_of_balls_region"):
                 cfg.out_of_balls_region = R("out_of_balls_region")
-            if R("enc_ball_region"):
-                cfg.enc_ball_region = R("enc_ball_region")
         else:
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
             if R("pill_region"):
                 cfg.pill_region = R("pill_region")
-            if R("enc_ball_region"):
-                cfg.enc_ball_region = R("enc_ball_region")
             if R("toast_region"):
                 cfg.toast_region = R("toast_region")
         return cfg

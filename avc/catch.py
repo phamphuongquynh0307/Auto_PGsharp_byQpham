@@ -35,7 +35,10 @@ from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
 from .resources import resource_path
-from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template, slot_has_pokemon
+from .vision import (
+    best_matching_scale, find, find_enc_ball, find_fast, find_popup_close, load_template,
+    slot_has_pokemon,
+)
 
 
 def _resolve(template_path: str) -> str:
@@ -96,14 +99,12 @@ class CatchConfig:
     # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
     # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
     ball_fallback: tuple[int, int] = (610, 2380)
-    # Encounter signal: the bottom-RIGHT ball-selector button. It's a small opaque red Poké Ball
-    # that's shown in every encounter *regardless of which ball is loaded to throw* (Great/Ultra
-    # included) — so colour-matching its red dome detects the encounter for any ball type, unlike
-    # checking the throwable ball (blue Great Balls / yellow Ultra Balls aren't red). Off the
-    # encounter (map, post-catch "Gotcha") the selector is gone, so red here also means "in an
-    # encounter", which doubles as the leave/next-cycle signal.
-    enc_ball_region: tuple[int, int, int, int] = (1016, 2369, 70, 40)
-    enc_ball_red_frac: float = 0.5
+    # Encounter signal: the bottom-RIGHT ball-selector button. It's an opaque red Poké Ball shown
+    # in every encounter *regardless of which ball is loaded to throw* (Great/Ultra included), so
+    # spotting it detects the encounter for any ball type, unlike checking the throwable ball
+    # (blue Great Balls / yellow Ultra Balls aren't red). Off the encounter (map, post-catch
+    # "Gotcha") it is gone, which doubles as the leave/next-cycle signal. It is located by shape
+    # in vision.find_enc_ball — there is deliberately no region to calibrate here.
 
     # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
     # the bottom center. When it shows we're out of Poké Balls: flee the encounter, alert Discord,
@@ -254,7 +255,6 @@ class CatchConfig:
             ball_fallback=L.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
             berry_start=L.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
             berry_end=L.point(self.berry_end, "BL"),
-            enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
             check_btn_region=L.region(self.check_btn_region, "BC"),
             caught_ok_region=L.region(self.caught_ok_region, "MC"),
@@ -296,6 +296,7 @@ class CatchRoutine:
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._nearby_handle_cache: tuple[int, int] | None = None
+        self._enc_ball_at: tuple[int, int] | None = None   # last seen selector, for the live view
         self._nearby_presence_streak = 0
         # Feed sidebar: cached (rss, handle, slot) positions, a presence streak matching the
         # Nearby one, and whether the bar has ever been located (so a user without the feed
@@ -374,28 +375,15 @@ class CatchRoutine:
         self.device.double_tap(jx, jy, self.config.double_tap_gap_ms)
 
     def _enc_ball_visible(self, frame) -> bool:
-        """True when the bottom-right ball-selector's red dome fills its fixed strip. That button
-        is an opaque red Poké Ball shown in every encounter whatever ball is loaded, so it detects
-        the encounter for all ball types; a bright background can't wash out an opaque colour."""
-        x, y, w, h = self.config.enc_ball_region
-        # Respect the exact manually calibrated frame. Expanding this region can overlap
-        # the PGSharp Pokémon sidebar and mistake one of its red icons for the selector.
-        patch = frame[y:y + h, x:x + w]
-        if patch.size == 0:
-            return False
-        p = patch.astype(int)
-        b, g, r = p[..., 0], p[..., 1], p[..., 2]
-        red = (r > 110) & (r - g > 40) & (r - b > 40)
-        ys, xs = np.nonzero(red)
-        minimum = max(60, self.config.s(10) ** 2)
-        if len(xs) < minimum:
-            return False
-        # On this layout the calibrated box clips the selector's broad red dome along
-        # its lower edge. The sidebar only contributes a narrow vertical red sliver that
-        # runs through the whole box. Require both the broad dome and its bottom-heavy shape.
-        bottom_start = max(0, int(red.shape[0] * 0.65))
-        bottom_share = float(red[bottom_start:].sum()) / max(1, len(xs))
-        return np.ptp(xs) >= self.config.s(22) and bottom_share >= 0.55
+        """True when the bottom-right ball-selector is up, i.e. we are in an encounter.
+
+        That button is an opaque red Poké Ball shown in every encounter whatever ball is
+        loaded, so it detects the encounter for all ball types. It is found by its own
+        red-dome-over-white-belly shape (see vision.find_enc_ball) rather than by sampling a
+        hand-placed strip, so there is nothing to calibrate and being a few pixels out on a
+        given device cannot blind it."""
+        self._enc_ball_at = find_enc_ball(frame, scale=self.config.layout.s)
+        return self._enc_ball_at is not None
 
     def _ball_in(self, frame) -> tuple[int, int] | None:
         # Only the red ball-selector at bottom-right is an encounter-safe signal.  The old
@@ -1218,3 +1206,80 @@ class CatchRoutine:
 
     def resume(self) -> None:
         self.pause_event.clear()
+
+    # -- live-view annotation --------------------------------------------------------
+    def annotate(self, frame, canvas=None):
+        """The catch routine's own detections drawn for the GUI's live view: which Nearby slot
+        it would engage, the feed fallback, the throw vector, and the boxes the encounter /
+        out-of-balls detectors read.
+
+        Detection runs against `frame`; the drawing goes onto `canvas`, which defaults to a
+        copy of the frame. Passing a blank canvas yields a transparent-style overlay layer the
+        caller can composite onto live frames, so a mirror does not have to run this (fairly
+        expensive) pass for every frame it displays."""
+        import cv2
+
+        cfg = self.config
+        img = frame.copy() if canvas is None else canvas
+
+        def box(rect, colour, label):
+            x, y, w, h = rect
+            cv2.rectangle(img, (x, y), (x + w, y + h), colour, 3)
+            cv2.putText(img, label, (x, max(24, y - 10)), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9, colour, 2)
+
+        # Encounter + out-of-balls detector windows.
+        in_enc = self._enc_ball_visible(frame)
+        if self._enc_ball_at is not None:
+            cv2.circle(img, self._enc_ball_at, cfg.s(70), (0, 0, 255), 4)
+            cv2.putText(img, "ENC", (self._enc_ball_at[0] - cfg.s(40),
+                                     self._enc_ball_at[1] - cfg.s(80)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        box(cfg.out_of_balls_region, (0, 140, 255), "x0")
+
+        # Throw: start point and where the flick ends.
+        bx, by = cfg.ball_fallback
+        ready = self._ball_ready(frame)
+        cv2.circle(img, (bx, by), max(10, cfg.s(34)), (0, 255, 0) if ready else (0, 160, 0), 4)
+        cv2.arrowedLine(img, (bx, by), (bx, by + cfg.throw_dy), (0, 255, 0), 4, tipLength=0.08)
+        cv2.putText(img, "THROW", (bx + cfg.s(45), by), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9, (0, 255, 0), 2)
+
+        # Nearby bar: the '@' that proves it is on screen, slot 1, and the slot actually chosen.
+        slot1 = cfg.nearby_slot if cfg.force_slot else self._slot_in(frame)
+        if self._anchor_cache is not None:
+            cv2.circle(img, self._anchor_cache, cfg.s(40), (255, 255, 0), 4)
+        if slot1 is not None:
+            cv2.drawMarker(img, slot1, (255, 255, 0), cv2.MARKER_CROSS, cfg.s(70), 4)
+            streak = self._nearby_presence_streak      # keep the routine's own streak intact
+            target = self._occupied_slot_in(frame)
+            self._nearby_presence_streak = streak
+            half_w, half_h = cfg.s(70), cfg.s(55)
+            if target is not None:
+                cv2.rectangle(img, (target[0] - half_w, target[1] - half_h),
+                              (target[0] + half_w, target[1] + half_h), (0, 255, 255), 5)
+                cv2.putText(img, "DBL TAP", (target[0] - half_w, target[1] - half_h - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 255), 2)
+            else:
+                cv2.putText(img, "NEARBY EMPTY", (slot1[0] - half_w, slot1[1] - half_h - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (160, 160, 160), 2)
+
+        # Feed bar: only a fallback, so draw it dimmer than the Nearby target.
+        if cfg.use_feed_bar and self._rss is not None:
+            streak = self._feed_presence_streak
+            feed = self._feed_slot_in(frame)
+            self._feed_presence_streak = streak
+            if feed is not None:
+                cv2.circle(img, feed, cfg.s(48), (255, 120, 0), 4)
+                cv2.putText(img, "FEED", (feed[0] - cfg.s(40), feed[1] - cfg.s(58)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 120, 0), 2)
+
+        # Flee button, and a banner for the states that drive the flow.
+        cv2.drawMarker(img, cfg.flee_xy, (255, 0, 255), cv2.MARKER_TILTED_CROSS, cfg.s(60), 4)
+        if in_enc:
+            cv2.putText(img, "IN ENCOUNTER", (cfg.s(60), cfg.s(230)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+        if self._teleport_blocked:
+            cv2.putText(img, "FEED OFF (Go Plus)", (cfg.s(60), cfg.s(300)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 140, 255), 3)
+        return img

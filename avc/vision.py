@@ -203,6 +203,60 @@ def slot_has_pokemon(
     )
 
 
+def find_enc_ball(
+    scene: np.ndarray,
+    *,
+    scale: float = 1.0,
+    min_area: int = 900,
+    max_area: int = 13000,
+) -> tuple[int, int] | None:
+    """Locate the encounter's bottom-right ball-selector button, or None if it isn't up.
+
+    Needs no calibration. The corner to search is expressed as a fraction of the frame, and
+    the button is identified by its own shape rather than by sitting at a remembered spot: a
+    wide red dome (the ball's top half) with a bright white belly directly beneath it. That
+    pairing is what separates it from any other red thing on the map, and it holds for every
+    ball type because this selector always shows a red Poké Ball.
+
+    This replaces sampling a hand-placed strip. That strip had to be positioned within a few
+    pixels of a 70x40 box clipping the dome's edge — painful to calibrate and silently broken
+    when slightly off — whereas the button itself is large and unmistakable.
+    """
+    height, width = scene.shape[:2]
+    x0, y0 = int(width * 0.68), int(height * 0.80)
+    patch = scene[y0:, x0:]
+    if patch.size == 0:
+        return None
+    p = patch.astype(int)
+    b, g, r = p[..., 0], p[..., 1], p[..., 2]
+    # A *saturated true red*, not merely "reddish". Measured on this UI: the ball's dome sits
+    # at r-b ≈ 175, while the pink "A Route is nearby!" banner that shares this corner is only
+    # at r-b ≈ 52 — a loose threshold picked the banner up and reported a phantom encounter.
+    red = ((r > 120) & (r - g > 60) & (r - b > 100)).astype(np.uint8)
+    count, _labels, stats, _cents = cv2.connectedComponentsWithStats(red, 8)
+    best_area = 0
+    best_center: tuple[int, int] | None = None
+    for i in range(1, count):
+        cx, cy, cw, ch, area = stats[i]
+        # The button has a known size; anything far larger is a banner or backdrop, not it.
+        if not (min_area * scale * scale <= area <= max_area * scale * scale):
+            continue
+        if area <= best_area:
+            continue
+        if not (1.1 <= cw / max(1, ch) <= 3.0):      # a dome is wider than it is tall
+            continue
+        belly = p[cy + ch:min(patch.shape[0], cy + ch + max(6, int(ch * 0.8))), cx:cx + cw]
+        if belly.size == 0:
+            continue
+        bb, bg, br = belly[..., 0], belly[..., 1], belly[..., 2]
+        spread = np.maximum.reduce((bb, bg, br)) - np.minimum.reduce((bb, bg, br))
+        if float(((br > 150) & (bg > 150) & (bb > 150) & (spread < 60)).mean()) < 0.25:
+            continue
+        best_area = area
+        best_center = (x0 + cx + cw // 2, y0 + cy + ch // 2)
+    return best_center
+
+
 def _iou(a: Match, b: Match) -> float:
     ax2, ay2 = a.x + a.width, a.y + a.height
     bx2, by2 = b.x + b.width, b.y + b.height

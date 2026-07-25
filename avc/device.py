@@ -328,6 +328,24 @@ class Device:
             self.close_control()
             self.swipe(x1, y1, x2, y2, duration_ms)
 
+    # -- interactive pointer (live view) --------------------------------------
+    # A real press/move/release trio, so dragging a finger across the mirrored screen
+    # behaves like it does on the phone: the map pans and flings instead of receiving a
+    # single teleporting tap. Same control socket the routines use.
+    def touch_down(self, x: int, y: int) -> None:
+        self._ensure_control()
+        self._touch(0, 0, int(x), int(y))
+
+    def touch_move(self, x: int, y: int) -> None:
+        if self._control_socket is None:
+            return
+        self._touch(2, 0, int(x), int(y))
+
+    def touch_up(self, x: int, y: int) -> None:
+        if self._control_socket is None:
+            return
+        self._touch(1, 0, int(x), int(y))
+
     def _ensure_control(self) -> None:
         """Start scrcpy-server in control-only mode and connect its local socket."""
         if self._control_socket is not None:

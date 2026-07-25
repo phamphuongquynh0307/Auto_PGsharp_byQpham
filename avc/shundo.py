@@ -30,7 +30,10 @@ from .device import Device
 from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
-from .vision import best_matching_scale, find, find_fast, find_popup_close, load_template, slot_has_pokemon
+from .vision import (
+    best_matching_scale, find, find_enc_ball, find_fast, find_popup_close, load_template,
+    slot_has_pokemon,
+)
 
 
 @dataclass
@@ -83,11 +86,8 @@ class ShundoConfig:
     encounter_open_wait: float = 3.0
 
     # Encounter confirmation: the bottom-right ball-selector button — an opaque red Poké Ball
-    # shown once the encounter is open, for any loaded ball type. Colour match, so it reads the
-    # same on any background (unlike the old semi-transparent camera icon). Same box as the
-    # catch routine's; see CatchConfig.enc_ball_region.
-    enc_ball_region: tuple[int, int, int, int] = (1016, 2369, 70, 40)
-    enc_ball_red_frac: float = 0.5
+    # shown once the encounter is open, for any loaded ball type. Located by shape in
+    # vision.find_enc_ball, so there is no region to calibrate.
 
     # PGSharp info pill glyphs for the 15/15/15 check.
     glyph_1_template: str = "templates/glyph_1.png"
@@ -173,7 +173,6 @@ class ShundoConfig:
             density=density,
             anchor_region=L.region(self.anchor_region, "TR"),
             # anchored regions/positions
-            enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
             toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
@@ -218,6 +217,7 @@ class ShundoRoutine:
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._nearby_presence_streak = 0
         self._feed_presence_streak = 0
+        self._enc_ball_at: tuple[int, int] | None = None
         # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
         # avoids teleporting, so the run cannot continue.
         self._teleport_blocked = False
@@ -392,18 +392,11 @@ class ShundoRoutine:
         return None
 
     def _enc_ball_visible(self, frame) -> bool:
-        """True when the bottom-right ball-selector's red dome fills its fixed strip — i.e. the
-        encounter is open. Opaque colour, so it reads the same on any Pokémon's background.
-        (Same signal as CatchRoutine._enc_ball_visible.)"""
-        x, y, w, h = self.config.enc_ball_region
-        patch = frame[y:y + h, x:x + w]
-        if patch.size == 0:
-            return False
-        p = patch.astype(int)
-        b, g, r = p[..., 0], p[..., 1], p[..., 2]
-        red = (r > 110) & (r - g > 40) & (r - b > 40)
-        dome = red[:max(1, red.shape[0] // 2)]
-        return float(dome.mean()) >= self.config.enc_ball_red_frac
+        """True when the bottom-right ball-selector is up — i.e. the encounter is open, which
+        for shundo means the Pokémon is shiny. Found by the button's own shape, so there is
+        nothing to calibrate. (Same signal as CatchRoutine._enc_ball_visible.)"""
+        self._enc_ball_at = find_enc_ball(frame, scale=self.config.layout.s)
+        return self._enc_ball_at is not None
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -726,13 +719,17 @@ class ShundoRoutine:
         self.pause_event.clear()
 
     # -- live-view annotation --------------------------------------------------------
-    def annotate(self, frame):
-        """Copy of `frame` with the routine's detections drawn on it, for the GUI's
-        live view: feed tap spot, nearby '@' first slot (the double-tap target) and its
-        state, the IV pill region and the blocked-toast region."""
+    def annotate(self, frame, canvas=None):
+        """The routine's detections drawn for the GUI's live view: feed tap spot, nearby '@'
+        first slot (the double-tap target) and its state, the IV pill region and the
+        blocked-toast region.
+
+        Detection runs against `frame`; the drawing goes onto `canvas`, which defaults to a
+        copy of the frame. A blank canvas gives an overlay layer the caller can composite onto
+        live frames instead of paying for this pass on every displayed frame."""
         import cv2
         cfg = self.config
-        img = frame.copy()
+        img = frame.copy() if canvas is None else canvas
 
         slot = self._feed_slot_in(frame)
         if slot is not None:

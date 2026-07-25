@@ -1,3 +1,45 @@
+# v1.1.9
+
+## Tiếng Việt
+
+### Xem trực tiếp: giờ là màn hình gương thật, và điều khiển được
+
+- **14–26 fps** thay cho một ảnh tĩnh mỗi 800 ms. Hình lấy từ luồng H.264 sẵn có.
+- **Kéo chuột trên ảnh là vuốt thật trên máy**, qua đúng kênh điều khiển mà bot vẫn dùng. Là nhấn–kéo–thả thật nên bản đồ pan và fling bình thường, không phải một cú chạm nhảy cóc.
+- Thêm nút **Back**, **Home**, nút phóng to (340/460/600 px), và hai ô tích: **Vẽ vùng bot nhìn**, **Điều khiển bằng chuột** (tắt nếu chỉ muốn xem, tránh lỡ tay).
+- **Vẽ đúng theo chế độ đang chạy.** Trước đây luôn vẽ khung của Shundo kể cả khi đang chạy chế độ bắt. Chế độ bắt nay có hình vẽ riêng: ô Nearby sẽ bấm, điểm ném và hướng ném, thanh feed khi dùng tới, khung nhận encounter, khung hết bóng, nút thoát.
+- Lớp vẽ được tính trên nhịp riêng (mỗi ~0,8 giây) rồi ghép vào từng khung hình, nên hình vẫn mượt để điều khiển. Đổi lại, phần vẽ trễ tối đa khoảng một giây so với hình.
+- Thanh trạng thái hiện fps, độ phân giải máy, và **báo lỗi cuối** nếu có — trước đây lỗi bị nuốt im lặng.
+
+### Không còn phải căn tay khung nút bóng
+
+- Nút chọn bóng ở góc dưới phải (dấu hiệu "đang trong encounter") **tự được tìm theo hình dạng**: một vòm đỏ bão hoà, rộng hơn cao, có bụng trắng ngay bên dưới. Góc quét tính theo phần trăm màn hình nên không phụ thuộc thiết bị.
+- **Đã xoá mục "Khung nút bóng phải" khỏi cửa sổ căn chỉnh tay** — không còn gì để căn.
+- Lý do phải đổi: khung mặc định nằm gần như hoàn toàn *phía trên* quả bóng, chỉ liếm đúng mép trên của vòm đỏ, lệch tâm bóng thật khoảng 50 px. Vì thế nó cần những điều kiện hình học rất khó chịu và chỉ lệch vài pixel là mù hẳn.
+- Ngưỡng màu được siết theo số đo thật (bóng: r−b ≈ 175; banner hồng "A Route is nearby!" ở cùng góc: r−b ≈ 52) kèm giới hạn kích thước, nên tấm banner đó không còn bị nhận nhầm thành encounter.
+
+---
+
+## English
+
+### Live view: a real mirror now, and you can drive it
+
+- **14–26 fps** instead of one still image every 800 ms, taken from the existing H.264 stream.
+- **Dragging on the image swipes the phone**, through the same control channel the routines use. It is a real press–move–release, so the map pans and flings instead of receiving one teleporting tap.
+- Adds **Back** and **Home** buttons, a zoom step (340/460/600 px), and two toggles: **Draw what the bot sees** and **Control with mouse** (untick to just watch).
+- **Draws the running mode's own detections.** It previously always drew Shundo's boxes even in catch mode. Catch now has its own: the Nearby slot it would tap, the throw point and direction, the feed bar when it is used, the encounter box, the out-of-balls box and the flee button.
+- The overlay is computed on its own cadence (~0.8 s) and composited onto live frames, keeping the video smooth enough to control. The trade-off is that the drawing lags the video by up to a second.
+- The status line shows fps, device resolution and **the last error** if one occurred — these used to be swallowed silently.
+
+### The encounter ball-selector no longer needs manual alignment
+
+- The bottom-right ball-selector (the "we are in an encounter" signal) is now **found by its own shape**: a saturated red dome, wider than it is tall, with a bright white belly directly beneath it. The corner searched is a fraction of the frame, so it is device-independent.
+- **The "Right ball-selector box" item is gone from the manual calibration window** — there is nothing left to line up.
+- Why it had to change: the default box sat almost entirely *above* the ball, clipping only the top edge of the dome, about 50 px off the real centre. That forced some very awkward geometry conditions and went blind when a few pixels out.
+- Colour thresholds were tightened from measurements (ball: r−b ≈ 175; the pink "A Route is nearby!" banner sharing that corner: r−b ≈ 52) plus a size bound, so that banner is no longer mistaken for an encounter.
+
+---
+
 # v1.1.8
 
 Bản vá cho v1.1.7. Cùng một lỗi nhận diện gây ra tất cả: thanh sidebar trong suốt nên nền
