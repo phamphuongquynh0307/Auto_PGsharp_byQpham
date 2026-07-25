@@ -254,6 +254,10 @@ LANG = {
     "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
                       "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
     "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
+    "msg_s_goplus":  {"vi": "⛔ Dừng Shundo: Go Plus đang kết nối nên PGSharp chặn mọi lần dịch chuyển "
+                            "(đã bấm CANCEL để tránh softban). Hãy ngắt Go Plus rồi chạy lại.",
+                      "en": "⛔ Shundo stopped: Go Plus is connected so PGSharp blocks every teleport "
+                            "(answered CANCEL to avoid a softban). Disconnect Go Plus and run again."},
     "st_shundo":     {"vi": "🌟 SHUNDO — chờ bạn xử lý!", "en": "🌟 SHUNDO — waiting for you!"},
     "dc_shundo":     {"vi": "🌟💯 SHUNDO phát hiện! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
                       "en": "🌟💯 SHUNDO found! Bot {} — go catch it! ({} checked, {} shiny)"},
@@ -1652,6 +1656,11 @@ class App:
                     self._send_discord(self.tr("dc_shiny").format(how, stats.checked), shot=True)
                     if self.shundo_action == "pause":
                         self.log_queue.put("__paused_shiny__")
+            elif outcome == "goplus":
+                # Shundo teleports every cycle and Go Plus refuses every teleport; the
+                # routine ends itself, so say plainly why rather than looking like a crash.
+                self.log_queue.put(self.tr("msg_s_goplus"))
+                self._send_discord(self.tr("msg_s_goplus"))
             elif outcome == "blocked":
                 self.log_queue.put(self.tr("msg_s_blocked").format(stats.checked, stats.shinies, stats.shundos))
             elif outcome == "miss":

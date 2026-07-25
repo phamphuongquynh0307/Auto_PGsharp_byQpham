@@ -1,3 +1,48 @@
+# v1.1.8
+
+Bản vá cho v1.1.7. Cùng một lỗi nhận diện gây ra tất cả: thanh sidebar trong suốt nên nền
+bản đồ rối (sân gym, sự kiện, confetti) đâm xuyên qua, làm **viền xung quanh ô còn nhiều hơn
+viền của chính con Pokémon** — phép kiểm tra sprite trượt và bot kết luận thanh trống trong
+khi nó đang đầy. Trước v1.1.7 hậu quả chỉ là đứng chờ; từ v1.1.7 nó thành dịch chuyển đi mất.
+
+## Tiếng Việt
+
+### Không còn bấm nhầm sang thanh feed khi Nearby vẫn còn Pokémon
+
+- Quét cả thanh Nearby thay vì chỉ soi ô đầu tiên. Ô nào đọc được thì bấm ô đó; chỉ khi **cả thanh** không thấy gì mới coi là trống.
+- Phải **3 chu kỳ liên tiếp** đọc trống mới cho phép dịch chuyển theo thanh feed. Một lần đọc trống là nhiễu, không phải bằng chứng.
+- Chỉ nhảy feed khi nhìn thấy dấu `@` của thanh Nearby — không thấy nghĩa là đang ở màn hình khác (encounter, tổng kết, hộp thoại) và tuyệt đối không được dịch chuyển.
+- Bỏ cú bấm thừa khi encounter mở trễ: máy nào vẫn hiện sidebar lúc đang bắt thì điều kiện "ô Nearby còn Pokémon" luôn đúng, khiến bot bấm thêm một cái lên màn hình encounter.
+
+### Shundo chạy được trở lại
+
+- **Bỏ thao tác tự đóng menu PGSharp.** Menu ở trạng thái mở là bình thường và thường trực, nên icon bánh răng khớp trên mọi khung hình map — bot bấm ngôi sao mỗi vòng, chống lại chính bố cục của người dùng. Menu mở không che thanh nào cả.
+- **Quét cả thanh feed** thay vì chỉ ô đầu. Đây là lỗi khiến shundo báo "không có gì" rồi đứng im dù thanh feed đang đầy spawn.
+- **Ô Nearby đo từ tay cầm `≡`** thay vì khoảng cách cố định phía trên dấu `@`. Khoảng cách cố định chỉ đúng khi thanh đầy; thanh ngắn lại là điểm bấm trôi lên trên đầu thanh, thậm chí ra ngoài màn hình.
+- Điểm bấm nhắm đúng ô mà bộ quét tìm thấy spawn.
+- Thêm xử lý cảnh báo Go Plus: bấm CANCEL rồi **dừng hẳn** kèm thông báo, vì shundo dịch chuyển mỗi vòng nên không có đường lui. Trước đây hộp thoại này chặn cứng cả chế độ.
+
+---
+
+## English
+
+### No more jumping to the feed bar while Nearby still holds Pokémon
+
+- Scans the whole Nearby bar instead of only its first slot. Whichever slot reads clean is tapped; only an entirely unreadable bar counts as empty.
+- The feed may only teleport after **three consecutive empty cycles**. One empty read is noise, not evidence.
+- The feed is only used when the Nearby bar's `@` is in view. Without it we are on another screen (an encounter, a summary, a dialog) and must not teleport.
+- Drops the redundant retry tap when an encounter opens late: on devices that keep the sidebars visible mid-catch the "slot still occupied" test stays true, so the retry fired a stray tap onto the encounter screen.
+
+### Shundo works again
+
+- **Removes the automatic PGSharp-menu close.** The expanded menu is the normal, permanent state of that UI, so its gear icon matches on every ordinary map frame — the bot tapped the star every cycle, fighting the user's own layout. The open menu overlaps neither sidebar nor any tap target.
+- **Scans the whole feed bar** rather than its first slot. This is what made shundo report nothing and idle while the feed was full of spawns.
+- **Measures the Nearby slot from the `≡` drag handle** instead of a fixed distance above `@`. The fixed distance only holds on a full bar; a shorter list walks the tap point off the top of the bar, sometimes off-screen.
+- The tap aims at the slot the scan actually found the spawn in.
+- Handles the Go Plus warning: answers CANCEL and then **stops with a clear message**, since every shundo cycle teleports and there is no fallback. Previously the dialog blocked the mode outright.
+
+---
+
 # v1.1.7
 
 ## Tiếng Việt

@@ -87,6 +87,11 @@ class CatchConfig:
     feed_slot_dy: int = 100         # '≡' handle center -> first feed slot center
     handle_column_tol: int = 60     # max |x_handle - x_rss| to count as the same bar
     feed_teleport_wait: float = 4.0  # max wait for the teleported-to spawn to reach Nearby
+    # Consecutive empty cycles required before the feed may teleport. The sprite test is
+    # marginal against a busy translucent sidebar (event scenery, gyms) and loses the odd
+    # frame on a bar that is actually full; teleporting on one such read jumps away from
+    # catchable Pokémon. Several empty cycles in a row is evidence, one is noise.
+    feed_after_idle: int = 2
 
     # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
     # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
@@ -484,17 +489,41 @@ class CatchRoutine:
         return cfg.nearby_slot
 
     def _occupied_slot_in(self, frame) -> tuple[int, int] | None:
-        slot = self.config.nearby_slot if self.config.force_slot else self._slot_in(frame)
+        """The first Nearby slot that actually holds a Pokémon sprite.
+
+        Scans down the bar rather than inspecting slot 1 alone. The sidebar is translucent, so
+        a busy map behind it (event scenery, a gym, confetti) can put more edges *around* the
+        sprite than in it and make one slot fail the texture test while the bar is plainly
+        full. Reading that as "Nearby is empty" is what sent the bot teleporting off through
+        the feed bar with catchable Pokémon sitting right there. Any occupied slot is a fine
+        target, so the topmost one that reads clean wins.
+        """
+        cfg = self.config
+        slot = cfg.nearby_slot if cfg.force_slot else self._slot_in(frame)
         # The manually calibrated point is already expressed in native screen pixels.
         # Keep its inspection window tight as well: scaling 70x110 once more on a
         # high-resolution phone dilutes a small/dark sprite with adjacent sidebar rows.
-        half_width = 70 if self.config.force_slot else self.config.s(70)
-        height = 110 if self.config.force_slot else self.config.s(110)
-        present = slot is not None and slot_has_pokemon(
-            frame, slot, half_width=half_width, height=height
-        )
-        self._nearby_presence_streak = self._nearby_presence_streak + 1 if present else 0
-        return slot if present and self._nearby_presence_streak >= 2 else None
+        half_width = 70 if cfg.force_slot else cfg.s(70)
+        height = 110 if cfg.force_slot else cfg.s(110)
+
+        found = None
+        if slot is not None:
+            if slot_has_pokemon(frame, slot, half_width=half_width, height=height):
+                found = slot
+            elif not cfg.force_slot and self._anchor_cache is not None:
+                # Walk down to just above the '@' that ends the bar. A step well under the
+                # inspection window's height cannot skip past a sprite.
+                step = max(12, cfg.s(40))
+                bottom = self._anchor_cache[1] - cfg.s(80)
+                y = slot[1] + step
+                while y <= bottom:
+                    if slot_has_pokemon(frame, (slot[0], y),
+                                        half_width=half_width, height=height):
+                        found = (slot[0], y)
+                        break
+                    y += step
+        self._nearby_presence_streak = self._nearby_presence_streak + 1 if found else 0
+        return found if found is not None and self._nearby_presence_streak >= 2 else None
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
         """First feed slot, when it actually holds a Pokémon sprite.
@@ -552,7 +581,14 @@ class CatchRoutine:
         if (not cfg.use_feed_bar or self._teleport_blocked
                 or self._rss is None or self._handle is None):
             return False
-        slot = self._feed_slot_in(self.device.screenshot(next_frame=True))
+        frame = self.device.screenshot(next_frame=True)
+        # Only jump when the Nearby bar itself is on screen — that is what proves we are on the
+        # map looking at an empty bar. Without its '@' in view we are somewhere else entirely
+        # (an encounter, a summary, a dialog, a transition), and tapping a remembered feed
+        # position there fires a teleport in the middle of a catch.
+        if self._slot_in(frame) is None:
+            return False
+        slot = self._feed_slot_in(frame)
         if slot is None and self._feed_seen:
             # H.264 smear between keyframes periodically drops the small RSS/handle templates
             # below threshold; a crisp one-shot capture is worth its ~1s only once the bar has
@@ -1060,8 +1096,11 @@ class CatchRoutine:
         if slot is None:
             # Nothing on Nearby — does the PGSharp feed list a fresh spawn? Teleporting to it
             # fills the Nearby bar for the next cycle, which beats idling until the dry-spell
-            # timer fires. The jump counts as progress, so the AutoWalk streak resets.
-            if self._tap_feed_spawn():
+            # timer fires. Only after several empty cycles in a row though: one empty read is
+            # usually the sprite test dropping a frame, not an empty bar, and acting on it
+            # teleports away from Pokémon that are sitting right there. The jump counts as
+            # progress, so the AutoWalk streak resets.
+            if self._idle_streak >= cfg.feed_after_idle and self._tap_feed_spawn():
                 self._idle_streak = 0
                 return False
             self._trace("nearby_empty", "Không thấy Pokémon trên thanh Nearby lẫn thanh feed.")
@@ -1086,6 +1125,15 @@ class CatchRoutine:
             # shows the same occupied Nearby slot, the first double-tap did not open it.
             # Retry once with a plain tap; if the sidebar has disappeared, never tap blindly.
             retry_frame = self.device.screenshot(next_frame=True)
+            # The encounter may simply have been slow: check this newer frame before touching
+            # anything. On devices that keep the sidebars visible during an encounter the
+            # "slot still occupied" test below is true even once it opened, so without this
+            # the retry fires a stray tap onto the encounter screen.
+            ball_xy = self._ball_in(retry_frame)
+            if ball_xy is not None:
+                self._trace("encounter_late_open",
+                            "Encounter mở trễ; bỏ qua tap thử lại và ném luôn.", 0.0)
+                return self._run_encounter(ball_xy)
             retry_slot = self._occupied_slot_in(retry_frame)
             same_slot = (
                 retry_slot is not None

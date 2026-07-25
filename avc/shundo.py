@@ -110,10 +110,12 @@ class ShundoConfig:
     toast_fill: float = 0.7          # min filled fraction of the pill's bounding box
     toast_center_tol: int = 320      # max |pill center x - screen center x|
 
-    # PGSharp menu accidentally left open (it occludes the map and eats taps):
-    # detected via its Settings-gear icon, closed by tapping the yellow menu star.
-    menu_open_template: str = "templates/pgsharp_menu.png"
     menu_star_template: str = "templates/menu_star.png"
+    # PGSharp's Go Plus teleport warning. Shundo teleports on every cycle, so this decides
+    # whether the mode can run at all. Same tight box as the catch routine's: it stops short
+    # of the OK button so a stray match can never confirm the teleport.
+    cancel_btn_template: str = "templates/cancel_btn.png"
+    cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
 
     # Popups. Teleporting long distances reliably triggers the speed warning.
     popup_speed_template: str = "templates/popup_speed.png"
@@ -174,6 +176,7 @@ class ShundoConfig:
             enc_ball_region=L.region(self.enc_ball_region, "BR"),  # ball-selector button, bottom-right
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
             toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
+            cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
             flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
             # pure distances/sizes/offsets
             feed_slot_dy=L.scale(self.feed_slot_dy),
@@ -215,6 +218,9 @@ class ShundoRoutine:
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._nearby_presence_streak = 0
         self._feed_presence_streak = 0
+        # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
+        # avoids teleporting, so the run cannot continue.
+        self._teleport_blocked = False
 
         def load(path):
             return load_template(_resolve(path))
@@ -228,8 +234,8 @@ class ShundoRoutine:
         self._g1 = load(self.config.glyph_1_template)
         self._g5 = load(self.config.glyph_5_template)
         self._gs = load(self.config.glyph_slash_template)
-        self._menu_open = load_opt(self.config.menu_open_template)
         self._menu_star = load_opt(self.config.menu_star_template)
+        self._cancel_btn = load_opt(self.config.cancel_btn_template)
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
         self._claim_rewards = load_opt(self.config.claim_rewards_template)
@@ -291,24 +297,71 @@ class ShundoRoutine:
         self._anchor_cache = m[0].center
         return self._anchor_cache
 
-    def _target_in_bar(self, frame) -> bool:
-        """True after two fresh frames show a centered Pokémon sprite in the first slot."""
+    def _nearby_slot(self, frame, anchor: tuple[int, int]) -> tuple[int, int]:
+        """First slot of the nearby bar, measured from its '≡' drag handle.
+
+        `slot_offset_y` above the '@' only lands right on a *full* bar: the '@' marks the
+        bar's bottom, so a shorter list pulls it up and the fixed offset walks off the top of
+        the bar entirely (negative y on a short list). The handle marks the top, and the list
+        grows down from it, so handle + dy holds for any length. Kept as the fallback for when
+        the handle can't be matched. Same construction as CatchRoutine._bar_slot."""
+        cfg = self.config
+        ax, ay = anchor
+        if self._handle is not None:
+            column = (ax - cfg.handle_column_tol * 2, 0, cfg.handle_column_tol * 4, ay)
+            for h in find(frame, self._handle, threshold=cfg.feed_threshold,
+                          scales=self._scales, region=column, max_matches=4):
+                hx, hy = h.center
+                # The feed bar shares this handle art, so only one in the '@' column counts.
+                if abs(hx - ax) <= cfg.handle_column_tol and hy < ay:
+                    return (ax, hy + cfg.feed_slot_dy)
+        return (ax, ay - cfg.slot_offset_y)
+
+    def _occupied_in_column(self, frame, x: int, top: int, bottom: int):
+        """First y between `top` and `bottom` whose slot window holds a Pokémon sprite.
+
+        Both sidebars are translucent, so a busy map bleeding through can put more edges
+        around a sprite than in it and make its slot fail the texture test while the bar is
+        plainly full. Checking only the first slot then reports an empty bar and the routine
+        idles (or declares 'no spawn') with Pokémon sitting right there, so scan the column."""
+        cfg = self.config
+        step = max(12, cfg.s(40))
+        y = top
+        while y <= bottom:
+            if slot_has_pokemon(frame, (x, y), half_width=cfg.bar_half_w,
+                                height=cfg.slot_patch):
+                return y
+            y += step
+        return None
+
+    def _target_in_bar(self, frame):
+        """The nearby slot to engage, or None. Needs two fresh frames in a row so a single
+        noisy read cannot trigger a tap."""
         cfg = self.config
         anchor = self._anchor_in(frame)
         if anchor is None:
-            return False
-        ax, ay = anchor
-        slot = (ax, ay - cfg.slot_offset_y)
-        present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
-                                   height=cfg.slot_patch)
-        self._nearby_presence_streak = self._nearby_presence_streak + 1 if present else 0
-        return present and self._nearby_presence_streak >= 2
+            self._nearby_presence_streak = 0
+            return None
+        slot = self._nearby_slot(frame, anchor)
+        y = self._occupied_in_column(frame, slot[0], slot[1], anchor[1] - cfg.s(80))
+        self._nearby_presence_streak = self._nearby_presence_streak + 1 if y else 0
+        return (slot[0], y) if y and self._nearby_presence_streak >= 2 else None
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
-        """First feed slot. The feed is a QUEUE: tapping the top entry teleports to it and
-        removes it, so the next spawn shifts up into the top slot — we always tap slot 1.
-        Located as the '≡' handle in the RSS icon's column, plus a fixed dy."""
+        """The feed entry to teleport to, or None when the feed really is empty.
+
+        The feed is a QUEUE: tapping an entry teleports to it and removes it. Slot 1 is the
+        natural target, but its sprite test is marginal against a translucent bar over a busy
+        map — trusting it alone reported an empty feed while entries were listed right below.
+        So the column is scanned and the topmost readable entry is used; any of them is a
+        spawn worth checking. Located from the '≡' handle in the RSS icon's column."""
         cfg = self.config
+
+        def occupied(rx, ry, slot):
+            y = self._occupied_in_column(frame, rx, slot[1], ry - cfg.s(60))
+            self._feed_presence_streak = self._feed_presence_streak + 1 if y else 0
+            return (rx, y) if y and self._feed_presence_streak >= 2 else None
+
         if self._feed_cache is not None:
             (rx, ry), (hx, hy), slot = self._feed_cache
             radius = cfg.s(100)
@@ -319,10 +372,7 @@ class ShundoRoutine:
             handle = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales,
                           region=handle_region, max_matches=1)
             if rss and handle:
-                present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
-                                           height=cfg.slot_patch)
-                self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
-                return slot if present and self._feed_presence_streak >= 2 else None
+                return occupied(rx, ry, slot)
             self._feed_cache = None
             self._feed_presence_streak = 0
         rss = find(frame, self._rss, threshold=cfg.feed_threshold, scales=self._scales)
@@ -334,13 +384,10 @@ class ShundoRoutine:
                        region=column)
         for h in handles:
             hx, hy = h.center
-            if abs(hx - rx) <= cfg.handle_column_tol:
+            if abs(hx - rx) <= cfg.handle_column_tol and hy < ry:
                 slot = (rx, hy + cfg.feed_slot_dy)
                 self._feed_cache = ((rx, ry), (hx, hy), slot)
-                present = slot_has_pokemon(frame, slot, half_width=cfg.bar_half_w,
-                                           height=cfg.slot_patch)
-                self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
-                return slot if present and self._feed_presence_streak >= 2 else None
+                return occupied(rx, ry, slot)
         self._feed_presence_streak = 0
         return None
 
@@ -386,17 +433,24 @@ class ShundoRoutine:
         if frame is None:
             frame = self.device.screenshot()
         fast_cache = {}
-        # PGSharp menu left open — close it by tapping the star it hangs off of.
-        if self._menu_open is not None and self._menu_star is not None:
-            m = find_fast(frame, self._menu_open, threshold=0.8, scales=self._scales,
-                          cache=fast_cache)
+        # PGSharp "Go Plus is connected, teleport may trigger a softban. Continue?" -> CANCEL.
+        # First, because it is a modal that eats every other tap, and the answer is never OK:
+        # confirming risks the account. Shundo teleports every cycle, so the run is over —
+        # see the _teleport_blocked check in run_once.
+        if self._cancel_btn is not None:
+            m = find(frame, self._cancel_btn, threshold=self.config.popup_threshold,
+                     scales=self._scales, grayscale=False,
+                     region=self.config.cancel_btn_region, max_matches=1)
             if m:
-                star = find_fast(frame, self._menu_star, threshold=0.7, scales=self._scales,
-                                 grayscale=False, cache=fast_cache)
-                if star:
-                    self.device.tap(*star[0].center)
-                    self.stats.last_event = "popup"
-                    return True
+                self.device.tap(*m[0].center)
+                self._teleport_blocked = True
+                self.stats.last_event = "popup"
+                return True
+        # NOTE: there used to be a "PGSharp menu accidentally left open -> tap the star to close
+        # it" handler here. The menu's expanded row list is the normal, permanent state of this
+        # UI, so its Settings gear matches on every ordinary map frame — the handler fired every
+        # cycle and tapped the star, fighting the user's own layout. The expanded menu overlaps
+        # neither sidebar nor any tap target, so nothing needs closing.
         # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
         if self._popup_weather is not None:
             m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
@@ -508,8 +562,10 @@ class ShundoRoutine:
 
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
-        blocked | shiny | shundo | miss | nospawn | idle | popup."""
+        blocked | shiny | shundo | miss | nospawn | idle | popup | goplus."""
         cfg = self.config
+        if self._teleport_blocked:
+            return "goplus"
         self.stats.cycles += 1
         self._ensure_calibrated()
 
@@ -564,12 +620,13 @@ class ShundoRoutine:
         # Popups that appear meanwhile (speed warning after the teleport) are cleared.
         start = time.monotonic()
         next_log = start + cfg.spawn_wait_log
-        loaded = False
+        loaded = None
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
-            if self._target_in_bar(frame):
-                loaded = True
+            target = self._target_in_bar(frame)
+            if target:
+                loaded = target
                 break
             if self._drain_popups(frame):
                 continue
@@ -579,7 +636,7 @@ class ShundoRoutine:
             if self._on_waiting is not None and now >= next_log:
                 next_log = now + cfg.spawn_wait_log
                 self._on_waiting(int(now - start))
-        if not loaded:
+        if loaded is None:
             self.stats.last_event = "nospawn"
             return "nospawn"
         # Step 3: double-tap the bar's first slot ONCE, then watch for the encounter to open
@@ -590,9 +647,9 @@ class ShundoRoutine:
         if self._enc_ball_visible(frame):
             answer = "shiny"
         else:
-            anchor = self._anchor_in(frame)
-            if anchor is not None:
-                self.device.double_tap(anchor[0], anchor[1] - cfg.slot_offset_y)
+            # Aim at the slot the scan actually found the spawn in — re-read on this frame,
+            # falling back to where the load loop saw it.
+            self.device.double_tap(*(self._target_in_bar(frame) or loaded))
             def encounter_answer(f):
                 if self._enc_ball_visible(f):
                     return "shiny"
@@ -638,6 +695,11 @@ class ShundoRoutine:
             outcome = self.run_once()
             if on_event:
                 on_event(self.stats, outcome)
+            if outcome == "goplus":
+                # Every shundo cycle teleports, and the Go Plus warning refuses every one of
+                # them. There is nothing to fall back on, so end the run instead of looping
+                # tap -> warning -> CANCEL; the caller reports why.
+                break
             if outcome == "shundo":
                 # Full shundo: hand it to the user. "pause" waits for Resume; "stop" ends the loop.
                 if cfg.shundo_action == "stop":
@@ -681,14 +743,15 @@ class ShundoRoutine:
         anchor = self._anchor_in(frame)
         if anchor is not None:
             ax, ay = anchor
-            half = cfg.slot_patch // 2
-            x0, y0 = ax - half, ay - cfg.slot_offset_y - half
             busy = self._target_in_bar(frame)
+            sx, sy = busy if busy else self._nearby_slot(frame, anchor)
+            half = cfg.slot_patch // 2
+            x0, y0 = sx - half, sy - half
             color = (255, 255, 0)
             cv2.rectangle(img, (x0, y0), (x0 + cfg.slot_patch, y0 + cfg.slot_patch), color, 5)
             cv2.putText(img, "DBL TAP" if busy else "EMPTY", (x0 - 260, y0 + 65),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-            cv2.drawMarker(img, (ax, ay - cfg.slot_offset_y), (0, 255, 255), cv2.MARKER_CROSS, 80, 6)
+            cv2.drawMarker(img, (sx, sy), (0, 255, 255), cv2.MARKER_CROSS, 80, 6)
             cv2.circle(img, (ax, ay), 40, color, 4)
 
         px, py, pw, ph = cfg.pill_region
