@@ -180,6 +180,9 @@ LANG = {
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
     "settle":        {"vi": "Nghỉ giữa 2 con (giây):", "en": "Rest between catches (s):"},
+    "max_throws":    {"vi": "Số bóng tối đa mỗi con:", "en": "Max throws per Pokémon:"},
+    "use_feed":      {"vi": "Nearby trống thì lấy Pokémon từ thanh feed (dịch chuyển)",
+                      "en": "Use the feed bar when Nearby is empty (teleports)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
@@ -195,6 +198,10 @@ LANG = {
                             "Lưu xong bot dùng đúng các điểm này (tắt dò '@').",
                       "en": "Drag each (+) onto the right button/pokémon; drag a box corner to resize. "
                             "After saving, the bot uses these exact spots (auto-detect off)."},
+    "cal_center_tip": {"vi": "Đưa dấu này ra giữa màn hình (dùng khi nó lệch ra ngoài, không kéo được).",
+                       "en": "Drop this marker in the middle of the screen (use when it sits off-screen and can't be dragged)."},
+    "cal_center_all": {"vi": "⌖ Đưa tất cả ra giữa màn hình",
+                       "en": "⌖ Bring all markers to centre"},
     "cal_save":      {"vi": "Lưu", "en": "Save"},
     "cal_reset":     {"vi": "Đặt lại mặc định", "en": "Reset to default"},
     "cal_cancel":    {"vi": "Hủy", "en": "Cancel"},
@@ -471,9 +478,14 @@ class App:
         self.flee_taps = self._spin(catch_grp, "flee_taps", 10, 1, 6, 2)
         self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 0.05, 1, 0.25,
                                    is_float=True, increment=0.05)
+        self.max_throws = self._spin(catch_grp, "max_throws", 12, 1, 10, 3)
+        self.use_feed = tk.BooleanVar(value=True)
+        feed_chk = ttk.Checkbutton(catch_grp, text=self.tr("use_feed"), variable=self.use_feed)
+        feed_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((feed_chk, "use_feed"))
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        dim_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
         sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
@@ -672,6 +684,8 @@ class App:
         self.post_throw.set(timing("post_throw", 350.0, 0.35))
         self.flee_taps.set(data.get("flee_taps", int(self.flee_taps.get())))
         self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
+        self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
+        self.use_feed.set(data.get("use_feed", True))
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
@@ -706,6 +720,8 @@ class App:
             "post_throw": float(self.post_throw.get()),
             "flee_taps": int(self.flee_taps.get()),
             "flee_gap": float(self.flee_gap.get()),
+            "max_throws": int(self.max_throws.get()),
+            "use_feed": bool(self.use_feed.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
@@ -1289,10 +1305,20 @@ class App:
             page = ttk.Frame(groups)
             groups.add(page, text=self.tr(title))
             for field, kind, item_mode, key, color in self._cal_items(mode):
-                row = ttk.Frame(page); row.pack(anchor="w", padx=6, pady=4)
+                row = ttk.Frame(page); row.pack(anchor="w", fill="x", padx=6, pady=4)
                 sw = tk.Canvas(row, width=16, height=16, highlightthickness=0)
                 sw.pack(side="left"); sw.create_rectangle(2, 2, 14, 14, fill=color, outline=color)
-                ttk.Label(row, text=self.tr(key), wraplength=190).pack(side="left", padx=4)
+                # A default that scales off-screen (or under the phone's own bottom bar) leaves
+                # its handle impossible to grab. This drops it back in the middle of the screen
+                # so it can be dragged from somewhere reachable.
+                btn = ttk.Button(row, text="⌖", width=3,
+                                 command=lambda f=field: self._cal_center(f))
+                btn.pack(side="right", padx=(4, 0))
+                self._cal_tip(btn, "cal_center_tip")
+                ttk.Label(row, text=self.tr(key), wraplength=175).pack(side="left", padx=4)
+            allrow = ttk.Frame(page); allrow.pack(anchor="w", fill="x", padx=6, pady=(10, 4))
+            ttk.Button(allrow, text=self.tr("cal_center_all"),
+                       command=lambda g=mode: self._cal_center_all(g)).pack(fill="x")
         self._cal_groups = groups
         self._cal_group = "shundo" if self.mode == "shundo" else self.catch_style
         groups.select({"normal": 0, "quick": 1, "shundo": 2}[self._cal_group])
@@ -1355,6 +1381,47 @@ class App:
                 if x <= mx <= x + ww and y <= my <= y + hh:
                     pick = (field, "move", mx - x, my - y); break
         self._cal_active = pick
+
+    def _cal_tip(self, widget, key: str) -> None:
+        """Plain hover tooltip — ttk has none built in and this is the only place we need one."""
+        tip = {"win": None}
+
+        def show(_e=None):
+            if tip["win"] is not None:
+                return
+            x = widget.winfo_rootx() + widget.winfo_width() + 6
+            y = widget.winfo_rooty()
+            win = tk.Toplevel(widget)
+            win.wm_overrideredirect(True)
+            win.wm_geometry(f"+{x}+{y}")
+            tk.Label(win, text=self.tr(key), background="#ffffe0", relief="solid",
+                     borderwidth=1, justify="left", wraplength=260,
+                     font=("Segoe UI", 8)).pack()
+            tip["win"] = win
+
+        def hide(_e=None):
+            if tip["win"] is not None:
+                tip["win"].destroy()
+                tip["win"] = None
+
+        widget.bind("<Enter>", show)
+        widget.bind("<Leave>", hide)
+
+    def _cal_center(self, field: str) -> None:
+        """Move one handle to the middle of the screen so it can be reached and dragged."""
+        w, h = self._cal_dev_size
+        v = self._cal[field]
+        if len(v) == 2:
+            v[0], v[1] = w // 2, h // 2
+        else:
+            v[0], v[1] = max(0, w // 2 - v[2] // 2), max(0, h // 2 - v[3] // 2)
+        self._cal_redraw()
+
+    def _cal_center_all(self, group: str) -> None:
+        """Same for every handle in the current tab — the quick way out when a whole group
+        scaled off the bottom of the screen."""
+        for field, _kind, _mode, _key, _color in self._cal_items(group):
+            self._cal_center(field)
 
     def _cal_group_changed(self, _event=None) -> None:
         self._cal_group = ("normal", "quick", "shundo")[self._cal_groups.index("current")]
@@ -1523,6 +1590,8 @@ class App:
                     post_throw_wait_ms=max(0, int(round(float(self.post_throw.get()) * 1000))),
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
+                    max_throws_per_encounter=max(1, int(self.max_throws.get())),
+                    use_feed_bar=bool(self.use_feed.get()),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)

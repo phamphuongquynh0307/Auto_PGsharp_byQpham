@@ -1,3 +1,79 @@
+# v1.1.7
+
+## Tiếng Việt
+
+### Không còn kẹt trong encounter
+
+- Đầu mỗi vòng, nếu nút chọn bóng góc dưới phải đang hiện thì bot hiểu là đang ở trong encounter và ném luôn. Trước đây khi Pokémon thoát ra khỏi bóng, màn hình encounter che mất thanh Nearby nhưng bot vẫn quay về quét thanh đó nên đứng im vô hạn.
+- Pokémon thoát ra khỏi bóng sẽ được ném lại ngay, nhận biết bằng việc quả bóng quay về đúng điểm ném.
+- Hết lượt ném mà encounter vẫn mở thì tự thoát encounter để quay lại bản đồ, không bao giờ nằm lại trong đó.
+- Thêm cài đặt **Số bóng tối đa mỗi con** (mặc định 3).
+
+### Ném bóng chính xác hơn
+
+- Đường ném giữ thẳng đứng: trước đây điểm đầu và điểm cuối được random riêng nên cú vẩy bị lệch ngang tới hai lần biên độ random, làm bóng bay chệch. Nay chỉ random điểm đầu và độ dài cú ném.
+- Nhận biết kết quả từng cú ném (bắt được / thoát ra / quá hạn) thay vì chờ hết thời gian rồi mới xử lý.
+
+### Tìm Pokémon trên thanh Nearby và thanh feed
+
+- Điểm bấm trên thanh Nearby được đo từ tay cầm `≡` ở đầu thanh thay vì dùng một tọa độ cố định. Trên 18 ảnh chụp thử, cách cũ nhận ra 0/18, cách mới 18/18, và tự đúng khi thanh đổi chỗ hoặc đổi độ dài.
+- Khi thanh Nearby trống, bot tìm sang thanh feed của PGSharp và nhảy tới spawn đầu tiên nếu có, thay vì ngồi chờ tới lượt AutoWalk. Có thể tắt bằng cài đặt **Nearby trống thì lấy Pokémon từ thanh feed**.
+- **Giới hạn số con** nay đếm số Pokémon thay vì số bóng, vì một con thoát ra tốn nhiều bóng.
+
+### Cảnh báo Go Plus khi teleport
+
+- Hộp thoại "Go Plus is connected, teleport may trigger a softban" luôn được trả lời **CANCEL**. Khung tìm kiếm dừng hẳn trước nút OK nên không thể bấm nhầm sang OK.
+- Sau một lần bị từ chối, nguồn feed tự tắt cho cả phiên chạy để tránh lặp vô tận tap feed → cảnh báo → CANCEL. Bot tiếp tục chạy bằng Nearby và AutoWalk.
+
+### Nút bấm thích ứng theo từng thiết bị
+
+- Nút AutoWalk được dò bằng chính icon của hàng ở cả hai trạng thái (đang chạy và đang tạm dừng), thay cho một khoảng cách cố định tính từ ngôi sao menu — khoảng cách đó chỉ đúng trên máy đã đo và lệch một hàng là bấm nhầm sang Feeds hoặc Teleport.
+- Mỗi lần thấy icon, khoảng cách ngôi sao → hàng được học lại theo máy nên cả đường dự phòng cũng tự chỉnh đúng.
+- Nút CANCEL của hộp thoại "Stop AutoWalk?" cũng chuyển sang dò template thay vì offset cố định.
+
+### Căn chỉnh tay
+
+- Mỗi dấu có nút `⌖` để đưa về giữa màn hình, kèm nút đưa toàn bộ dấu trong tab về giữa. Dùng khi giá trị mặc định quy đổi ra ngoài màn hình khiến không kéo được dấu đó nữa.
+
+---
+
+## English
+
+### No more getting stuck in an encounter
+
+- Each cycle now starts by checking the bottom-right ball selector: if it is showing we are inside an encounter and throw immediately. Previously a Pokémon breaking out left the encounter screen covering the Nearby bar while the bot kept scanning for that bar, so it sat there indefinitely.
+- A break-out triggers another throw straight away, detected by the ball returning to the throw point.
+- If the encounter is still open after the last allowed throw, the bot flees it and returns to the map instead of remaining inside.
+- Adds a **Max throws per Pokémon** setting (default 3).
+
+### More accurate throws
+
+- The flick is kept vertical. Start and end points were previously jittered independently, tilting the throw sideways by up to twice the jitter amount and sending balls wide. Only the start point and the throw length are randomised now.
+- Each throw's outcome (caught / break-out / timeout) is read directly instead of waiting out the full timeout.
+
+### Finding Pokémon on the Nearby and feed bars
+
+- The Nearby tap point is measured from the bar's own `≡` drag handle instead of a fixed coordinate. Across 18 test screenshots the old approach detected 0/18 and the new one 18/18, and it stays correct when the bar moves or changes length.
+- When the Nearby bar is empty the bot checks PGSharp's feed bar and jumps to its first spawn, rather than idling until the AutoWalk dry-spell timer fires. Can be turned off with the **Use the feed bar when Nearby is empty** setting.
+- **Catch limit** now counts Pokémon rather than balls, since a break-out costs several throws.
+
+### Go Plus teleport warning
+
+- The "Go Plus is connected, teleport may trigger a softban" dialog is always answered **CANCEL**. The search box stops well short of the OK button so a stray match cannot confirm the teleport.
+- After one refusal the feed source switches itself off for the rest of the run, avoiding an endless tap → warning → CANCEL loop. The bot carries on with Nearby and AutoWalk.
+
+### Per-device button targeting
+
+- The AutoWalk row is located by its own icon in both states (running and paused) instead of a fixed distance below the menu star — that distance is only correct on the device it was measured on, and being one row out taps Feeds or Teleport.
+- Whenever the icon is seen, the star-to-row offset is re-learned for the device, so the fallback path self-corrects too.
+- The "Stop AutoWalk?" dialog's CANCEL button is matched by template rather than a fixed offset.
+
+### Manual calibration
+
+- Every marker gets a `⌖` button that drops it in the middle of the screen, plus a button to recentre every marker in the tab. Use it when a scaled default lands off-screen and the marker can no longer be dragged.
+
+---
+
 # v1.1.6
 
 ## Tiếng Việt
