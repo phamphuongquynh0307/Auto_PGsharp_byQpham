@@ -1,3 +1,35 @@
+# v1.1.11
+
+## Tiếng Việt
+
+### Chờ đúng Pokémon mới trên Nearby
+
+- Cài đặt Shundo đổi thành **Chờ Pokémon xuất hiện trên Nearby**; đặt `0` để chờ vô hạn, số dương là thời gian chờ tối đa theo giây.
+- Sau khi dịch chuyển, bot phải thấy thanh Nearby cũ trống trên hai khung hình liên tiếp rồi mới nhận Pokémon vừa load, tránh bấm nhầm spawn cũ và chuyển sang con kế tiếp.
+- Pokémon vừa xuất hiện trên Nearby là bot xử lý ngay, không chờ hết thời gian đã đặt.
+
+### Tự bắt chỉ dùng Nearby
+
+- Xóa cài đặt lấy Pokémon từ thanh feed trong chế độ Tự bắt.
+- Tự bắt không dịch chuyển qua feed; thanh feed chỉ dành cho chế độ Shundo.
+
+---
+
+## English
+
+### Wait for the correct new Nearby Pokémon
+
+- The Shundo setting is now **Wait for Pokémon on Nearby**: `0` waits indefinitely, while a positive value sets the maximum wait in seconds.
+- After teleporting, the bot must observe the old Nearby bar empty on two consecutive frames before accepting the newly loaded Pokémon, preventing stale spawns from being tapped and skipped.
+- The bot proceeds immediately when the Pokémon appears instead of waiting out the configured duration.
+
+### Auto Catch uses Nearby only
+
+- Removed the feed option from Auto Catch settings.
+- Auto Catch never teleports through the feed; the feed remains exclusive to Shundo mode.
+
+---
+
 # v1.1.10
 
 ## Tiếng Việt

@@ -68,13 +68,13 @@ class ShundoConfig:
     slot_busy_std: float = 40.0
     # A far teleport makes the game reload spawns, which clears the nearby bar first.
     # Waiting for that clear keeps a stale entry from the previous location from being
-    # mistaken for the new spawn (the icons all look alike on event days). If the bar
-    # never clears (short hop), proceed after this cap.
-    bar_clear_timeout: float = 2.0
+    # mistaken for the new spawn (the icons all look alike on event days).
+    bar_clear_timeout: float = 5.0
     # Loading can be slow (hot phone, teleport cooldown), so stay put and keep waiting
     # for the spawn instead of teleporting away to another feed entry. 0 = wait until it
-    # loads or the user stops (the user's explicit preference); a positive value caps the
-    # wait and then moves on. The instant it shows in the bar the double-tap goes out.
+    # loads or the user stops. The instant it shows in the bar the double-tap goes out.
+    # Zero means this is state-driven rather than time-driven: never skip a feed entry
+    # merely because loading is slow.
     spawn_timeout: float = 0.0
     spawn_wait_log: float = 20.0    # log a "still waiting" heartbeat this often (s)
 
@@ -334,18 +334,23 @@ class ShundoRoutine:
             y += step
         return None
 
-    def _target_in_bar(self, frame):
-        """The nearby slot to engage, or None. Needs two fresh frames in a row so a single
-        noisy read cannot trigger a tap."""
+    def _raw_target_in_bar(self, frame):
+        """The occupied Nearby slot in one frame, without temporal confirmation."""
         cfg = self.config
         anchor = self._anchor_in(frame)
         if anchor is None:
-            self._nearby_presence_streak = 0
             return None
         slot = self._nearby_slot(frame, anchor)
         y = self._occupied_in_column(frame, slot[0], slot[1], anchor[1] - cfg.s(80))
+        return (slot[0], y) if y else None
+
+    def _target_in_bar(self, frame):
+        """The nearby slot to engage, or None. Needs two fresh frames in a row so a single
+        noisy read cannot trigger a tap."""
+        target = self._raw_target_in_bar(frame)
+        y = target[1] if target else None
         self._nearby_presence_streak = self._nearby_presence_streak + 1 if y else 0
-        return (slot[0], y) if y and self._nearby_presence_streak >= 2 else None
+        return target if target is not None and self._nearby_presence_streak >= 2 else None
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
         """The feed entry to teleport to, or None when the feed really is empty.
@@ -632,14 +637,24 @@ class ShundoRoutine:
         # Step 2a: the far teleport reloads spawns and empties the nearby '@' bar.
         # Wait for that clear first, so an entry left over from the previous location
         # can't be mistaken for the new spawn.
-        clear_deadline = time.monotonic() + cfg.bar_clear_timeout
-        while time.monotonic() < clear_deadline and not self.stop_event.is_set():
+        empty_streak = 0
+        while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
-            if not self._target_in_bar(frame):
+            if self._raw_target_in_bar(frame):
+                empty_streak = 0
+            else:
+                empty_streak += 1
+            # One smeared/mid-transition frame is not enough: require the old Nearby
+            # entry to be absent twice consecutively before accepting a future entry as
+            # the newly teleported spawn.
+            if empty_streak >= 2:
                 break
             if self._drain_popups(frame):
+                empty_streak = 0
                 continue
+        if self.stop_event.is_set():
+            return "idle"
 
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
         # in the bar's first slot. Stays put and waits (spawns can load slowly); it does

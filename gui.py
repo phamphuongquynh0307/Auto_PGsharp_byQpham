@@ -182,8 +182,6 @@ LANG = {
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
     "settle":        {"vi": "Nghỉ giữa 2 con (giây):", "en": "Rest between catches (s):"},
     "max_throws":    {"vi": "Số bóng tối đa mỗi con:", "en": "Max throws per Pokémon:"},
-    "use_feed":      {"vi": "Nearby trống thì lấy Pokémon từ thanh feed (dịch chuyển)",
-                      "en": "Use the feed bar when Nearby is empty (teleports)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
@@ -246,7 +244,8 @@ LANG = {
     "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
     "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
                       "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
-    "tp_wait":       {"vi": "Chờ dịch chuyển tới con mới (giây):", "en": "Teleport wait (s):"},
+    "tp_wait":       {"vi": "Chờ Pokémon xuất hiện trên Nearby (giây, 0 = mãi):",
+                      "en": "Wait for Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
     "alert_shiny":   {"vi": "Báo Discord khi gặp shiny chưa đủ 100 IV", "en": "Discord alert on shiny below 100 IV"},
     "shundo_action": {"vi": "Khi thấy shundo:", "en": "On shundo:"},
@@ -498,13 +497,9 @@ class App:
         self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 0.05, 1, 0.25,
                                    is_float=True, increment=0.05)
         self.max_throws = self._spin(catch_grp, "max_throws", 12, 1, 10, 3)
-        self.use_feed = tk.BooleanVar(value=True)
-        feed_chk = ttk.Checkbutton(catch_grp, text=self.tr("use_feed"), variable=self.use_feed)
-        feed_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._i18n.append((feed_chk, "use_feed"))
         self.dim_screen = tk.BooleanVar(value=False)
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
         sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
@@ -513,7 +508,7 @@ class App:
         note = ttk.Label(sh_grp, text=self.tr("shundo_note"), wraplength=400, foreground="#666")
         note.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
         self._i18n.append((note, "shundo_note"))
-        self.tp_wait = self._spin(sh_grp, "tp_wait", 1, 2, 15, 4.0, is_float=True)
+        self.tp_wait = self._spin(sh_grp, "tp_wait", 1, 0, 3600, 0.0, is_float=True)
         self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 2, 2, 12, 3.0, is_float=True)
         self._label(sh_grp, "shundo_action", row=3, column=0, sticky="w", padx=6, pady=2)
         self.shundo_action = "pause"   # "pause" | "stop"
@@ -704,13 +699,12 @@ class App:
         self.flee_taps.set(data.get("flee_taps", int(self.flee_taps.get())))
         self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
-        self.use_feed.set(data.get("use_feed", True))
         self.dim_screen.set(data.get("dim_screen", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
         if data.get("catch_style") in ("normal", "quick"):
             self.catch_style = data["catch_style"]
-        self.tp_wait.set(max(2.0, float(data.get("tp_wait", self.tp_wait.get()))))
+        self.tp_wait.set(max(0.0, float(data.get("tp_wait", self.tp_wait.get()))))
         self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
         if data.get("shundo_action") in ("pause", "stop"):
             self.shundo_action = data["shundo_action"]
@@ -740,7 +734,6 @@ class App:
             "flee_taps": int(self.flee_taps.get()),
             "flee_gap": float(self.flee_gap.get()),
             "max_throws": int(self.max_throws.get()),
-            "use_feed": bool(self.use_feed.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
@@ -1768,7 +1761,7 @@ class App:
                 dev_size = dev_dens = None
             if self.mode == "shundo":
                 cfg = ShundoConfig(
-                    teleport_wait=max(2.0, float(self.tp_wait.get())),
+                    spawn_timeout=max(0.0, float(self.tp_wait.get())),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
@@ -1794,7 +1787,7 @@ class App:
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
-                    use_feed_bar=bool(self.use_feed.get()),
+                    use_feed_bar=False,
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)

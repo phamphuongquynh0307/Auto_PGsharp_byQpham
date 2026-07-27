@@ -83,7 +83,9 @@ class CatchConfig:
     # It queues freshly-spawned Pokémon; tapping its top entry teleports there, which fills the
     # Nearby bar for the next cycle. Consulted only when the Nearby bar is empty, so a busy
     # Nearby bar is still caught normally and no teleport happens. Off -> AutoWalk only.
-    use_feed_bar: bool = True
+    # Regular auto-catch only works through Nearby. The PGSharp feed is reserved for
+    # Shundo hunting and must never make Catch mode teleport.
+    use_feed_bar: bool = False
     feed_rss_template: str = "templates/feed_rss.png"
     bar_handle_template: str = "templates/bar_handle.png"
     feed_threshold: float = 0.7
