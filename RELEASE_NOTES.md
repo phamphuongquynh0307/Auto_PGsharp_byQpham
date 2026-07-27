@@ -1,3 +1,37 @@
+# v1.1.10
+
+## Tiếng Việt
+
+### Shundo kiểm tra Pokémon hiện tại trước khi dịch chuyển
+
+- Khi vừa bấm chạy, bot kiểm tra Pokémon đang có sẵn trên thanh Nearby `@` trước.
+- Bot chỉ lấy Pokémon tiếp theo từ feed và dịch chuyển sau khi đã chấm con hiện tại.
+- Các vòng sau vẫn tiếp tục theo feed bình thường, không mở lại Pokémon vừa chấm.
+
+### Không còn báo shiny khi vẫn đang ở bản đồ
+
+- Tín hiệu nút Poké Ball giờ phải đi kèm việc thanh Nearby `@` đã biến mất.
+- Nếu một chi tiết đỏ/trắng trên bản đồ bị nhận nhầm thành nút bóng nhưng thanh Nearby vẫn
+  còn hiển thị, bot bỏ qua và không tăng bộ đếm shiny.
+
+---
+
+## English
+
+### Check the current Pokémon before teleporting
+
+- On startup, Shundo checks a Pokémon already present in the Nearby `@` bar first.
+- It consumes the next feed entry and teleports only after the current Pokémon is checked.
+- Later cycles continue through the feed normally without reopening the last checked spawn.
+
+### No phantom shiny reports while still on the map
+
+- The encounter Poké Ball signal is now accepted only after the Nearby `@` bar disappears.
+- A red/white map element that resembles the ball button is ignored while Nearby remains
+  visible, so it cannot increment the shiny counter.
+
+---
+
 # v1.1.9
 
 ## Tiếng Việt

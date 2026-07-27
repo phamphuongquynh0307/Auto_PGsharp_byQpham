@@ -55,6 +55,28 @@ jobs:
             exit 0
           }
 
+          # Show the Vietnamese notes for only the newest version directly in Discord.
+          # A field is limited to 1,024 characters, so leave room for the full-notes link.
+          $releaseNotes = Get-Content RELEASE_NOTES.md -Raw -Encoding UTF8
+          $match = [regex]::Match(
+            $releaseNotes,
+            '(?s)\A#\s+[^\r\n]+\s+##\s+Tiếng Việt\s+(.*?)(?:\r?\n---)'
+          )
+          if ($match.Success) {
+            $changeDetails = $match.Groups[1].Value.Trim()
+            $changeDetails = [regex]::Replace(
+              $changeDetails,
+              '(?m)^###\s+(.+)$',
+              '**$1**'
+            )
+          } else {
+            $changeDetails = "Xem danh sách thay đổi đầy đủ trên GitHub."
+          }
+          if ($changeDetails.Length -gt 850) {
+            $changeDetails = $changeDetails.Substring(0, 847).TrimEnd() + "..."
+          }
+          $changeDetails += "`n`n[Xem đầy đủ trên GitHub]($($env:RELEASE_URL))"
+
           $embed = @{
             title       = "Auto Catch Pokemon PGSharp $($env:RELEASE_VERSION)"
             description = "Bản cập nhật mới đã sẵn sàng. Tải file EXE mới và thay thế bản cũ; không cần cài đặt lại."
@@ -68,7 +90,7 @@ jobs:
               },
               @{
                 name   = "Chi tiết thay đổi"
-                value  = "[Xem release notes trên GitHub]($($env:RELEASE_URL))"
+                value  = $changeDetails
                 inline = $false
               }
             )

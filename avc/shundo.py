@@ -396,7 +396,15 @@ class ShundoRoutine:
         for shundo means the Pokémon is shiny. Found by the button's own shape, so there is
         nothing to calibrate. (Same signal as CatchRoutine._enc_ball_visible.)"""
         self._enc_ball_at = find_enc_ball(frame, scale=self.config.layout.s)
-        return self._enc_ball_at is not None
+        if self._enc_ball_at is None:
+            return False
+        # A red/white map element can occasionally satisfy the ball-shape heuristic. An
+        # actual encounter hides the Nearby '@' sidebar; if that anchor is still visible,
+        # we are definitely still on the map and must not announce a phantom shiny.
+        if self._anchor_in(frame) is not None:
+            self._enc_ball_at = None
+            return False
+        return True
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -573,6 +581,33 @@ class ShundoRoutine:
         if self._enc_ball_visible(frame):
             self.stats.checked += 1
             return self._grade_encounter()
+
+        # The first cycle must check a Pokémon already present in Nearby before consuming
+        # a feed entry. Otherwise pressing Run immediately teleports away from an unchecked
+        # spawn at the current location. Confirm it on two frames, matching _target_in_bar's
+        # anti-noise rule; later cycles keep using the feed so the last checked spawn is not
+        # opened repeatedly.
+        if self.stats.checked == 0:
+            self._target_in_bar(frame)
+            fresh = self.device.screenshot(fresh=True)
+            initial_target = self._target_in_bar(fresh)
+            if initial_target is not None:
+                self.device.double_tap(*initial_target)
+
+                def initial_encounter_answer(f):
+                    if self._enc_ball_visible(f):
+                        return "shiny"
+                    if self._blocked_toast_in(f):
+                        return "blocked"
+                    return None
+
+                answer = self._poll(initial_encounter_answer,
+                                    cfg.encounter_open_wait) or "blocked"
+                self.stats.checked += 1
+                if answer == "blocked":
+                    self.stats.last_event = "blocked"
+                    return "blocked"
+                return self._grade_encounter()
 
         # Step 1: teleport to the next feed candidate. A miss on the stream frame is
         # retried on a crisp one-shot capture first — H.264 smear between keyframes
