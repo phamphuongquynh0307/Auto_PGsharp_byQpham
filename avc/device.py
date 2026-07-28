@@ -226,6 +226,23 @@ class Device:
             self.close_control()
             self._run(["shell", "input", "tap", str(x), str(y)])
 
+    def ui_dump(self, timeout: float = 8.0) -> str | None:
+        """The Android view hierarchy as XML, or None if it could not be read.
+
+        Costs ~1.6s (against ~25ms for a screenshot), so callers must treat it as an expensive
+        one-off, never as something to poll. uiautomator also refuses outright while the UI is
+        animating, which is a normal outcome here rather than an error — hence None instead of
+        an exception, so callers fall back to their pixel path without special-casing.
+        """
+        remote = "/sdcard/avc-ui.xml"
+        try:
+            self._run(["shell", "uiautomator", "dump", remote], timeout=timeout)
+            xml = self._run(["exec-out", "cat", remote], binary=True, timeout=timeout)
+        except Exception:
+            return None
+        text = xml.decode("utf-8", "replace")
+        return text if "<node" in text else None
+
     def adb_tap(self, x: int, y: int) -> None:
         """Send an independent Android input tap without reusing scrcpy touch state."""
         self._run(["shell", "input", "tap", str(int(x)), str(int(y))])
