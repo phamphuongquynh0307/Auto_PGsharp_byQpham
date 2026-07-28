@@ -64,6 +64,7 @@ class ScreenStream:
         self._ready = threading.Condition(self._lock)
         self._sequence = 0
         self._native_cache: tuple[int, np.ndarray] | None = None
+        self._fail_streak = 0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._proc: subprocess.Popen | None = None
@@ -112,10 +113,23 @@ class ScreenStream:
                 time.sleep(0.3)
             finally:
                 self._kill_proc()
-            if self._use_size and not got_frame:
-                # This device's screenrecord rejected the reduced --size: retry at native size
-                # for the rest of the run rather than looping on a dead stream.
-                self._use_size = False
+            if got_frame:
+                self._fail_streak = 0
+            elif self._half_size is not None:
+                # A launch that produced nothing is not proof this size is unsupported. adbd
+                # restarting, or anything else grabbing the device's single screenrecord slot,
+                # looks exactly the same from here — and switching size permanently on that
+                # evidence is how a transient hiccup killed the stream for an entire run: every
+                # frame then cost the full 5s latest() timeout plus a one-shot capture, and a
+                # catch cycle that should take seconds took the best part of a minute.
+                #
+                # So alternate instead of latching. Two consecutive dead launches switch to the
+                # other size, and two more switch back, which means whichever size this device
+                # actually supports is always found again rather than lost for good.
+                self._fail_streak += 1
+                if self._fail_streak >= 2:
+                    self._use_size = not self._use_size
+                    self._fail_streak = 0
             if not self._stop.is_set():
                 time.sleep(0.05)  # tiny gap between recordings
 
