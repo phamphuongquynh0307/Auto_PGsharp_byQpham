@@ -167,6 +167,7 @@ LANG = {
                       "en": "Reconnect failed — plug in the USB cable to re-enable Wi-Fi."},
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
+    "grp_pace":      {"vi": "Nhịp độ & an toàn tài khoản", "en": "Pacing & account safety"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
     "catch_style":   {"vi": "Kiểu bắt:", "en": "Catch style:"},
     "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
@@ -182,6 +183,16 @@ LANG = {
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
     "settle":        {"vi": "Nghỉ giữa 2 con (giây):", "en": "Rest between catches (s):"},
     "max_throws":    {"vi": "Số bóng tối đa mỗi con:", "en": "Max throws per Pokémon:"},
+    "min_gap":       {"vi": "Giãn cách tối thiểu giữa 2 con (giây, 0=tắt):",
+                      "en": "Minimum gap between catches (s, 0=off):"},
+    "pre_tap":       {"vi": "Chờ giữa tap đơn và tap đôi (giây):",
+                      "en": "Gap between single tap and double tap (s):"},
+    "cooldown":      {"vi": "Nghỉ khi PGSharp báo cooldown (tránh khoá tài khoản)",
+                      "en": "Pause while PGSharp reports a cooldown (avoids soft bans)"},
+    "ui_dump":       {"vi": "Đọc overlay PGSharp để soi Nearby chính xác hơn",
+                      "en": "Read the PGSharp overlay for a surer Nearby check"},
+    "trace":         {"vi": "Ghi log thời gian từng bước (gỡ lỗi, tạo timing.log)",
+                      "en": "Log per-step timings for debugging (writes timing.log)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
@@ -502,6 +513,34 @@ class App:
         dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
 
+        # Pacing and safety. Kept apart from the catching group because these do not make a catch
+        # better or worse — they decide how hard the bot is allowed to push the account.
+        pace_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_pace"))
+        pace_grp.pack(fill="x", **pad)
+        self._i18n.append((pace_grp, "grp_pace"))
+        self.min_gap = self._spin(pace_grp, "min_gap", 0, 0, 30, 3.0,
+                                  is_float=True, increment=0.5)
+        self.pre_tap = self._spin(pace_grp, "pre_tap", 1, 0, 5, 0.8,
+                                  is_float=True, increment=0.1)
+        self.respect_cd = tk.BooleanVar(value=True)
+        cd_chk = ttk.Checkbutton(pace_grp, text=self.tr("cooldown"), variable=self.respect_cd)
+        cd_chk.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((cd_chk, "cooldown"))
+        self.use_ui_dump = tk.BooleanVar(value=True)
+        # The cooldown is read out of the PGSharp overlay, so without the dump there is nothing
+        # to read it from. The routine already refuses that combination; grey the box out so the
+        # setting cannot look enabled while doing nothing.
+        self._sync_cd_state = lambda: cd_chk.config(
+            state="normal" if self.use_ui_dump.get() else "disabled")
+        ud_chk = ttk.Checkbutton(pace_grp, text=self.tr("ui_dump"), variable=self.use_ui_dump,
+                                 command=lambda: self._sync_cd_state())
+        ud_chk.grid(row=3, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((ud_chk, "ui_dump"))
+        self.trace_timing = tk.BooleanVar(value=False)
+        tr_chk = ttk.Checkbutton(pace_grp, text=self.tr("trace"), variable=self.trace_timing)
+        tr_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((tr_chk, "trace"))
+
         sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
         sh_grp.pack(fill="x", **pad)
         self._i18n.append((sh_grp, "grp_shundo"))
@@ -700,6 +739,14 @@ class App:
         self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
         self.dim_screen.set(data.get("dim_screen", False))
+        self.min_gap.set(max(0.0, float(data.get("min_gap", self.min_gap.get()))))
+        self.pre_tap.set(max(0.0, float(data.get("pre_tap", self.pre_tap.get()))))
+        self.respect_cd.set(data.get("respect_cooldown", True))
+        self.use_ui_dump.set(data.get("use_ui_dump", True))
+        self._sync_cd_state()
+        # Deliberately not persisted as on: tracing is a debugging aid, and a settings file that
+        # silently keeps it enabled grows a timing.log for the rest of the user's life.
+        self.trace_timing.set(data.get("trace_timing", False))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
         if data.get("catch_style") in ("normal", "quick"):
@@ -735,6 +782,11 @@ class App:
             "flee_gap": float(self.flee_gap.get()),
             "max_throws": int(self.max_throws.get()),
             "dim_screen": bool(self.dim_screen.get()),
+            "min_gap": float(self.min_gap.get()),
+            "pre_tap": float(self.pre_tap.get()),
+            "respect_cooldown": bool(self.respect_cd.get()),
+            "use_ui_dump": bool(self.use_ui_dump.get()),
+            "trace_timing": bool(self.trace_timing.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
             "tp_wait": float(self.tp_wait.get()),
@@ -1788,6 +1840,11 @@ class App:
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
                     use_feed_bar=False,
+                    min_catch_interval=max(0.0, float(self.min_gap.get())),
+                    pre_tap_delay=max(0.0, float(self.pre_tap.get())),
+                    respect_cooldown=bool(self.respect_cd.get()),
+                    use_ui_dump=bool(self.use_ui_dump.get()),
+                    trace_timing=bool(self.trace_timing.get()),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)

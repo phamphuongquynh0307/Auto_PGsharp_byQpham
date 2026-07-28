@@ -11,9 +11,12 @@ dist-new/
 
 # Runtime / scratch
 settings.json
+settings.json.bak
 screenshot.png
 catch_screen.png
 _*.png
+# Per-cycle phase breakdown written when CatchConfig.trace_timing is on.
+timing*.log
 
 # Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
 # Note: adb/ IS committed so the project builds out of the box.
