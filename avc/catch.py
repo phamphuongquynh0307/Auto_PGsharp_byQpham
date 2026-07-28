@@ -1679,16 +1679,38 @@ class CatchRoutine:
 
         # Step 0.3: pace. Engaging again the instant the previous catch ends is what earns the
         # cooldown in the first place, so wait out the remainder of the floor before looking for
-        # anything to engage. Popups and the cooldown check above still run, so the screen keeps
-        # being tended to while we hold.
+        # anything to engage.
+        #
+        # The wait happens here rather than by ending the cycle. Bailing out meant the floor was
+        # served one second at a time, and each of those seconds re-entered run_once and re-paid
+        # the whole preamble — screenshot, popup sweep, cooldown check — so a 3s floor cost three
+        # full preambles to stand still. Holding in place costs one.
+        #
+        # The screen still gets tended to: popups are drained between slices, which is the only
+        # reason the bail-out existed. Anything that lands during the hold is cleared by the time
+        # the floor is up, instead of being noticed a cycle later.
         if cfg.min_catch_interval > 0 and self._last_engage_at:
-            wait = cfg.min_catch_interval - (time.monotonic() - self._last_engage_at)
+            deadline = self._last_engage_at + cfg.min_catch_interval
+            wait = deadline - time.monotonic()
             if wait > 0:
                 self._trace("pacing",
                             f"Giữ nhịp: còn {wait:.1f}s nữa mới bắt con tiếp theo.", 5.0)
-                self._interruptible_sleep(min(wait, 1.0))
-                self._flush_phases("giu-nhip")
-                return False
+                while not self.stop_event.is_set():
+                    left_now = deadline - time.monotonic()
+                    if left_now <= 0:
+                        break
+                    self._wait_if_paused()
+                    self._interruptible_sleep(min(left_now, 1.0))
+                    if self.stop_event.is_set() or time.monotonic() >= deadline:
+                        break
+                    self._drain_popups(self.device.screenshot())
+                if self.stop_event.is_set():
+                    return False
+                # The frame this cycle opened with predates the hold by seconds, and every step
+                # below reads it — the out-of-balls badge, the encounter check, the Nearby scan.
+                # Acting on it would be acting on a screen that is gone.
+                frame = self.device.screenshot()
+            self._mark("giu-nhip")
 
         # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
         # reads "x0". Checking here (before hunting the nearby bar) also rescues us when a useless
