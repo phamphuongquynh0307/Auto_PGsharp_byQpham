@@ -160,7 +160,7 @@ def slot_has_pokemon(
     *,
     half_width: int,
     height: int,
-    min_core_std: float = 22.0,
+    min_core_range: float = 50.0,
     min_core_edge: float = 0.055,
     min_edge_prominence: float = 0.0,
 ) -> bool:
@@ -168,8 +168,38 @@ def slot_has_pokemon(
 
     A translucent empty sidebar inherits colour/variance from the moving map and can easily
     pass a whole-patch standard-deviation test. Pokemon sprites instead produce a compact
-    cluster of edges in the middle of the slot. Requiring both absolute core texture and
-    prominence over the surrounding sidebar rejects colourful map backgrounds.
+    cluster of edges in the middle of the slot.
+
+    The measure is the core's *brightness range* (98th percentile minus 20th), not its standard
+    deviation. Deviation fails on a night scene: a dark sprite on a dark sidebar spreads little
+    even though its highlights stand out plainly. Range asks the question that actually matters —
+    is there something distinctly brighter than the backdrop in the middle of this slot.
+
+    Measured on a 1220x2712 MuMu across 37 slots — 21 holding a sprite in daylight and night
+    scenes, 16 empty with the map showing through:
+
+                        range        core std
+        sprite        55 .. 217     17.9 .. 84.5
+        empty bar      1 ..  74      0.8 .. 27.9
+
+    Standard deviation overlaps badly (a night-scene Combee scores 17.9 while busy map clutter
+    reaches 27.9), so no threshold on it can be right: 22.0 missed six real sprites and 31.0
+    missed nine. Range overlaps far less, and the threshold is deliberately set at the bottom of
+    it rather than the middle.
+
+    That bias is on purpose, because the two errors do not cost the same. A missed sprite idles
+    the bot, or walks it away from a Pokémon that was there. A false one costs a double-tap that
+    opens nothing and one wasted cycle — it can never throw a ball, because the encounter check
+    gates that separately. So the test is tuned to catch every sprite and tolerate the occasional
+    phantom, not the other way round.
+
+    Edge *prominence* over the surrounding sidebar reads like it should help and does not: on
+    these samples an empty slot scored 0.093 while a real Combee scored 0.037. It stays available
+    as a parameter but defaults off.
+
+    There is deliberately no saturation-based alternative. One used to stand in for contrast on
+    dark sprites, but map bleed-through is strongly coloured too — it waved through every empty
+    slot, which made the main threshold irrelevant.
     """
     cx, cy = center
     y0, y1 = max(0, cy - height // 2), min(scene.shape[0], cy + height // 2)
@@ -187,20 +217,123 @@ def slot_has_pokemon(
     surround[core] = False
     core_edge = float(edges[core].mean())
     side_edge = float(edges[surround].mean()) if surround.any() else 0.0
-    core_gray_std = float(gray[core].std())
-    core_sat = hsv[core][..., 1]
-    # Dark blue/brown sprites can have little grayscale contrast while remaining
-    # strongly coloured. Accept that colour texture as an alternative to brightness
-    # texture, but still require the same compact edge cluster below.
-    textured = (
-        core_gray_std >= min_core_std
-        or (float(core_sat.std()) >= 35.0 and float(core_sat.mean()) >= 80.0)
-    )
+    core_pixels = gray[core]
+    core_range = float(np.percentile(core_pixels, 98) - np.percentile(core_pixels, 20))
     return (
-        textured
+        core_range >= min_core_range
         and core_edge >= min_core_edge
         and core_edge - side_edge >= min_edge_prominence
     )
+
+
+def camera_icon_visible(
+    scene: np.ndarray,
+    region: tuple[int, int, int, int],
+    *,
+    min_fill: float = 0.06,
+    max_fill: float = 0.45,
+    min_value: int = 170,
+    max_sat: int = 70,
+) -> bool:
+    """True when the encounter's camera/AR button occupies `region` (x, y, w, h).
+
+    The button is present in every encounter and absent everywhere else, which makes it a clean
+    second opinion on "are we still in an encounter" — the question the red ball-selector alone
+    keeps getting wrong just after a Flee.
+
+    It is measured, not template-matched. The glyph is a near-white outline, so what identifies
+    it is the fraction of pixels that are bright *and desaturated*. Brightness alone is what sank
+    the earlier attempt at this icon: on a bright scene the background is bright too. Saturation
+    survives that, because encounter and map backdrops alike (sky, water, grass, city) are
+    strongly coloured while the glyph is not.
+
+    The upper bound matters as much as the lower one: a white wall or a blown-out sky fills the
+    whole box, and that is a backdrop, not an outline. Measured on a 1220x2712 MuMu — encounter
+    19.9% of the box, map 0.0%.
+    """
+    x, y, w, h = region
+    y0, y1 = max(0, y), min(scene.shape[0], y + h)
+    x0, x1 = max(0, x), min(scene.shape[1], x + w)
+    patch = scene[y0:y1, x0:x1]
+    if patch.size == 0 or patch.shape[0] < 8 or patch.shape[1] < 8:
+        return False
+    gray = _to_gray(patch)
+    sat = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)[..., 1]
+    fill = float(((gray > min_value) & (sat < max_sat)).mean())
+    return min_fill <= fill <= max_fill
+
+
+def find_dialog_buttons(
+    scene: np.ndarray,
+    region: tuple[int, int, int, int] | None = None,
+    *,
+    min_pixels: int = 120,
+    max_gap: int = 40,
+    max_panel_sat: float = 40.0,
+) -> list[tuple[int, int]]:
+    """Centres of an Android alert dialog's text buttons, left to right.
+
+    PGSharp raises a stock system AlertDialog for "Stop AutoWalk?" whenever a tap lands on the
+    map, and it blocks everything until answered. Matching it by template failed outright — the
+    bundled ones came from a different build and scored below 0.55 even swept across every scale
+    — which is the same lesson the camera icon and the ball selector already taught: the shape
+    and colour of these controls are stable across versions while their exact pixels are not.
+
+    So the buttons are found by what they are: short runs of the dialog's accent-cyan text,
+    sitting side by side on the same baseline. The caller decides which one to press — for a
+    "Stop AutoWalk?" prompt that is the left one, CANCEL, because the answer is never OK.
+
+    Returns [] when there is no such row, which is the normal case.
+    """
+    x_off = y_off = 0
+    patch = scene
+    if region is not None:
+        rx, ry, rw, rh = region
+        rx, ry = max(0, rx), max(0, ry)
+        patch = scene[ry:ry + rh, rx:rx + rw]
+        x_off, y_off = rx, ry
+    if patch.size == 0:
+        return []
+    p = patch.astype(int)
+    b, g, r = p[..., 0], p[..., 1], p[..., 2]
+    # The accent is a light cyan: blue and green high, red clearly lower.
+    cyan = ((b > 150) & (g > 140) & (r < 150) & (b - r > 55)).astype(np.uint8)
+    if int(cyan.sum()) < min_pixels:
+        return []
+    ys, xs = np.nonzero(cyan)
+    # Group the runs by their x gaps; each word is one group.
+    order = np.argsort(xs)
+    xs_s, ys_s = xs[order], ys[order]
+    groups: list[tuple[int, int, int, int]] = []
+    start = 0
+    for i in range(1, len(xs_s) + 1):
+        if i == len(xs_s) or xs_s[i] - xs_s[i - 1] > max_gap:
+            gx, gy = xs_s[start:i], ys_s[start:i]
+            if len(gx) >= min_pixels // 4:
+                groups.append((int(gx.min()), int(gx.max()), int(gy.min()), int(gy.max())))
+            start = i
+    if not groups:
+        return []
+    # Buttons share a baseline; anything on another line belongs to something else.
+    base = float(np.median([(y0 + y1) / 2 for _, _, y0, y1 in groups]))
+    row = [gp for gp in groups if abs((gp[2] + gp[3]) / 2 - base) <= 20]
+    if not row:
+        return []
+
+    # The colour test alone is not enough: the map has plenty of cyan of its own (Pokestop
+    # diamonds, route glow) and it produced false rows on every map frame tried. What no map
+    # frame has is the dialog's flat grey panel behind the text. Measured over five frames the
+    # separation is total — panel saturation 5 on the dialog against 135..174 on map and
+    # encounter frames — so requiring a drained backdrop settles it.
+    xs_row = [x for gp in row for x in (gp[0], gp[1])]
+    px0, px1 = max(0, min(xs_row) - 120), min(patch.shape[1], max(xs_row) + 120)
+    py0, py1 = max(0, int(base) - 90), min(patch.shape[0], int(base) + 70)
+    panel = patch[py0:py1, px0:px1]
+    if panel.size == 0:
+        return []
+    if float(cv2.cvtColor(panel, cv2.COLOR_BGR2HSV)[..., 1].mean()) > max_panel_sat:
+        return []
+    return [((x0 + x1) // 2 + x_off, (y0 + y1) // 2 + y_off) for x0, x1, y0, y1 in row]
 
 
 def find_enc_ball(
