@@ -276,6 +276,15 @@ class CatchConfig:
     # colour, so yellow map clutter (event Pikachu, balloons) can't outscore it.
     menu_star_template: str = "templates/menu_star.png"
     menu_star_threshold: float = 0.7
+    # How many full calibration sweeps to spend before accepting that this device's star cannot
+    # be matched. The sweep is the routine's single most expensive operation (~2.7s), and not
+    # locking is already a supported state — see _ensure_calibrated.
+    cal_max_attempts: int = 3
+    # The star sits on the always-on PGSharp menu and only moves when the user drags the menu, so
+    # a match is re-checked in a box around the last one before the full-frame search is paid for.
+    # Full frame costs ~0.6-0.9s; this box costs ~10ms, and _paused_row_in now runs on every
+    # empty Nearby cycle, which is exactly where those hundreds of ms were going.
+    star_cache_radius: int = 130
     autowalk_offset_x: int = 100    # from the star center onto the AutoWalk row
     autowalk_offset_y: int = 300
     # The AutoWalk row's paused icon ('⊘'). When visible, the walk stalled and a re-tap is safe;
@@ -384,6 +393,8 @@ class CatchRoutine:
         self._scales = bracket_scales(self._tpl_s)
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
+        self._star_cache: tuple[int, int] | None = None   # last star match, to skip the full sweep
+        self._cal_attempts = 0            # calibration sweeps spent; capped, see _ensure_calibrated
         self._nearby_handle_cache: tuple[int, int] | None = None
         self._force_bottom_cache: tuple[int, int] | None = None   # '@' ending a calibrated bar
         self._force_bottom_value: int | None = None               # its floor, cached for a TTL
@@ -1239,6 +1250,32 @@ class CatchRoutine:
                 return m[0].center, False
         return None
 
+    def _star_in(self, frame) -> tuple[int, int] | None:
+        """The PGSharp menu star, searched near where it was last seen before the whole frame.
+
+        Same cache-then-widen shape as _slot_in uses for the '@'. It matters more here: the star
+        is matched in colour over the *full* frame at several scales, which measured 0.6-0.9s on
+        a 1220x2712 device — and _paused_row_in asks for it on every empty Nearby cycle, so that
+        was being paid whenever there was nothing to catch. The menu only moves when the user
+        drags it, so the cached box answers almost every call for ~10ms; a miss falls back to the
+        full search and re-learns, exactly as before.
+        """
+        cfg = self.config
+        if self._star is None:
+            return None
+        if self._star_cache is not None:
+            cx, cy = self._star_cache
+            r = cfg.s(cfg.star_cache_radius)
+            m = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=self._scales,
+                     grayscale=False, region=(cx - r, cy - r, r * 2, r * 2), max_matches=1)
+            if m:
+                self._star_cache = m[0].center
+                return self._star_cache
+        m = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=self._scales,
+                 grayscale=False, max_matches=1)
+        self._star_cache = m[0].center if m else None
+        return self._star_cache
+
     def _paused_row_in(self, frame) -> tuple[tuple[int, int], float] | None:
         """Where the AutoWalk row is while it shows '⊘', plus the match score.
 
@@ -1250,11 +1287,10 @@ class CatchRoutine:
         cfg = self.config
         if self._aw_paused is None or self._star is None:
             return None
-        m = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=self._scales,
-                 grayscale=False, max_matches=1)
-        if not m:
+        star = self._star_in(frame)
+        if star is None:
             return None
-        sx, sy = m[0].center
+        sx, sy = star
         region = (sx - cfg.s(150), sy, cfg.s(300), cfg.s(700))
         hit = find(frame, self._aw_paused, threshold=cfg.autowalk_paused_threshold,
                    scales=self._scales, grayscale=False, region=region, max_matches=1)
@@ -1342,9 +1378,7 @@ class CatchRoutine:
             self._trace("autowalk_skip_encounter",
                         "Đang trong encounter; không bấm AutoWalk.", 0.0)
             return False
-        m = find(frame, self._star, threshold=cfg.menu_star_threshold, scales=self._scales,
-                 grayscale=False, max_matches=1)
-        star = m[0].center if m else None
+        star = self._star_in(frame)
 
         row = self._autowalk_row_in(frame, star)
         if row is not None:
@@ -1587,14 +1621,33 @@ class CatchRoutine:
         PGSharp menu star, and centre the match-scale sweep on it. This sidesteps guessing the
         scale from resolution/density — which is unreliable because the game doesn't re-layout
         cleanly. Until it locks, the wide bracket set in __init__ stays in effect, so detection
-        keeps working; a hidden/covered star just leaves it to retry next cycle."""
+        keeps working; a hidden/covered star just leaves it to retry next cycle.
+
+        The retries are capped, because the sweep is by far the most expensive thing in the whole
+        routine: 17 scales of a colour template match over the full frame, measured at 2.7s on a
+        1220x2712 device. The docstring above always promised "once", but nothing enforced it —
+        so a star that never scores 0.82 (menu collapsed, covered, or simply drawn differently by
+        this PGSharp build) charged that 2.7s to *every cycle, forever*, which is the single
+        largest slowdown there is and one that no setting could switch off.
+
+        Giving up is safe precisely because the failure is already handled: not locking just
+        leaves the wide bracket in place, which is the documented fallback. So after a few
+        attempts, stop paying for an answer this device is not going to give."""
         if self._cal_scale is not None or self._star is None:
             return
+        if self._cal_attempts >= self.config.cal_max_attempts:
+            return
+        self._cal_attempts += 1
         s, score = best_matching_scale(self.device.screenshot(), self._star,
                                        CALIBRATION_SWEEP, grayscale=False)
         if s is not None and score >= 0.82:
             self._cal_scale = s
             self._scales = scales_around(s)
+        elif self._cal_attempts >= self.config.cal_max_attempts:
+            self._trace("calib_giveup",
+                        f"Không đo được scale sau {self._cal_attempts} lần "
+                        f"(điểm khớp cao nhất {score:.2f} < 0.82); dùng dải scale rộng mặc định.",
+                        0.0)
 
     def run_once(self) -> bool:
         """One catch cycle. Returns True if a ball was thrown."""
