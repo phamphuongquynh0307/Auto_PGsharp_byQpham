@@ -950,8 +950,9 @@ class CatchRoutine:
             "Khóa Feed tới khi Pokémon xuất hiện và bắt xong.",
             0.0,
         )
-        # Teleporting far raises the speed warning; clear it, then stop waiting the instant the
-        # spawn lands in the Nearby bar so the next cycle can engage it.
+        # Teleporting far raises the speed warning; clear it, then remain inside this method
+        # until the spawn really lands in Nearby. Returning to run_once after a short timeout
+        # used to re-enter the empty-Nearby branch and could consume another Feed item.
         self._interruptible_sleep(min(0.75, cfg.feed_teleport_wait))
         self._cancelled_dialog = False
         self._drain_popups()
@@ -966,9 +967,62 @@ class CatchRoutine:
             self._cancelled_dialog = False
             self._trace("feed_disabled",
                         "Teleport bị chặn (Go Plus đang kết nối) — tắt nguồn feed, "
-                        "chỉ dùng Nearby + AutoWalk.", 0.0)
+                            "chỉ dùng Nearby + AutoWalk.", 0.0)
             return False
-        self._poll(self._occupied_slot_in, cfg.feed_teleport_wait)
+
+        loaded = None
+        heartbeat_at = time.monotonic()
+        while not self.stop_event.is_set():
+            self._wait_if_paused()
+            if self.stop_event.is_set():
+                break
+            frame = self.device.screenshot(next_frame=True)
+            if self._drain_popups(frame):
+                if self._cancelled_dialog:
+                    self._teleport_blocked = True
+                    self._feed_pending = False
+                    self._feed_pending_at = 0.0
+                    self._cancelled_dialog = False
+                    self._trace(
+                        "feed_disabled",
+                        "Teleport bị chặn (Go Plus đang kết nối) — tắt nguồn feed, "
+                        "chỉ dùng Nearby + AutoWalk.",
+                        0.0,
+                    )
+                    return False
+                continue
+
+            loaded = self._occupied_slot_in(frame)
+            now = time.monotonic()
+            if loaded is None and now - heartbeat_at >= 10.0:
+                # Stream frames may smear a newly arrived sprite. Every heartbeat asks PGSharp
+                # directly, then falls back to one crisp ADB frame before continuing to wait.
+                loaded = self._occupied_slot_ui() or self._occupied_slot_fresh()
+                if loaded is None:
+                    waited = max(0.0, now - self._feed_pending_at)
+                    self._trace(
+                        "feed_wait_nearby",
+                        f"Đã tap Feed 1 lần; vẫn chờ Pokémon hiện trên Nearby ({waited:.0f}s). "
+                        "Không teleport tiếp.",
+                        0.0,
+                    )
+                    heartbeat_at = now
+            if loaded is not None:
+                waited = max(0.0, time.monotonic() - self._feed_pending_at)
+                self._trace(
+                    "feed_nearby_ready",
+                    f"Pokémon từ Feed đã hiện trên Nearby tại {loaded} sau {waited:.1f}s; "
+                    "chuyển sang bắt.",
+                    0.0,
+                )
+                break
+            self._interruptible_sleep(max(0.06, cfg.idle_poll))
+
+        if loaded is None:
+            # User pressed Stop. Keep the pending bit truthful until this routine is discarded;
+            # most importantly, never turn a stop into permission for one more Feed tap.
+            return False
+
         # A feed entry can sit arbitrarily far away — the feed lists fresh spawns, not close
         # ones — so this jump is the one action in the whole flow that earns a cooldown. Read it
         # now rather than waiting up to cooldown_check_interval to notice: that window is exactly
