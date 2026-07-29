@@ -263,6 +263,100 @@ def camera_icon_visible(
     return min_fill <= fill <= max_fill
 
 
+def find_berry_button(
+    scene: np.ndarray,
+    *,
+    scale: float = 1.0,
+    radius: int = 95,
+    min_berry_fill: float = 0.06,
+) -> tuple[int, int] | None:
+    """Find the encounter's bottom-left Berry button and return its actual centre.
+
+    No remembered tap coordinate participates in this search. The bottom-left corner is scanned
+    for a compact raspberry-coloured glyph, then the candidate is validated against the pale
+    circular button around it. This lets the detector follow UI offsets and resolution changes
+    instead of drawing a fixed circle near the control.
+
+    A red ball flying elsewhere is rejected by the corner and component bounds. Map avatar
+    details are rejected by the minimum glyph area and the required pale button surround.
+    """
+    height, width = scene.shape[:2]
+    if height < 80 or width < 80:
+        return None
+    scale = max(0.2, float(scale))
+    x0, x1 = 0, int(width * 0.32)
+    y0, y1 = int(height * 0.78), int(height * 0.965)
+    patch = scene[y0:y1, x0:x1]
+    if patch.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    hue, sat, value = cv2.split(hsv)
+    raw_berry = (
+        ((hue <= 10) | (hue >= 140))
+        & (sat >= 90)
+        & (value >= 70)
+    )
+    kernel_size = max(3, int(round(15 * scale)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    joined = cv2.morphologyEx(raw_berry.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    count, _labels, stats, centres = cv2.connectedComponentsWithStats(joined, 8)
+
+    radius = max(8, int(radius))
+    min_area, max_area = 700 * scale * scale, 9000 * scale * scale
+    min_side, max_side = 35 * scale, 145 * scale
+    candidates: list[tuple[float, tuple[int, int]]] = []
+    for i in range(1, count):
+        bx, by, bw, bh, area = stats[i]
+        if not (min_area <= area <= max_area):
+            continue
+        if not (min_side <= bw <= max_side and min_side <= bh <= max_side):
+            continue
+        if not (0.55 <= bw / max(1, bh) <= 1.55):
+            continue
+        cx = int(round(centres[i][0])) + x0
+        cy = int(round(centres[i][1])) + y0
+        if cx > width * 0.24:
+            continue
+
+        dx0, dx1 = max(0, cx - radius), min(width, cx + radius + 1)
+        dy0, dy1 = max(0, cy - radius), min(height, cy + radius + 1)
+        disk_patch = scene[dy0:dy1, dx0:dx1]
+        disk_hsv = cv2.cvtColor(disk_patch, cv2.COLOR_BGR2HSV)
+        disk_h, disk_s, disk_v = cv2.split(disk_hsv)
+        yy, xx = np.ogrid[dy0 - cy:dy1 - cy, dx0 - cx:dx1 - cx]
+        disk = xx * xx + yy * yy <= radius * radius
+        berry = (
+            ((disk_h <= 10) | (disk_h >= 140))
+            & (disk_s >= 90)
+            & (disk_v >= 70)
+            & disk
+        )
+        berry_fill = float(berry.sum()) / float(disk.sum())
+        light_fill = float(((disk_s < 70) & (disk_v > 150) & disk).sum()) / float(disk.sum())
+        if berry_fill < min_berry_fill or light_fill < 0.20:
+            continue
+        candidates.append((float(area) + light_fill * 1000.0, (cx, cy)))
+
+    return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
+
+
+def berry_button_visible(
+    scene: np.ndarray,
+    *,
+    scale: float = 1.0,
+    radius: int = 95,
+    min_berry_fill: float = 0.06,
+) -> bool:
+    """Compatibility boolean for callers that do not need the detected centre."""
+    return find_berry_button(
+        scene,
+        scale=scale,
+        radius=radius,
+        min_berry_fill=min_berry_fill,
+    ) is not None
+
+
 def find_dialog_buttons(
     scene: np.ndarray,
     region: tuple[int, int, int, int] | None = None,

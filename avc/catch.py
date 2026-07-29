@@ -1,7 +1,7 @@
 """Pokémon catch routine.
 
 Per cycle:
-  0. If the bottom-right ball-selector is already showing we're inside an encounter (a
+  0. If the bottom-left Berry button is already showing we're inside an encounter (a
      break-out, or one that opened late) — throw at it right away. The encounter screen hides
      the sidebars, so anything that scans for them first can never get out of this state.
   1. Otherwise find a Pokémon to engage, in order:
@@ -9,16 +9,13 @@ Per cycle:
          auto-advances, so the same slot position always holds the next target;
        * failing that, the PGSharp *feed* sidebar's first slot — tapping it teleports to that
          spawn, which fills the nearby bar for the next cycle instead of idling.
-  2. Confirm we're actually in an encounter via the bottom-right ball-selector button (an
-     opaque red Poké Ball shown for any loaded ball type — see _enc_ball_visible).
+  2. Confirm we're actually in an encounter via the bottom-left Berry button.
   3. Swipe up from the ball to throw it, then read the outcome: encounter closed (caught or
      fled), or the ball is back at the throw point (break-out) — throw again. After the last
      allowed throw the encounter is fled, so the flow always returns to the map.
 
-The ball-selector is opaque, so it reads the same on any Pokémon's background — unlike the
-old semi-transparent camera icon, whose contrast collapsed on bright scenes and silently
-missed the encounter. When it isn't showing we're not in an encounter, so the cycle counts
-as empty and the AutoWalk dry-spell logic keeps working.
+The Berry glyph is read only inside its fixed circular button. When it isn't showing we're
+not in an encounter, so the cycle counts as empty and the AutoWalk dry-spell logic keeps working.
 """
 from __future__ import annotations
 
@@ -37,7 +34,7 @@ from .layout import (
 from . import uidump
 from .resources import resource_path
 from .vision import (
-    best_matching_scale, camera_icon_visible, find, find_enc_ball, find_fast, find_popup_close,
+    best_matching_scale, find, find_berry_button, find_fast, find_popup_close,
     find_dialog_buttons, load_template, slot_has_pokemon,
 )
 
@@ -137,8 +134,9 @@ class CatchConfig:
     # It queues freshly-spawned Pokémon; tapping its top entry teleports there, which fills the
     # Nearby bar for the next cycle. Consulted only when the Nearby bar is empty, so a busy
     # Nearby bar is still caught normally and no teleport happens. Off -> AutoWalk only.
-    # Regular auto-catch only works through Nearby. The PGSharp feed is reserved for
-    # Shundo hunting and must never make Catch mode teleport.
+    # Optional in Catch mode. Off by default: existing users keep Nearby + AutoWalk only.
+    # When enabled, one Feed entry is tapped only after Nearby is confirmed empty. A pending
+    # Feed jump stays locked until its Pokemon appears on Nearby and that encounter is handled.
     use_feed_bar: bool = False
     feed_rss_template: str = "templates/feed_rss.png"
     bar_handle_template: str = "templates/bar_handle.png"
@@ -150,36 +148,17 @@ class CatchConfig:
     # marginal against a busy translucent sidebar (event scenery, gyms) and loses the odd
     # frame on a bar that is actually full; teleporting on one such read jumps away from
     # catchable Pokémon. Several empty cycles in a row is evidence, one is noise.
-    feed_after_idle: int = 2
+    feed_after_idle: int = 1
 
     # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
     # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
     ball_fallback: tuple[int, int] = (610, 2380)
-    # Encounter signal: the bottom-RIGHT ball-selector button. It's an opaque red Poké Ball shown
-    # in every encounter *regardless of which ball is loaded to throw* (Great/Ultra included), so
-    # spotting it detects the encounter for any ball type, unlike checking the throwable ball
-    # (blue Great Balls / yellow Ultra Balls aren't red). Off the encounter (map, post-catch
-    # "Gotcha") it is gone, which doubles as the leave/next-cycle signal. It is located by shape
-    # in vision.find_enc_ball — there is deliberately no region to calibrate here.
-    #
-    # Second opinion: the camera/AR button at top centre, present in every encounter and absent
-    # on the map. The ball-selector's failure mode is a phantom just after a Flee — the bot then
-    # throws at the map — while this one's is missing a real encounter on a washed-out scene.
-    # Two different failure modes, so requiring both to agree cuts the phantom without inheriting
-    # the miss. enc_signal picks the rule: "both" (AND, safest), "any" (OR, most eager),
-    # "ball" or "camera" to use one alone.
-    enc_signal: str = "both"
-    enc_camera_region: tuple[int, int, int, int] = (545, 130, 130, 105)
-    # Sampled on a live 1220x2712 MuMu — encounter 0.199/0.200/0.201, map 0.000 .. 0.073 (the top
-    # of that range is PGSharp's white-on-pink timer pill drifting through the box). The window
-    # sits in the gap, well clear of both. A first cut at 0.06 was under the map's own maximum.
-    enc_camera_min_fill: float = 0.12   # below this the glyph isn't there
-    enc_camera_max_fill: float = 0.45   # above it the box is a bright backdrop, not an outline
-    # The selector never moves within a run, so once an encounter has been confirmed by *both*
-    # signals its position is remembered and later detections must land near it. A red blob
-    # elsewhere in the corner is then no longer mistaken for the button: the phantom that sent
-    # the bot throwing at the map was measured 120px right of the real one.
-    enc_ball_home_tol: int = 80
+    # Encounter signal: the raspberry glyph inside the bottom-left Berry button. The fixed
+    # circular footprint prevents red Pokemon, thrown balls, and map controls from being
+    # mistaken for an encounter. The detector scans for and returns the button's real centre;
+    # ``berry_start`` below remains only the Quick Catch drag coordinate.
+    enc_berry_radius: int = 95
+    enc_berry_min_fill: float = 0.06
 
     # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
     # the bottom center. When it shows we're out of Poké Balls: flee the encounter, alert Discord,
@@ -276,6 +255,18 @@ class CatchConfig:
     # colour, so yellow map clutter (event Pikachu, balloons) can't outscore it.
     menu_star_template: str = "templates/menu_star.png"
     menu_star_threshold: float = 0.7
+    # The menu's Settings gear — its last row, and so the cheapest proof that the menu is
+    # expanded. The star renders in both states and cannot answer the question. Nothing used to
+    # open the menu because leaving it expanded is the normal state, but collapsed it hides the
+    # AutoWalk row, Feeds and Teleport, and every path that reaches for them then fails silently.
+    pgsharp_menu_template: str = "templates/pgsharp_menu.png"
+    pgsharp_menu_threshold: float = 0.7
+    # How far below the star to search for that gear. It is the menu's *last* row, so this has to
+    # reach further than the AutoWalk row's box: measured on a 1220x2712 device the gear centre
+    # sits 690px below the star and the icon is 80px tall, putting its bottom edge at 770. The
+    # AutoWalk row's 700 clipped it by 30px and read an open menu as shut.
+    menu_gear_span: int = 850
+    menu_open_wait: float = 0.6     # let the menu animate out before the next cycle reads it
     # How many full calibration sweeps to spend before accepting that this device's star cannot
     # be matched. The sweep is the routine's single most expensive operation (~2.7s), and not
     # locking is already a supported state — see _ensure_calibrated.
@@ -352,7 +343,6 @@ class CatchConfig:
             berry_start=L.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
             berry_end=L.point(self.berry_end, "BL"),
             out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
-            enc_camera_region=L.region(self.enc_camera_region, "TC"),   # camera button, top-centre
             check_btn_region=L.region(self.check_btn_region, "BC"),
             caught_ok_region=L.region(self.caught_ok_region, "MC"),
             maybe_later_region=L.region(self.maybe_later_region, "MC"),
@@ -366,6 +356,7 @@ class CatchConfig:
             handle_column_tol=L.scale(self.handle_column_tol),
             throw_dy=L.scale(self.throw_dy),
             jitter_px=max(1, L.scale(self.jitter_px)),
+            enc_berry_radius=max(8, L.scale(self.enc_berry_radius)),
             autowalk_offset_x=L.scale(self.autowalk_offset_x),
             autowalk_offset_y=L.scale(self.autowalk_offset_y),
         )
@@ -391,6 +382,21 @@ class CatchRoutine:
         # spanning the density estimate .. no-scaling. On the base device this stays a tight sweep.
         self._tpl_s = self.config.layout.s
         self._scales = bracket_scales(self._tpl_s)
+        # A device that already renders at base scale has no uncertainty for the bracket to
+        # absorb, and the popup sweep is where paying for it hurts: every template is looked for
+        # on every cycle, and all but one of them is absent almost every time. Measured on a
+        # 1220x2712 @480dpi device, matching at 1.0 alone against a scene rendered ±6% off still
+        # scores 0.751 .. 0.912 across the five templates on screen at once — clear of the 0.7
+        # popup threshold — so the other two scales buy nothing there. Off the base scale the
+        # bracket spans a real span (s .. 1.0) and is kept.
+        self._base_scale = abs(self._tpl_s - 1.0) < 1e-3
+        self._popup_scales = (1.0,) if self._base_scale else self._scales
+        # The level-up screen was measured rendering at a different scale from the PGSharp
+        # overlay on MuMu (claim ~0.67 against a 0.55 star), which is why it swept the full
+        # calibration range. That divergence is a property of a device that rescales the UI; at
+        # base scale there is nothing to diverge from, and the wide sweep was half the cost of
+        # the entire popup pass (88.8ms of 178ms) for a screen that shows up once a level.
+        self._claim_scales = self._popup_scales if self._base_scale else CALIBRATION_SWEEP
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._star_cache: tuple[int, int] | None = None   # last star match, to skip the full sweep
@@ -399,9 +405,7 @@ class CatchRoutine:
         self._force_bottom_cache: tuple[int, int] | None = None   # '@' ending a calibrated bar
         self._force_bottom_value: int | None = None               # its floor, cached for a TTL
         self._force_bottom_at = 0.0
-        self._enc_ball_at: tuple[int, int] | None = None   # last seen selector, for the live view
-        self._enc_camera_seen = False                      # last camera-button read, for the live view
-        self._enc_ball_home: tuple[int, int] | None = None  # where the selector really lives here
+        self._enc_berry_at: tuple[int, int] | None = None  # actual detected Berry-button centre
         # When the Nearby bar was last seen holding a sprite (corroboration window), and when
         # the slow one-shot re-read was last spent (rate limit).
         self._nearby_last_seen_at: float | None = None
@@ -418,6 +422,11 @@ class CatchRoutine:
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._feed_presence_streak = 0
         self._feed_seen = False
+        # A Feed tap consumes/moves the queue immediately, while its Pokemon may need many
+        # seconds to load into Nearby. Keep the queue locked across catch cycles so an ordinary
+        # timeout cannot tap the next Feed entry and abandon the first spawn.
+        self._feed_pending = False
+        self._feed_pending_at = 0.0
         # Set when a CANCEL was just tapped, so the feed source can tell its own teleport was
         # refused (Go Plus warning) apart from a CANCEL on some unrelated dialog.
         self._cancelled_dialog = False
@@ -437,6 +446,7 @@ class CatchRoutine:
 
         self._anchor = load(self.config.anchor_template)
         self._star = load(self.config.menu_star_template)
+        self._gear = load_opt(self.config.pgsharp_menu_template)
         # Feed-bar templates are optional: without them the feed source simply stays off.
         self._rss = load_opt(self.config.feed_rss_template)
         self._handle = load_opt(self.config.bar_handle_template)
@@ -488,87 +498,24 @@ class CatchRoutine:
         jx, jy = self._jitter(x, y)
         self.device.double_tap(jx, jy, self.config.double_tap_gap_ms)
 
-    def _enc_ball_visible(self, frame) -> bool:
-        """True when the bottom-right ball-selector is up, i.e. we are in an encounter.
-
-        That button is an opaque red Poké Ball shown in every encounter whatever ball is
-        loaded, so it detects the encounter for all ball types. It is found by its own
-        red-dome-over-white-belly shape (see vision.find_enc_ball) rather than by sampling a
-        hand-placed strip, so there is nothing to calibrate and being a few pixels out on a
-        given device cannot blind it."""
-        at = find_enc_ball(frame, scale=self.config.layout.s)
-        home = self._enc_ball_home
-        if at is not None and home is not None:
-            # Known where the button lives on this device, so a red blob somewhere else in the
-            # corner cannot be it. The home is only ever learned from a frame both signals agreed
-            # on, and it is refreshed on every such frame, so a UI that genuinely moves re-learns.
-            tol = self.config.enc_ball_home_tol
-            if abs(at[0] - home[0]) > tol or abs(at[1] - home[1]) > tol:
-                self._trace("enc_ball_offsite",
-                            f"Bỏ qua bóng đỏ tại {at}: lệch khỏi vị trí đã học {home}.")
-                at = None
-        self._enc_ball_at = at
-        return at is not None
-
-    def _enc_camera_visible(self, frame) -> bool:
-        """True when the encounter's top-centre camera/AR button is showing."""
-        cfg = self.config
-        return camera_icon_visible(frame, cfg.enc_camera_region,
-                                   min_fill=cfg.enc_camera_min_fill,
-                                   max_fill=cfg.enc_camera_max_fill)
-
     def _in_encounter(self, frame, *, strict: bool = False) -> bool:
-        """Are we in an encounter? Two signals, and which rule applies depends on when we ask.
+        """True only when the fixed bottom-left Berry control is visibly present.
 
-        The camera button only renders about a second *into* the encounter, so for that first
-        second a real encounter shows the ball-selector alone. Demanding both signals at that
-        moment reads a live encounter as closed — it cancels the throw and walks away from the
-        Pokémon. So the strict rule is reserved for the moments where the opposite error is the
-        one that bites:
-
-          * strict (enc_signal, "both" by default) — asked with no context, at the start of a
-            cycle or after a throw, where the danger is a phantom ball-selector left over from an
-            encounter we already fled. By then a real encounter is well past the camera's lag, so
-            requiring the camera costs nothing and kills the phantom.
-          * eager (ball or camera) — asked while an encounter is opening or known to be open, so
-            a signal that has not rendered yet cannot be read as "gone".
-
-        Both signals are always evaluated so the live view shows what each one saw.
+        ``strict`` stays in the signature for existing callers. There is deliberately one
+        encounter answer now: camera and Poke Ball detections no longer participate.
         """
-        # Camera first, always: it reads a 130x105 box for ~0.08ms, while the ball sweep runs
-        # connected components over 391x543 for ~8ms — a hundredfold difference. Asking the cheap
-        # question first lets most frames skip the expensive one entirely, and neither rule's
-        # result changes, only the order they are evaluated in.
-        camera = self._enc_camera_visible(frame)
-        self._enc_camera_seen = camera
-        mode = self.config.enc_signal
-
-        if not strict:
-            # Eager is an OR, so the cheap signal alone already settles it when it fires.
-            return True if camera else self._enc_ball_visible(frame)
-        if mode == "camera":
-            return camera
-        if mode == "ball":
-            return self._enc_ball_visible(frame)
-        if mode == "any":
-            return True if camera else self._enc_ball_visible(frame)
-        # "both" is an AND, so no camera means no encounter and the sweep can be skipped. That is
-        # the common case while polling on the map, which is where this is asked most often.
-        if not camera:
-            self._enc_ball_at = None
-            return False
-        ball = self._enc_ball_visible(frame)
-        if ball and self._enc_ball_at is not None:
-            # Two independent signals agreeing is the only evidence trusted to place the button.
-            self._enc_ball_home = self._enc_ball_at
-        return ball
+        cfg = self.config
+        self._enc_berry_at = find_berry_button(
+            frame,
+            scale=cfg.layout.s,
+            radius=cfg.enc_berry_radius,
+            min_berry_fill=cfg.enc_berry_min_fill,
+        )
+        return self._enc_berry_at is not None
 
     def _ball_in(self, frame, *, strict: bool = False) -> tuple[int, int] | None:
-        # Only the red ball-selector at bottom-right is an encounter-safe signal.  The old
-        # early signal sampled the large white throwable ball; bright map scenery and the
-        # map's centre Poké Ball could satisfy it, causing a blind Quick Catch gesture that
-        # opened the centre menu.  Waiting for the selector costs a fraction of a second but
-        # guarantees we never throw/tap from the map.
+        # Return the throw point only after the independent Berry-button detector proves that
+        # the encounter UI is open.
         return self.config.ball_fallback if self._in_encounter(frame, strict=strict) else None
 
     def _ball_ready(self, frame) -> bool:
@@ -974,7 +921,7 @@ class CatchRoutine:
         """Nearby is empty — teleport to the feed's top spawn if it has one. Returns True when
         a jump was made, which keeps the cycle productive instead of idling into AutoWalk."""
         cfg = self.config
-        if (not cfg.use_feed_bar or self._teleport_blocked
+        if (not cfg.use_feed_bar or self._feed_pending or self._teleport_blocked
                 or self._rss is None or self._handle is None):
             return False
         frame = self.device.screenshot(next_frame=True)
@@ -993,7 +940,16 @@ class CatchRoutine:
         if slot is None:
             return False
         self.device.tap(*slot)
-        self._trace("feed_tap", f"Nearby trống; nhảy tới spawn trên thanh feed tại {slot}.", 0.0)
+        # Lock before waiting. feed_teleport_wait is only a fast-path wait, never permission to
+        # consume another Feed item when loading takes longer.
+        self._feed_pending = True
+        self._feed_pending_at = time.monotonic()
+        self._trace(
+            "feed_tap",
+            f"Nearby trống; đã tap Feed đúng 1 lần tại {slot}. "
+            "Khóa Feed tới khi Pokémon xuất hiện và bắt xong.",
+            0.0,
+        )
         # Teleporting far raises the speed warning; clear it, then stop waiting the instant the
         # spawn lands in the Nearby bar so the next cycle can engage it.
         self._interruptible_sleep(min(0.75, cfg.feed_teleport_wait))
@@ -1005,6 +961,8 @@ class CatchRoutine:
             # tap -> warning -> CANCEL forever, so drop the feed source for the rest of the
             # run and let Nearby + AutoWalk carry the flow.
             self._teleport_blocked = True
+            self._feed_pending = False
+            self._feed_pending_at = 0.0
             self._cancelled_dialog = False
             self._trace("feed_disabled",
                         "Teleport bị chặn (Go Plus đang kết nối) — tắt nguồn feed, "
@@ -1023,6 +981,20 @@ class CatchRoutine:
                 self._trace("feed_cooldown",
                             f"Nhảy feed xong, PGSharp báo cooldown {left:.0f}s; ngừng bắt.", 0.0)
         return True
+
+    def _finish_encounter(self, ball_xy: tuple[int, int]) -> bool:
+        """Run an encounter and release a pending Feed item only after it was handled."""
+        threw = self._run_encounter(ball_xy)
+        if threw and self._feed_pending:
+            waited = max(0.0, time.monotonic() - self._feed_pending_at)
+            self._feed_pending = False
+            self._feed_pending_at = 0.0
+            self._trace(
+                "feed_complete",
+                f"Đã xử lý xong Pokémon từ Nearby sau {waited:.1f}s; mở khóa Feed kế tiếp.",
+                0.0,
+            )
+        return threw
 
     def _is_pokestop_screen(self, frame) -> bool:
         """True when the Pokéstop photo-disc screen is up. Its giant blue pin fills both
@@ -1055,7 +1027,7 @@ class CatchRoutine:
         # is never OK. Matched on the CANCEL word itself (colour, tight box that excludes OK).
         if self._cancel_btn is not None:
             m = find(frame, self._cancel_btn, threshold=self.config.popup_threshold,
-                     scales=self._scales, grayscale=False,
+                     scales=self._popup_scales, grayscale=False,
                      region=self.config.cancel_btn_region, max_matches=1)
             if m:
                 self.device.tap(*m[0].center)
@@ -1082,7 +1054,7 @@ class CatchRoutine:
         # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
         if self._popup_weather is not None:
             m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
-                          scales=self._scales, cache=fast_cache)
+                          scales=self._popup_scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -1093,7 +1065,7 @@ class CatchRoutine:
         # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
             m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold,
-                          scales=self._scales, cache=fast_cache)
+                          scales=self._popup_scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -1103,7 +1075,8 @@ class CatchRoutine:
         # green "CHOOSE GROUP" above it). Searched by text in a centre box, so the button is missed.
         if self._maybe_later is not None:
             m = find_fast(frame, self._maybe_later, threshold=self.config.popup_threshold,
-                          scales=self._scales, grayscale=False, region=self.config.maybe_later_region)
+                          scales=self._popup_scales, grayscale=False,
+                          region=self.config.maybe_later_region)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -1111,7 +1084,7 @@ class CatchRoutine:
         # "Stop/Pause AutoWalk?" dialog -> tap CANCEL to dismiss it.
         if self._popup_autowalk is not None:
             m = find_fast(frame, self._popup_autowalk, threshold=self.config.popup_threshold,
-                          scales=self._scales, cache=fast_cache)
+                          scales=self._popup_scales, cache=fast_cache)
             if m:
                 # Aim at the CANCEL word itself when it can be read: the offset below is only
                 # true for the device the dialog was measured on. Searched inside the dialog's
@@ -1121,7 +1094,8 @@ class CatchRoutine:
                     box = (m[0].x - self.config.s(60), m[0].y,
                            m[0].width + self.config.s(500), m[0].height + self.config.s(360))
                     hit = find(frame, self._cancel_btn, threshold=self.config.popup_threshold,
-                               scales=self._scales, grayscale=False, region=box, max_matches=1)
+                               scales=self._popup_scales, grayscale=False, region=box,
+                               max_matches=1)
                     if hit:
                         target = hit[0].center
                 if target is None:
@@ -1133,9 +1107,10 @@ class CatchRoutine:
         # Level-up "CLAIM REWARDS" screen -> tap claim, then tap screen to dismiss rewards until default screen
         if self._claim_rewards is not None:
             # The level-up screen renders at a different scale from the PGSharp overlay
-            # used for calibration (MuMu: claim ~=0.67, menu star ~=0.55).
+            # used for calibration (MuMu: claim ~=0.67, menu star ~=0.55) — hence the wide
+            # sweep, which _claim_scales keeps for exactly the devices that showed it.
             m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
-                          scales=CALIBRATION_SWEEP, cache=fast_cache)
+                          scales=self._claim_scales, cache=fast_cache)
             if m:
                 rx, ry = m[0].center
                 self.device.tap(rx, ry)
@@ -1152,7 +1127,7 @@ class CatchRoutine:
                     # If close button appears in the center bottom region, tap it immediately
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
                         if btn is not None:
-                            m_close = find_fast(f, btn, threshold=0.7, scales=self._scales,
+                            m_close = find_fast(f, btn, threshold=0.7, scales=self._popup_scales,
                                                 region=self.config.rect((400, 2000, 420, 712), "BC"))
                             if m_close:
                                 self.device.tap(*m_close[0].center)
@@ -1172,7 +1147,8 @@ class CatchRoutine:
             close = None
             for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
                 if btn is not None:
-                    m = find_fast(frame, btn, threshold=0.7, scales=self._scales, region=region)
+                    m = find_fast(frame, btn, threshold=0.7, scales=self._popup_scales,
+                                  region=region)
                     if m:
                         close = m[0].center
                         break
@@ -1184,7 +1160,7 @@ class CatchRoutine:
         # first, and its ball-selector bleeds through the dialog so the encounter check reads true;
         # handle it here before anything else touches the screen.
         if self._caught_ok is not None:
-            m = find_fast(frame, self._caught_ok, threshold=0.72, scales=self._scales,
+            m = find_fast(frame, self._caught_ok, threshold=0.72, scales=self._popup_scales,
                           grayscale=False, region=self.config.caught_ok_region)
             if m:
                 self.device.tap(*m[0].center)
@@ -1196,7 +1172,7 @@ class CatchRoutine:
         # throwable ball's bright centre.  The tight bottom-centre region plus the teal
         # button/template is already specific and excludes the encounter's controls.
         if self._check_btn is not None:
-            m = find_fast(frame, self._check_btn, threshold=0.75, scales=self._scales,
+            m = find_fast(frame, self._check_btn, threshold=0.75, scales=self._popup_scales,
                           grayscale=False, region=self.config.check_btn_region)
             if m:
                 self.device.tap(*m[0].center)
@@ -1209,7 +1185,7 @@ class CatchRoutine:
                 frame,
                 (self._close_btn, self._close_btn_blue, self._close_btn_white),
                 threshold=self.config.popup_threshold,
-                scales=self._scales,
+                scales=self._popup_scales,
                 cache=fast_cache,
             )
             if close is not None:
@@ -1275,6 +1251,36 @@ class CatchRoutine:
                  grayscale=False, max_matches=1)
         self._star_cache = m[0].center if m else None
         return self._star_cache
+
+    def _ensure_menu_open(self, frame) -> bool:
+        """Expand the PGSharp menu when only its star is showing. True if it was tapped.
+
+        Read from the Settings gear, the menu's last row: the star renders whether the menu is
+        open or shut, so it cannot answer this on its own. A gear in view means open, and this
+        does nothing — which is the usual case, since the menu is normally left expanded.
+
+        Only reached on an empty-Nearby cycle, where the menu is about to be needed anyway. That
+        is also the only place a collapsed menu shows itself: with the rows hidden, AutoWalk,
+        Feeds and Teleport are all unreachable and the bot would sit idle in front of an overlay
+        that is working fine.
+        """
+        cfg = self.config
+        if self._gear is None or self._star is None:
+            return False
+        star = self._star_in(frame)
+        if star is None:
+            return False            # no overlay on screen at all; nothing to open
+        sx, sy = star
+        # The rows hang below the star, in its column. Taller than _paused_row_in's box: the gear
+        # is the last row, not the third (see menu_gear_span).
+        region = (sx - cfg.s(150), sy, cfg.s(300), cfg.s(cfg.menu_gear_span))
+        if find(frame, self._gear, threshold=cfg.pgsharp_menu_threshold, scales=self._scales,
+                grayscale=False, region=region, max_matches=1):
+            return False            # already expanded
+        self.device.tap(sx, sy)
+        self._trace("menu_collapsed",
+                    f"Menu PGSharp đang thu gọn; bấm ngôi sao tại {star} để mở.", 0.0)
+        return True
 
     def _paused_row_in(self, frame) -> tuple[tuple[int, int], float] | None:
         """Where the AutoWalk row is while it shows '⊘', plus the match score.
@@ -1735,7 +1741,7 @@ class CatchRoutine:
         if ball_xy is not None:
             self._flush_phases("dang-trong-encounter")
             self._trace("encounter_open", "Đang ở trong encounter; ném luôn.", 0.0)
-            return self._run_encounter(ball_xy)
+            return self._finish_encounter(ball_xy)
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
@@ -1751,10 +1757,28 @@ class CatchRoutine:
             slot = self._occupied_slot_ui() or self._occupied_slot_fresh()
             self._mark("ui+anh-net")
         if slot is None:
+            if self._feed_pending:
+                waited = max(0.0, time.monotonic() - self._feed_pending_at)
+                self._idle_streak = 0
+                self._trace(
+                    "feed_wait_nearby",
+                    f"Đã tap Feed 1 lần; đang chờ Pokémon hiện trên Nearby ({waited:.0f}s), "
+                    "không tap Feed kế tiếp.",
+                    10.0,
+                )
+                self._mark("cho-feed-nearby"); self._flush_phases("CHO-FEED-LOAD")
+                self._interruptible_sleep(cfg.idle_poll)
+                return False
             # Nothing on Nearby — is the walk simply stalled? Restarting it is cheaper and less
             # disruptive than a teleport, and a paused walk is the most likely reason nothing is
             # spawning, so it gets first refusal. Only a row showing '⊘' is tapped, so a walk
             # that is already running falls straight through to the feed below.
+            # The rows below only exist while the menu is expanded. Open it first, then let the
+            # next cycle read the menu it just asked for rather than a half-drawn one.
+            if self._ensure_menu_open(frame):
+                self._mark("mo-menu"); self._flush_phases("mo-menu")
+                self._interruptible_sleep(cfg.menu_open_wait)
+                return False
             if self._tap_autowalk_paused():
                 self._mark("autowalk"); self._flush_phases("autowalk")
                 self.stats.autowalks += 1
@@ -1834,7 +1858,7 @@ class CatchRoutine:
             if ball_xy is not None:
                 self._trace("encounter_late_open",
                             "Encounter mở trễ; bỏ qua tap thử lại và ném luôn.", 0.0)
-                return self._run_encounter(ball_xy)
+                return self._finish_encounter(ball_xy)
             retry_slot = self._occupied_slot_in(retry_frame)
             same_slot = (
                 retry_slot is not None
@@ -1864,7 +1888,7 @@ class CatchRoutine:
             self._mark("thu-lai"); self._flush_phases("KHONG-MO-DUOC")
             self._interruptible_sleep(cfg.idle_poll)
             return False
-        threw = self._run_encounter(ball_xy)
+        threw = self._finish_encounter(ball_xy)
         self._mark("encounter")
         self._flush_phases("BAT-XONG")
         return threw
@@ -1895,7 +1919,11 @@ class CatchRoutine:
                 on_event(self.stats, threw)
 
             # Dry spell handling: after several empty cycles, tap AutoWalk to go find new spawns.
-            if threw:
+            if self._feed_pending:
+                # Waiting for the one Feed teleport already sent is active work, not an empty
+                # cycle. Never let the dry-spell AutoWalk path interfere or unlock another tap.
+                self._idle_streak = 0
+            elif threw:
                 self._idle_streak = 0
             else:
                 self._idle_streak += 1
@@ -1946,19 +1974,14 @@ class CatchRoutine:
                         0.9, colour, 2)
 
         # Encounter + out-of-balls detector windows.
-        # The live view draws both detectors, so it asks for both rather than letting
-        # _in_encounter short-circuit past the ball sweep.
-        self._enc_ball_visible(frame)
         in_enc = self._in_encounter(frame)
-        if self._enc_ball_at is not None:
-            cv2.circle(img, self._enc_ball_at, cfg.s(70), (0, 0, 255), 4)
-            cv2.putText(img, "ENC", (self._enc_ball_at[0] - cfg.s(40),
-                                     self._enc_ball_at[1] - cfg.s(80)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+        if self._enc_berry_at is not None:
+            berry_x, berry_y = self._enc_berry_at
+            cv2.circle(img, (berry_x, berry_y), cfg.enc_berry_radius, (0, 255, 0), 4)
+            cv2.putText(img, "BERRY", (berry_x - cfg.s(70),
+                                       berry_y - cfg.enc_berry_radius - cfg.s(12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         box(cfg.out_of_balls_region, (0, 140, 255), "x0")
-        # Camera button: the encounter's second signal. Green when it reads present.
-        box(cfg.enc_camera_region, (0, 255, 0) if self._enc_camera_seen else (120, 120, 120),
-            "CAM" + ("" if self._enc_camera_seen else "?"))
 
         # Throw: start point and where the flick ends.
         bx, by = cfg.ball_fallback

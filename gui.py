@@ -49,8 +49,6 @@ CALIB_ITEMS = [
 ]
 
 CALIB_GROUP_FIELDS = {
-    # enc_ball_region is deliberately absent: the encounter's ball-selector is found by its
-    # own shape now (vision.find_enc_ball), so there is nothing left to line up by hand.
     "normal": ("nearby_slot", "ball_fallback", "pokestop_close_xy", "out_of_balls_region"),
     "quick": ("nearby_slot", "ball_fallback", "berry_start", "berry_end", "flee_xy",
               "pokestop_close_xy", "out_of_balls_region"),
@@ -191,6 +189,8 @@ LANG = {
                       "en": "Pause while PGSharp reports a cooldown (avoids soft bans)"},
     "ui_dump":       {"vi": "Đọc overlay PGSharp để soi Nearby chính xác hơn",
                       "en": "Read the PGSharp overlay for a surer Nearby check"},
+    "catch_feed":    {"vi": "Nearby hết Pokémon: lấy 1 con từ Feed (mặc định tắt)",
+                      "en": "When Nearby is empty: take 1 Pokémon from Feed (off by default)"},
     "trace":         {"vi": "Ghi log thời gian từng bước (gỡ lỗi, tạo timing.log)",
                       "en": "Log per-step timings for debugging (writes timing.log)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
@@ -264,8 +264,12 @@ LANG = {
     "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
     "act_stop":      {"vi": "Dừng hẳn bot", "en": "Stop the bot"},
     "act_skip":      {"vi": "Thoát, soi con khác", "en": "Flee and keep hunting"},
-    "msg_s_shiny_skip": {"vi": "✨ shiny (chưa đủ 100 IV) — thoát, soi con tiếp.",
-                         "en": "✨ shiny (below 100 IV) — fled, hunting next."},
+    "msg_s_shiny_skip": {"vi": "✨ Phát hiện shiny (chưa đủ 100 IV) — đang bấm Flee.",
+                         "en": "✨ Shiny detected (below 100 IV) — attempting Flee."},
+    "msg_s_fled":      {"vi": "✓ Đã bấm Flee và xác nhận trở về map — tiếp tục soi.",
+                         "en": "✓ Flee succeeded and the map is back — continuing."},
+    "msg_s_flee_failed": {"vi": "⛔ Flee chưa đưa về map; đã dừng để không bấm nhầm Pokémon kế tiếp.",
+                           "en": "⛔ Flee did not return to the map; stopped before tapping the next Pokémon."},
     "dc_shiny_skip": {"vi": "✨ SHINY (chưa đủ 100 IV) — đã bỏ qua, soi tiếp. (đã soi {} con)",
                       "en": "✨ SHINY (below 100 IV) — skipped, still hunting. ({} checked)"},
     "s_counts":      {"vi": "Soi: {} | shiny: {} | shundo: {}", "en": "Checked: {} | shiny: {} | shundo: {}"},
@@ -275,7 +279,8 @@ LANG = {
     "st_shiny":      {"vi": "✨ SHINY — chờ bạn xử lý!", "en": "✨ SHINY — waiting for you!"},
     "msg_s_shundo":  {"vi": "🌟💯 SHUNDO!!! Bot {} — vào máy bắt ngay!", "en": "🌟💯 SHUNDO!!! Bot {} — go catch it now!"},
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
-    "msg_s_miss":    {"vi": "(double-tap chưa được trả lời — thử lại)", "en": "(double-tap got no answer — retrying)"},
+    "msg_s_miss":    {"vi": "(double-tap chưa có phản hồi — thử lại cùng Pokémon một lần)",
+                       "en": "(double-tap got no answer — retrying the same Pokémon once)"},
     "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
                       "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
     "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
@@ -512,6 +517,16 @@ class App:
         dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
         dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((dim_chk, "dim"))
+        # Opt-in only. One Feed item remains locked until it loads into Nearby and its encounter
+        # is handled, so this cannot advance through the Feed while the map is still loading.
+        self.catch_use_feed = tk.BooleanVar(value=False)
+        feed_chk = ttk.Checkbutton(
+            catch_grp,
+            text=self.tr("catch_feed"),
+            variable=self.catch_use_feed,
+        )
+        feed_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((feed_chk, "catch_feed"))
 
         # Pacing and safety. Kept apart from the catching group because these do not make a catch
         # better or worse — they decide how hard the bot is allowed to push the account.
@@ -739,6 +754,7 @@ class App:
         self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
         self.dim_screen.set(data.get("dim_screen", False))
+        self.catch_use_feed.set(data.get("catch_use_feed", False))
         self.min_gap.set(max(0.0, float(data.get("min_gap", self.min_gap.get()))))
         self.pre_tap.set(max(0.0, float(data.get("pre_tap", self.pre_tap.get()))))
         self.respect_cd.set(data.get("respect_cooldown", True))
@@ -782,6 +798,7 @@ class App:
             "flee_gap": float(self.flee_gap.get()),
             "max_throws": int(self.max_throws.get()),
             "dim_screen": bool(self.dim_screen.get()),
+            "catch_use_feed": bool(self.catch_use_feed.get()),
             "min_gap": float(self.min_gap.get()),
             "pre_tap": float(self.pre_tap.get()),
             "respect_cooldown": bool(self.respect_cd.get()),
@@ -1817,6 +1834,8 @@ class App:
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
+                    flee_taps=max(1, int(self.flee_taps.get())),
+                    flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
@@ -1839,7 +1858,7 @@ class App:
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
-                    use_feed_bar=False,
+                    use_feed_bar=bool(self.catch_use_feed.get()),
                     min_catch_interval=max(0.0, float(self.min_gap.get())),
                     pre_tap_delay=max(0.0, float(self.pre_tap.get())),
                     respect_cooldown=bool(self.respect_cd.get()),
@@ -1912,6 +1931,10 @@ class App:
                 self._send_discord(self.tr("msg_s_goplus"))
             elif outcome == "blocked":
                 self.log_queue.put(self.tr("msg_s_blocked").format(stats.checked, stats.shinies, stats.shundos))
+            elif outcome == "fled":
+                self.log_queue.put(self.tr("msg_s_fled"))
+            elif outcome == "flee_failed":
+                self.log_queue.put(self.tr("msg_s_flee_failed"))
             elif outcome == "miss":
                 self.log_queue.put(self.tr("msg_s_miss"))
             elif outcome == "nospawn":
@@ -1932,7 +1955,12 @@ class App:
             else:
                 self.device.start_stream()
             self.routine.run(on_event=on_shundo_event if self.mode == "shundo" else on_event)
-            self.log_queue.put("__done__" + self.tr("msg_done"))
+            # A safety stop already has a precise error in the log. Do not immediately
+            # overwrite its meaning with the generic "Done." message.
+            if self.mode == "shundo" and self.routine.stats.last_event == "flee_failed":
+                self.log_queue.put("__done__")
+            else:
+                self.log_queue.put("__done__" + self.tr("msg_done"))
         except Exception as e:  # noqa: BLE001
             self.log_queue.put("__done__" + self.tr("msg_err").format(e))
             # The bot died while unattended — this is the alert that matters most.
@@ -1971,7 +1999,8 @@ class App:
         self.pause_btn.config(state="disabled", text=self.tr("pause"))
         self.stop_btn.config(state="disabled")
         self.paused = False
-        self._log(message)
+        if message:
+            self._log(message)
 
     # -- log pump -------------------------------------------------------------
     def _drain_log(self) -> None:

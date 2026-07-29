@@ -31,7 +31,7 @@ from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
 )
 from .vision import (
-    best_matching_scale, find, find_enc_ball, find_fast, find_popup_close, load_template,
+    best_matching_scale, find, find_berry_button, find_fast, find_popup_close, load_template,
     slot_has_pokemon,
 )
 
@@ -84,10 +84,16 @@ class ShundoConfig:
     # (a second double-tap would land on the opening encounter screen). No encounter in that
     # window ⇒ the Pokémon is non-shiny and we move on.
     encounter_open_wait: float = 3.0
+    # Some PGSharp builds silently block a non-shiny without rendering the toast. Retry
+    # one confirmed map double-tap, then treat a second no-encounter answer as non-shiny.
+    # Attempts where the map/slot cannot be confirmed do not count toward this limit.
+    encounter_no_answer_attempts: int = 2
 
-    # Encounter confirmation: the bottom-right ball-selector button — an opaque red Poké Ball
-    # shown once the encounter is open, for any loaded ball type. Located by shape in
-    # vision.find_enc_ball, so there is no region to calibrate.
+    # Encounter confirmation: the raspberry glyph inside the bottom-left Berry button.
+    # Camera and Poke Ball checks are deliberately excluded because their stale/animated pixels
+    # can remain over map frames and falsely report a shiny.
+    enc_berry_radius: int = 95
+    enc_berry_min_fill: float = 0.06
 
     # PGSharp info pill glyphs for the 15/15/15 check.
     glyph_1_template: str = "templates/glyph_1.png"
@@ -140,6 +146,12 @@ class ShundoConfig:
     shiny_action: str = "skip"
     # Encounter flee button (running-man, top-left) — used to leave a skipped shiny.
     flee_xy: tuple[int, int] = (120, 170)
+    # MuMu can silently drop a tap sent through the persistent scrcpy control socket.
+    # Use independent ADB taps and do not consume another QuickSniper entry until the
+    # Nearby '@' anchor proves that the map has actually returned.
+    flee_taps: int = 3
+    flee_gap_ms: int = 300
+    flee_map_wait: float = 5.0
 
     # Actual device resolution; see CatchConfig.screen. Coordinate FIELDS above are stored
     # already re-anchored to this resolution; raw pixel literals in the routine use s()/rect().
@@ -190,6 +202,7 @@ class ShundoConfig:
             toast_pill_w=(L.scale(self.toast_pill_w[0]), L.scale(self.toast_pill_w[1])),
             toast_pill_h=(L.scale(self.toast_pill_h[0]), L.scale(self.toast_pill_h[1])),
             toast_center_tol=L.scale(self.toast_center_tol),
+            enc_berry_radius=max(8, L.scale(self.enc_berry_radius)),
         )
 
 
@@ -217,7 +230,12 @@ class ShundoRoutine:
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._nearby_presence_streak = 0
         self._feed_presence_streak = 0
-        self._enc_ball_at: tuple[int, int] | None = None
+        self._enc_berry_at: tuple[int, int] | None = None
+        # A teleported Nearby entry stays pending until PGSharp gives a real answer, or
+        # until a bounded number of confirmed map double-taps produce no encounter. The
+        # latter covers builds that silently block non-shiny Pokémon without a toast.
+        self._pending_nearby: tuple[int, int] | None = None
+        self._pending_no_answers = 0
         # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
         # avoids teleporting, so the run cannot continue.
         self._teleport_blocked = False
@@ -396,20 +414,21 @@ class ShundoRoutine:
         self._feed_presence_streak = 0
         return None
 
-    def _enc_ball_visible(self, frame) -> bool:
-        """True when the bottom-right ball-selector is up — i.e. the encounter is open, which
-        for shundo means the Pokémon is shiny. Found by the button's own shape, so there is
-        nothing to calibrate. (Same signal as CatchRoutine._enc_ball_visible.)"""
-        self._enc_ball_at = find_enc_ball(frame, scale=self.config.layout.s)
-        if self._enc_ball_at is None:
-            return False
-        # A red/white map element can occasionally satisfy the ball-shape heuristic. An
-        # actual encounter hides the Nearby '@' sidebar; if that anchor is still visible,
-        # we are definitely still on the map and must not announce a phantom shiny.
-        if self._anchor_in(frame) is not None:
-            self._enc_ball_at = None
-            return False
-        return True
+    def _encounter_visible(self, frame) -> bool:
+        """True when an encounter is open, which for Shundo means the Pokémon is shiny.
+
+        Only the fixed bottom-left Berry button is trusted. Camera/AR and Poke Ball detection
+        are intentionally absent, so animated red objects and stale stream overlays cannot
+        turn a map frame into a shiny.
+        """
+        cfg = self.config
+        self._enc_berry_at = find_berry_button(
+            frame,
+            scale=cfg.layout.s,
+            radius=cfg.enc_berry_radius,
+            min_berry_fill=cfg.enc_berry_min_fill,
+        )
+        return self._enc_berry_at is not None
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -492,7 +511,7 @@ class ShundoRoutine:
         # A stray Pokéstop screen is closed by its templated X as well; no blind fixed-spot
         # tap here: the catch routine's "two blue side patches" heuristic false-positives on
         # water-heavy maps and would press the map's pokeball menu instead.
-        if not self._enc_ball_visible(frame):
+        if not self._encounter_visible(frame):
             close = find_popup_close(
                 frame,
                 self._close_btns,
@@ -553,6 +572,109 @@ class ShundoRoutine:
         return False
 
     # -- main loop --------------------------------------------------------------------
+    def _attempt_nearby(self, target: tuple[int, int]) -> str:
+        """Try one Nearby entry and return blocked/shiny/shundo/miss.
+
+        A single timeout used to be treated as ``blocked``. That advanced QuickSniper even
+        when the map had not finished loading or the double-tap was not accepted. The first
+        confirmed timeout now keeps the current entry pending; a second confirmed timeout
+        covers PGSharp builds that silently block non-shiny Pokémon without showing a toast.
+        """
+        cfg = self.config
+        frame = self.device.screenshot(fresh=True)
+        if self._encounter_visible(frame):
+            self.stats.checked += 1
+            return self._grade_encounter()
+
+        # Never tap a coordinate remembered from an earlier map frame. The sidebar can
+        # move or collapse while loading; confirm the occupied slot again on this frame.
+        current = self._raw_target_in_bar(frame)
+        if current is None:
+            self.stats.last_event = "miss"
+            return "miss"
+        self.device.double_tap(*current)
+
+        def encounter_answer(f):
+            if self._encounter_visible(f):
+                return "shiny"
+            # The toast is only meaningful while the Nearby anchor still proves that
+            # this is the map, not a bright transition frame inside an encounter.
+            if self._anchor_in(f) is not None and self._blocked_toast_in(f):
+                return "blocked"
+            return None
+
+        answer = self._poll(encounter_answer, cfg.encounter_open_wait)
+        if answer is None:
+            if self.stop_event.is_set():
+                self.stats.last_event = "miss"
+                return "miss"
+            self._pending_no_answers += 1
+            if self._pending_no_answers >= max(1, cfg.encounter_no_answer_attempts):
+                # The slot and map were freshly confirmed before every double-tap. PGSharp
+                # builds that suppress the blocked toast answer only by keeping us on the
+                # map; after the bounded retry that is a valid non-shiny result.
+                self.stats.checked += 1
+                self.stats.last_event = "blocked"
+                return "blocked"
+            self.stats.last_event = "miss"
+            return "miss"
+
+        self._pending_no_answers = 0
+        self.stats.checked += 1
+        if answer == "blocked":
+            self.stats.last_event = "blocked"
+            return "blocked"
+        return self._grade_encounter()
+
+    def _flee_to_map(self) -> bool | None:
+        """Leave a skipped shiny and prove that the encounter UI is gone.
+
+        Returns ``None`` only when the user stopped the run. MuMu sometimes drops a standalone
+        tap even after the scrcpy control socket is closed, so every fresh frame drives the next
+        action: configured Flee tap, Android Back fallback, repeat. Two fresh frames without the
+        dynamically located Berry button confirm the exit.
+        """
+        cfg = self.config
+        self.device.close_control()
+        max_actions = max(6, max(1, int(cfg.flee_taps)) * 3)
+        max_checks = max_actions + 4
+        deadline = time.monotonic() + max(30.0, cfg.flee_map_wait)
+        outside_streak = 0
+        actions = 0
+        checks = 0
+        while checks < max_checks and time.monotonic() < deadline:
+            if self.stop_event.is_set():
+                return None
+            # Never validate Flee from the H.264 stream. The cached detection layer and
+            # decoder can trail the phone by several frames, which reported ENCOUNTER on a
+            # map that was already visible. A skipped shiny is rare, so two crisp one-shot
+            # ADB frames are worth the cost here.
+            frame = self.device.screenshot(fresh=True)
+            checks += 1
+            in_encounter = self._encounter_visible(frame)
+            if not in_encounter:
+                outside_streak += 1
+                if outside_streak >= 2:
+                    return True
+                # Do not send another exit command between the two confirmation frames.
+                self._interruptible_sleep(max(0.06, cfg.poll_interval))
+                continue
+
+            outside_streak = 0
+            if actions >= max_actions:
+                continue
+            if actions % 2 == 0:
+                # First choice: the visible running-man Flee button, via an independent ADB tap.
+                self.device.adb_tap(*cfg.flee_xy)
+            else:
+                # Fallback: Android Back exits a Pokemon encounter without depending on any
+                # screen coordinate. This handles shifted layouts and taps silently dropped by
+                # MuMu while keeping the next action state-gated by a fresh Berry detection.
+                self.device.back()
+            actions += 1
+            self._interruptible_sleep(max(0.45, cfg.flee_gap_ms / 1000.0))
+        return False
+
     def _ensure_calibrated(self) -> None:
         """Measure the device's real UI render scale once (from the always-on PGSharp menu star)
         and centre the match-scale sweep on it, instead of guessing from resolution/density.
@@ -583,9 +705,20 @@ class ShundoRoutine:
         # (it can open a beat after the per-tap wait gave up — PGSharp hides both bars
         # while it's up, so this must be checked before looking for the feed). Grade it
         # now instead of idling forever.
-        if self._enc_ball_visible(frame):
+        if self._encounter_visible(frame):
+            self._pending_nearby = None
+            self._pending_no_answers = 0
             self.stats.checked += 1
             return self._grade_encounter()
+
+        # A previous double-tap got no visible answer. Retry that same Nearby entry;
+        # never consume another QuickSniper item merely because the answer timed out.
+        if self._pending_nearby is not None:
+            outcome = self._attempt_nearby(self._pending_nearby)
+            if outcome != "miss":
+                self._pending_nearby = None
+                self._pending_no_answers = 0
+            return outcome
 
         # The first cycle must check a Pokémon already present in Nearby before consuming
         # a feed entry. Otherwise pressing Run immediately teleports away from an unchecked
@@ -597,22 +730,22 @@ class ShundoRoutine:
             fresh = self.device.screenshot(fresh=True)
             initial_target = self._target_in_bar(fresh)
             if initial_target is not None:
-                self.device.double_tap(*initial_target)
+                self._pending_nearby = initial_target
+                self._pending_no_answers = 0
+                outcome = self._attempt_nearby(initial_target)
+                if outcome != "miss":
+                    self._pending_nearby = None
+                    self._pending_no_answers = 0
+                return outcome
 
-                def initial_encounter_answer(f):
-                    if self._enc_ball_visible(f):
-                        return "shiny"
-                    if self._blocked_toast_in(f):
-                        return "blocked"
-                    return None
-
-                answer = self._poll(initial_encounter_answer,
-                                    cfg.encounter_open_wait) or "blocked"
-                self.stats.checked += 1
-                if answer == "blocked":
-                    self.stats.last_event = "blocked"
-                    return "blocked"
-                return self._grade_encounter()
+        # The feed may remain visible during a transition, but it is unsafe to touch
+        # until the Nearby '@' anchor confirms that the map itself is ready.
+        if self._anchor_in(frame) is None:
+            frame = self.device.screenshot(fresh=True)
+            if self._anchor_in(frame) is None:
+                self._interruptible_sleep(cfg.poll_interval)
+                self.stats.last_event = "miss"
+                return "miss"
 
         # Step 1: teleport to the next feed candidate. A miss on the stream frame is
         # retried on a crisp one-shot capture first — H.264 smear between keyframes
@@ -636,8 +769,11 @@ class ShundoRoutine:
 
         # Step 2a: the far teleport reloads spawns and empties the nearby '@' bar.
         # Wait for that clear first, so an entry left over from the previous location
-        # can't be mistaken for the new spawn.
+        # can't be mistaken for the new spawn. A short hop (or a very fast reload) can
+        # replace one occupied list with another without ever exposing an empty frame;
+        # cap this phase so a successful shiny Flee cannot leave the run stuck here.
         empty_streak = 0
+        clear_deadline = time.monotonic() + max(0.5, cfg.bar_clear_timeout)
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
@@ -652,9 +788,18 @@ class ShundoRoutine:
                 break
             if self._drain_popups(frame):
                 empty_streak = 0
+                # A modal prevented us from observing the teleport transition; give the
+                # clear detector a fresh full window after dismissing it.
+                clear_deadline = time.monotonic() + max(0.5, cfg.bar_clear_timeout)
                 continue
+            if time.monotonic() >= clear_deadline:
+                break
         if self.stop_event.is_set():
             return "idle"
+        # Step 2b must establish its own two-frame presence streak. In particular, when
+        # the clear phase timed out on a continuously occupied bar, no presence evidence
+        # from the previous location may leak into the "new spawn loaded" decision.
+        self._nearby_presence_streak = 0
 
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
         # in the bar's first slot. Stays put and waits (spawns can load slowly); it does
@@ -682,33 +827,15 @@ class ShundoRoutine:
         if loaded is None:
             self.stats.last_event = "nospawn"
             return "nospawn"
-        # Step 3: double-tap the bar's first slot ONCE, then watch for the encounter to open
-        # (its ball-selector button) — the decisive shiny signal. Ball up ⇒ shiny. None within
-        # the window ⇒ non-shiny; move on. Never a second double-tap: it would land on the
-        # opening encounter screen (the stray taps the user was seeing).
-        frame = self.device.screenshot()
-        if self._enc_ball_visible(frame):
-            answer = "shiny"
-        else:
-            # Aim at the slot the scan actually found the spawn in — re-read on this frame,
-            # falling back to where the load loop saw it.
-            self.device.double_tap(*(self._target_in_bar(frame) or loaded))
-            def encounter_answer(f):
-                if self._enc_ball_visible(f):
-                    return "shiny"
-                if self._blocked_toast_in(f):
-                    return "blocked"
-                return None
-
-            answer = self._poll(encounter_answer, cfg.encounter_open_wait) or "blocked"
-        self.stats.checked += 1
-
-        if answer == "blocked":
-            self.stats.last_event = "blocked"
-            return "blocked"
-
-        # Step 4: shiny confirmed — grade the IVs off the info pill.
-        return self._grade_encounter()
+        # Step 3: keep this QuickSniper item pending through the bounded no-answer retry.
+        # It advances only after an encounter, a toast, or repeated confirmed map taps.
+        self._pending_nearby = loaded
+        self._pending_no_answers = 0
+        outcome = self._attempt_nearby(loaded)
+        if outcome != "miss":
+            self._pending_nearby = None
+            self._pending_no_answers = 0
+        return outcome
 
     def _grade_encounter(self) -> str:
         """We're inside an open encounter — a shiny. Read the pill; shundo = 15/15/15."""
@@ -752,8 +879,18 @@ class ShundoRoutine:
                 if cfg.shiny_action == "skip":
                     # Not a full shundo — leave this shiny (flee the encounter) and keep hunting.
                     # on_event has already fired, so the Discord screenshot alert still goes out.
-                    self.device.tap(*cfg.flee_xy)
-                    self._interruptible_sleep(1.5)
+                    # Do not advance QuickSniper until the map return is visually confirmed.
+                    fled = self._flee_to_map()
+                    if fled is None:
+                        self.stats.last_event = "stopped"
+                        break
+                    self.stats.last_event = "fled" if fled else "flee_failed"
+                    if on_event:
+                        on_event(self.stats, self.stats.last_event)
+                    if not fled:
+                        # Continuing here could tap the next feed entry over an encounter
+                        # or transition screen. Stop safely and make the failure explicit.
+                        break
                 elif cfg.shundo_action == "stop":
                     break
                 else:
@@ -807,7 +944,13 @@ class ShundoRoutine:
         tx, ty, tw, th = cfg.toast_region
         cv2.rectangle(img, (tx, ty), (tx + tw, ty + th), (255, 255, 255), 3)
 
-        if self._enc_ball_visible(frame):
+        if self._encounter_visible(frame):
             cv2.putText(img, "ENCOUNTER (SHINY)", (60, 150),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 255), 4)
+        if self._enc_berry_at is not None:
+            berry_x, berry_y = self._enc_berry_at
+            cv2.circle(img, (berry_x, berry_y), cfg.enc_berry_radius, (0, 255, 0), 4)
+            cv2.putText(img, "BERRY", (berry_x - cfg.s(70),
+                                       berry_y - cfg.enc_berry_radius - cfg.s(12)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
         return img
