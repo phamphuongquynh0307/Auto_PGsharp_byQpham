@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .catch import _load_optional, _resolve
 from .device import Device
 from .layout import (
-    BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
+    BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_MIN_SCORE, CALIBRATION_SWEEP, Layout,
+    bracket_scales, scales_around,
 )
 from .vision import (
     best_matching_scale, find, find_berry_button, find_fast, find_popup_close, load_template,
@@ -158,10 +159,14 @@ class ShundoConfig:
     screen: tuple[int, int] = BASE_RESOLUTION
     # Device density (dpi). Drives dp-correct scaling; None falls back to width-ratio.
     density: int | None = None
+    # Measured render scale and the BASE_RESOLUTION original to re-derive from; see CatchConfig,
+    # where the reason these exist is written out in full.
+    render_scale: float | None = None
+    base_config: "ShundoConfig | None" = field(default=None, repr=False, compare=False)
 
     @property
     def layout(self) -> Layout:
-        return Layout(*self.screen, density=self.density)
+        return Layout(*self.screen, density=self.density, scale=self.render_scale)
 
     def s(self, v: float) -> int:
         return self.layout.scale(v)
@@ -172,23 +177,39 @@ class ShundoConfig:
     def rect(self, r: tuple[int, int, int, int], anchor: str) -> tuple[int, int, int, int]:
         return self.layout.region(r, anchor)
 
-    def scale_to(self, width: int, height: int, density: int | None = None) -> "ShundoConfig":
+    def rescale(self, scale: float) -> "ShundoConfig":
+        """Re-derive every coordinate at a measured render scale; see CatchConfig.rescale."""
+        base = self.base_config or self
+        return base.scale_to(*self.screen, self.density, scale=scale)
+
+    def scale_to(self, width: int, height: int, density: int | None = None,
+                 *, scale: float | None = None) -> "ShundoConfig":
         """Return a copy with every pixel coordinate re-anchored from BASE_RESOLUTION onto
         (width, height) at `density` dpi. Each field is tagged with the edge/corner it hugs
-        (see avc/layout.py). No-op (returns self) at the base resolution+density."""
-        L = Layout(width, height, density=density)
+        (see avc/layout.py). No-op (returns self) at the base resolution+density.
+
+        `scale` overrides the density estimate with a measured render scale; see `rescale`.
+        `L` is the native-view layer (PGSharp overlay, system dialogs) a measurement applies to;
+        `G` is Pokémon GO's own UI, which stays on the density estimate. See CatchConfig.scale_to.
+        """
+        L = Layout(width, height, density=density, scale=scale)
+        # No density: the game layer follows the screen, not the dp density — verified on two
+        # devices via the berry↔ball span (see CatchConfig.scale_to).
+        G = Layout(width, height)
         if (width, height) == BASE_RESOLUTION and abs(L.s - 1.0) < 1e-9:
             return self
         return replace(
             self,
             screen=(width, height),
             density=density,
+            render_scale=scale,
+            base_config=self.base_config or self,
             anchor_region=L.region(self.anchor_region, "TR"),
             # anchored regions/positions
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
             toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
-            flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
+            flee_xy=G.point(self.flee_xy, "TL"),   # game-drawn flee button, top-left
             # pure distances/sizes/offsets
             feed_slot_dy=L.scale(self.feed_slot_dy),
             handle_column_tol=L.scale(self.handle_column_tol),
@@ -202,7 +223,7 @@ class ShundoConfig:
             toast_pill_w=(L.scale(self.toast_pill_w[0]), L.scale(self.toast_pill_w[1])),
             toast_pill_h=(L.scale(self.toast_pill_h[0]), L.scale(self.toast_pill_h[1])),
             toast_center_tol=L.scale(self.toast_center_tol),
-            enc_berry_radius=max(8, L.scale(self.enc_berry_radius)),
+            enc_berry_radius=max(8, G.scale(self.enc_berry_radius)),
         )
 
 
@@ -680,13 +701,65 @@ class ShundoRoutine:
         and centre the match-scale sweep on it, instead of guessing from resolution/density.
         Until it locks, the wide bracket from __init__ stays in effect; a missing/hidden star
         just leaves it to retry next cycle."""
-        if self._cal_scale is not None or self._menu_star is None:
+        if self._cal_scale is not None:
             return
-        s, score = best_matching_scale(self.device.screenshot(), self._menu_star,
-                                       CALIBRATION_SWEEP, grayscale=False)
-        if s is not None and score >= 0.82:
+        s, score, agreed = self._measure_render_scale()
+        if s is not None and score >= CALIBRATION_MIN_SCORE:
             self._cal_scale = s
             self._scales = scales_around(s)
+            if agreed:
+                self._adopt_measured_scale(s)
+
+    # See CatchRoutine.CAL_SOURCES — same PGSharp-drawn icons, same ordering by reliability.
+    CAL_SOURCES: tuple[str, ...] = ("_anchor", "_menu_star", "_rss")
+    CAL_REDUCTION = 0.5
+
+    def _measure_render_scale(self) -> tuple[float | None, float, bool]:
+        """Measure the render scale from every known PGSharp icon on screen, and say whether
+        they agree. See CatchRoutine._measure_render_scale — a real phone had its three sources
+        peak at 1.10, 1.04 and 1.07 on curves flat enough that whichever was asked first won."""
+        frame = self.device.screenshot()
+        best: tuple[float | None, float] = (None, 0.0)
+        readings: list[float] = []
+        for name in self.CAL_SOURCES:
+            template = getattr(self, name, None)
+            if template is None:
+                continue
+            s, score = best_matching_scale(frame, template, CALIBRATION_SWEEP,
+                                           grayscale=False, reduction=self.CAL_REDUCTION)
+            if s is not None and score >= CALIBRATION_MIN_SCORE:
+                readings.append(s)
+                if score > best[1]:
+                    best = (s, score)
+            elif score > best[1]:
+                best = (s, score)
+        if not readings:
+            return (*best, False)
+        readings.sort()
+        agreed = len(readings) < 2 or (readings[-1] - readings[0]) <= self.RESCALE_MIN_STEP
+        return (readings[len(readings) // 2], best[1], agreed)
+
+    # See CatchRoutine — the gap must clear one absolute 0.05 step of CALIBRATION_SWEEP, or it
+    # fires on the sweep's own rounding rather than on a real disagreement.
+    RESCALE_MIN_STEP = 0.05
+
+    def _adopt_measured_scale(self, scale: float) -> None:
+        """Re-derive the config's coordinates at the render scale just measured, so a device the
+        density guess got wrong stops reading fixed points in the wrong place."""
+        current = self.config.layout.s
+        if not current or abs(scale - current) < self.RESCALE_MIN_STEP:
+            return
+        try:
+            rescaled = self.config.rescale(scale)
+        except Exception:  # noqa: BLE001 - a bad re-derive must not end the run
+            return
+        hook = getattr(self, "_on_rescale", None)
+        if hook is not None:
+            try:
+                rescaled = hook(rescaled) or rescaled
+            except Exception:  # noqa: BLE001
+                pass
+        self.config = rescaled
 
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:

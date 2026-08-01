@@ -37,8 +37,11 @@ class CatchBerryStateTests(unittest.TestCase):
             enc_berry_radius=95,
             enc_berry_min_fill=0.06,
             layout=SimpleNamespace(s=1.0),
+            game_scale=None,
         )
         routine._enc_berry_at = None
+        routine._game_samples = []
+        routine._game_scale_done = False
         frame = object()
 
         with patch("avc.catch.find_berry_button", return_value=(163, 2460)) as berry:

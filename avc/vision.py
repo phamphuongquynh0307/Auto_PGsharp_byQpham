@@ -522,16 +522,29 @@ def best_matching_scale(
     *,
     grayscale: bool = True,
     region: tuple[int, int, int, int] | None = None,
+    reduction: float = 1.0,
 ) -> tuple[float | None, float]:
     """Return (scale, score): the scale in `scales` whose resized `template` best matches
     `scene`. Used once at startup to *measure* how big the UI actually renders on this
-    device, instead of guessing it from the screen resolution or density."""
+    device, instead of guessing it from the screen resolution or density.
+
+    `reduction` shrinks both scene and template before the sweep, which cuts the cost by its
+    square while leaving the answer in the caller's units. This is the routine's single most
+    expensive operation — seventeen full-frame colour matches — and a scale estimate does not
+    need full resolution: what is being measured is how big a 50-120px icon renders, and that
+    survives halving intact. The returned scale is unchanged by the reduction.
+    """
     from .layout import resize_template
+
+    if reduction != 1.0:
+        scene = cv2.resize(scene, None, fx=reduction, fy=reduction, interpolation=cv2.INTER_AREA)
+        if region is not None:
+            region = tuple(int(round(v * reduction)) for v in region)  # type: ignore[assignment]
 
     best_s: float | None = None
     best_score = -1.0
     for s in scales:
-        t = resize_template(template, s)
+        t = resize_template(template, s * reduction)
         if t is None or min(t.shape[0], t.shape[1]) < 8:
             continue
         m = find(scene, t, threshold=0.0, scales=(1.0,), max_matches=1,

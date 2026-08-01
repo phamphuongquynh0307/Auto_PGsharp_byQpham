@@ -19,22 +19,25 @@ not in an encounter, so the cycle counts as empty and the AutoWalk dry-spell log
 """
 from __future__ import annotations
 
+import math
 import random
 import threading
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import os
 import numpy as np
 
 from .device import Device
 from .layout import (
-    BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_SWEEP, Layout, bracket_scales, scales_around,
+    BASE_DENSITY, BASE_GAME_SPAN, BASE_RESOLUTION, CALIBRATION_MIN_SCORE,
+    CALIBRATION_SWEEP, Layout,
+    bracket_scales, scales_around,
 )
 from . import uidump
 from .resources import resource_path
 from .vision import (
-    best_matching_scale, find, find_berry_button, find_fast, find_popup_close,
+    best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
     find_dialog_buttons, load_template, slot_has_pokemon,
 )
 
@@ -307,10 +310,25 @@ class CatchConfig:
     screen: tuple[int, int] = BASE_RESOLUTION
     # Device density (dpi). Drives dp-correct scaling; None falls back to width-ratio.
     density: int | None = None
+    # The device's *measured* render scale, once the routine has matched a known icon against
+    # the real screen (see CatchRoutine._ensure_calibrated). Outranks the density guess, which
+    # can be well out: a 1080x2400 panel reporting 480dpi guesses 1.000 against a true 0.885,
+    # which drops the first Nearby slot 88px from where it is — most of a 106px slot pitch, so
+    # the bot inspects and taps the wrong entry. None until measured.
+    render_scale: float | None = None
+    # The measured render scale of Pokémon GO's *own* UI, which need not match the overlay's.
+    # Measured from the distance between two game controls the routine can already find without
+    # any template — see CatchRoutine._sample_game_scale. None until measured, in which case the
+    # game layer falls back to the same density estimate as before.
+    game_scale: float | None = None
+    # The BASE_RESOLUTION original this was scaled from, kept so the coordinates can be derived
+    # again at the measured scale rather than nudged from an already-scaled copy — anchoring is
+    # not a plain multiply, so re-scaling a scaled config does not round-trip. Set by scale_to.
+    base_config: "CatchConfig | None" = field(default=None, repr=False, compare=False)
 
     @property
     def layout(self) -> Layout:
-        return Layout(*self.screen, density=self.density)
+        return Layout(*self.screen, density=self.density, scale=self.render_scale)
 
     def s(self, v: float) -> int:
         """Scale a pure distance/size (swipe length, search radius, offset)."""
@@ -324,41 +342,89 @@ class CatchConfig:
         """Map an absolute box authored in base coords; anchor e.g. 'BC', 'TC'."""
         return self.layout.region(r, anchor)
 
-    def scale_to(self, width: int, height: int, density: int | None = None) -> "CatchConfig":
+    def rescale(self, scale: float) -> "CatchConfig":
+        """Re-derive every coordinate at a *measured* render scale, replacing the density guess.
+
+        Always works from the BASE_RESOLUTION original rather than from the already-scaled copy:
+        edge anchoring subtracts from the device's width/height, so scaling a scaled config does
+        not compose into scaling once by the product.
+        """
+        base = self.base_config or self
+        return base.scale_to(*self.screen, self.density, scale=scale,
+                             game_scale=self.game_scale)
+
+    def rescale_game(self, game_scale: float) -> "CatchConfig":
+        """Re-derive only Pokémon GO's own coordinates at a measured game render scale,
+        leaving the overlay layer on whatever it is already using."""
+        base = self.base_config or self
+        return base.scale_to(*self.screen, self.density, scale=self.render_scale,
+                             game_scale=game_scale)
+
+    def scale_to(self, width: int, height: int, density: int | None = None,
+                 *, scale: float | None = None,
+                 game_scale: float | None = None) -> "CatchConfig":
         """Return a copy with every pixel coordinate re-anchored from BASE_RESOLUTION onto
         (width, height) at `density` dpi. Each field is tagged with the screen edge/corner it
         hugs so it lines up on any aspect ratio (see avc/layout.py). Timings, thresholds and
-        template paths are untouched. No-op (returns self) at the base resolution+density."""
-        L = Layout(width, height, density=density)
-        if (width, height) == BASE_RESOLUTION and abs(L.s - 1.0) < 1e-9:
+        template paths are untouched. No-op (returns self) at the base resolution+density.
+
+        `scale` overrides the density estimate with a measured render scale; see `rescale`.
+
+        Two layouts, because the screen holds two UIs that need not render alike. `L` covers
+        everything drawn as native Android views — PGSharp's overlay and the system dialogs it
+        raises — which is what the scale is ever measured from, since those are the only icons
+        reliably on screen. `G` covers Pokémon GO's own UI, which is drawn by the game engine and
+        answers to nothing measured here.
+
+        Keeping them apart is what stops an overlay measurement from dragging the Berry button,
+        the flee button and the throw with it.
+
+        Their *defaults* differ too, and each is the model its own layer was measured to follow.
+        The overlay is native Android views laid out in dp, so its default is the density ratio;
+        on MuMu the measured overlay scale (0.57) sits by the density estimate (0.5625) and 17%
+        from the width ratio. The game is engine-drawn and follows the *screen*, not the density:
+        the berry↔ball span measured 0.6641 on MuMu and 1.0506 on a 1280x2772@520 phone, against
+        width ratios of 0.6639 and 1.0492 (0.03% and 0.13% off) where the density ratio was 18%
+        and 3% out. Defaulting `G` to width means every device starts ~0.1% right instead of
+        paying that error until its first encounter lets _sample_game_scale correct it; the
+        measurement stays as the check, overriding the default when the two disagree.
+        """
+        L = Layout(width, height, density=density, scale=scale)
+        G = Layout(width, height, scale=game_scale)   # no density: width ratio is the default
+        if ((width, height) == BASE_RESOLUTION
+                and abs(L.s - 1.0) < 1e-9 and abs(G.s - 1.0) < 1e-9):
             return self
         return replace(
             self,
             screen=(width, height),
             density=density,
+            render_scale=scale,
+            game_scale=game_scale,
+            base_config=self.base_config or self,
             # anchored positions/regions
+            # --- PGSharp overlay and system dialogs (native views) ---
             anchor_region=L.region(self.anchor_region, "TR"),   # nearby bar hugs right edge
             nearby_slot=L.point(self.nearby_slot, "TR"),
-            ball_fallback=L.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
-            berry_start=L.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
-            berry_end=L.point(self.berry_end, "BL"),
-            out_of_balls_region=L.region(self.out_of_balls_region, "BC"),
-            check_btn_region=L.region(self.check_btn_region, "BC"),
-            caught_ok_region=L.region(self.caught_ok_region, "MC"),
-            maybe_later_region=L.region(self.maybe_later_region, "MC"),
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
-            flee_xy=L.point(self.flee_xy, "TL"),                # flee button, top-left
-            pokestop_close_xy=L.point(self.pokestop_close_xy, "BC"),
-            # pure distances/sizes/offsets
             slot_offset_y=L.scale(self.slot_offset_y),
             slot_pitch=L.scale(self.slot_pitch),
             feed_slot_dy=L.scale(self.feed_slot_dy),
             handle_column_tol=L.scale(self.handle_column_tol),
-            throw_dy=L.scale(self.throw_dy),
-            jitter_px=max(1, L.scale(self.jitter_px)),
-            enc_berry_radius=max(8, L.scale(self.enc_berry_radius)),
             autowalk_offset_x=L.scale(self.autowalk_offset_x),
             autowalk_offset_y=L.scale(self.autowalk_offset_y),
+            # --- Pokémon GO's own UI (engine-drawn; never follows a measured overlay scale) ---
+            ball_fallback=G.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
+            berry_start=G.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
+            berry_end=G.point(self.berry_end, "BL"),
+            out_of_balls_region=G.region(self.out_of_balls_region, "BC"),
+            check_btn_region=G.region(self.check_btn_region, "BC"),
+            caught_ok_region=G.region(self.caught_ok_region, "MC"),
+            maybe_later_region=G.region(self.maybe_later_region, "MC"),
+            flee_xy=G.point(self.flee_xy, "TL"),                # flee button, top-left
+            pokestop_close_xy=G.point(self.pokestop_close_xy, "BC"),
+            throw_dy=G.scale(self.throw_dy),
+            jitter_px=max(1, G.scale(self.jitter_px)),
+            enc_berry_radius=max(8, G.scale(self.enc_berry_radius)),
         )
 
 
@@ -406,6 +472,10 @@ class CatchRoutine:
         self._force_bottom_value: int | None = None               # its floor, cached for a TTL
         self._force_bottom_at = 0.0
         self._enc_berry_at: tuple[int, int] | None = None  # actual detected Berry-button centre
+        # Game-UI render scale measurement: readings collected, and whether the question is
+        # settled (either adopted or judged close enough). See _sample_game_scale.
+        self._game_samples: list[float] = []
+        self._game_scale_done = False
         # When the Nearby bar was last seen holding a sprite (corroboration window), and when
         # the slow one-shot re-read was last spent (rate limit).
         self._nearby_last_seen_at: float | None = None
@@ -511,7 +581,96 @@ class CatchRoutine:
             radius=cfg.enc_berry_radius,
             min_berry_fill=cfg.enc_berry_min_fill,
         )
+        if self._enc_berry_at is not None:
+            # Measuring is strictly a bonus; deciding whether we are in an encounter is not.
+            # Nothing about the former may be allowed to break the latter.
+            try:
+                self._sample_game_scale(frame)
+            except Exception:  # noqa: BLE001
+                pass
         return self._enc_berry_at is not None
+
+    # The ruler itself is a base-device fact and lives with the others, in avc/layout.py.
+    #
+    # A *distance* is the right thing to measure, and the reason is that the obvious alternative
+    # is wrong: comparing a detected Berry centre against `berry_start` would look equivalent but
+    # berry_start is the Quick Catch drag point, not the button's centre (base 2410 against a
+    # detected 2467), so every reading would inherit that 57px bias.
+    #
+    # These two are judgement, not arithmetic — how much agreement is enough to believe a
+    # detector that documents itself as tolerating false positives.
+    GAME_SCALE_SAMPLES = 3          # readings required before the answer is believed
+    GAME_SCALE_SPREAD = 0.03        # they must agree this closely, or the set is discarded
+    # The adopt threshold, by contrast, is not chosen at all: how far apart the accepted readings
+    # landed *is* how precisely this device measured, so anything a few times wider than that
+    # cannot be measurement noise. A steady device therefore earns a tighter threshold and gets
+    # smaller real errors corrected, while a jittery one is made to prove more — neither of which
+    # a single number written in advance can do, since it has to be loose enough for the worst
+    # device and is then far too loose for every other one.
+    GAME_DRIFT_SPREAD_FACTOR = 3.0
+    # A few readings can agree by luck, and perfect agreement would otherwise derive a threshold
+    # of zero and rescale on any difference at all. This floor is what the derivation cannot
+    # bargain below; it also absorbs a systematic bias between the two detectors, which spread
+    # cannot see because it shifts every reading the same way.
+    GAME_DRIFT_FLOOR = 0.01
+
+    def _sample_game_scale(self, frame) -> None:
+        """Measure how big Pokémon GO draws its own UI, from two controls found without templates.
+
+        This is the one layer nothing could correct. The render scale the routine measures comes
+        from PGSharp's overlay, and there is no reason the game engine follows it — so applying
+        it here was ruled out, which left the game's coordinates on the density estimate with no
+        way to ever find out it was wrong. On MuMu the density estimate (0.5625) and the
+        resolution ratio (0.6639) are 18% apart, and nothing on screen could say which was right.
+
+        Two guards, because a single reading cannot be trusted: `find_berry_button` documents
+        itself as tolerating false positives, and one was seen on a live map frame during this
+        work. Both are cheap and both catch it — that phantom implied 0.448 across and 0.824
+        down, so requiring several readings to agree rejects it outright.
+        """
+        cfg = self.config
+        if cfg.game_scale is not None or self._game_scale_done:
+            return
+        ball = find_enc_ball(frame, scale=cfg.layout.s)
+        if ball is None or self._enc_berry_at is None:
+            return
+        bx, by = self._enc_berry_at
+        span = math.hypot(ball[0] - bx, ball[1] - by)
+        if span <= 0:
+            return
+        self._game_samples.append(span / BASE_GAME_SPAN)
+        if len(self._game_samples) < self.GAME_SCALE_SAMPLES:
+            return
+        recent = self._game_samples[-self.GAME_SCALE_SAMPLES:]
+        measured = sum(recent) / len(recent)
+        if not measured:
+            return
+        spread = (max(recent) - min(recent)) / measured
+        if spread > self.GAME_SCALE_SPREAD:
+            self._game_samples = self._game_samples[-1:]   # disagreement: keep collecting
+            return
+        self._game_scale_done = True
+        # No density: the game layer's default is the width ratio, and `current` must be
+        # whatever scale_to actually used or the comparison is against the wrong baseline.
+        current = Layout(*cfg.screen, scale=cfg.game_scale).s
+        min_drift = max(self.GAME_DRIFT_FLOOR, self.GAME_DRIFT_SPREAD_FACTOR * spread)
+        if not current or abs(measured - current) / current < min_drift:
+            return
+        try:
+            rescaled = cfg.rescale_game(measured)
+        except Exception:  # noqa: BLE001 - a bad re-derive must not end the run
+            return
+        hook = getattr(self, "_on_rescale", None)
+        if hook is not None:
+            try:
+                rescaled = hook(rescaled) or rescaled
+            except Exception:  # noqa: BLE001
+                pass
+        self.config = rescaled
+        self._trace("game_scale_fixed",
+                    f"Đo được scale giao diện game {measured:.3f} (đang dùng {current:.3f}, "
+                    f"sai số phép đo {spread*100:.2f}%, ngưỡng {min_drift*100:.1f}%); "
+                    f"đã căn lại toạ độ berry/ball/flee theo máy này.", 0.0)
 
     def _ball_in(self, frame, *, strict: bool = False) -> tuple[int, int] | None:
         # Return the throw point only after the independent Berry-button detector proves that
@@ -1676,6 +1835,56 @@ class CatchRoutine:
                             f"Encounter đóng, Pokémon kế tiếp đã sẵn tại {found}.", 0.0)
         return threw
 
+    # Derived, not chosen: the measurement is a point on a grid of CAL_REFINE_STEP, so a gap
+    # smaller than the grid is rounding and nothing else. Two grid steps is the smallest gap
+    # that cannot be rounding on either side. Writing it as a multiple keeps the rule true when
+    # the grid changes — a hand-typed number silently stopped being true when _refine_scale
+    # narrowed the grid from 0.05 to 0.01, which is exactly the failure this avoids.
+    #
+    # Absolute rather than proportional, because the grid is absolute: as a percentage one step
+    # is 0.9% at s≈1.1 but 1.8% at s≈0.55, so any fixed percentage sits above the grid at one
+    # scale and below it at the other, and chases quantisation noise there.
+    #
+    # Measured, all correctly left alone:
+    #   810x1440@270 MuMu     guess 0.5625   refined 0.57  (anchor, star and gear agreed)
+    #   1220x2712@480         guess 1.0000   measured 1.00
+    #   1280x2772@520 phone   guess 1.0833   coarse   1.10
+    # Against the case this exists for — 1080x2400 reporting 480dpi — the gap is 0.115, and a
+    # Nearby slot lands most of a slot away.
+    CAL_REFINE_STEP = 0.01          # spacing of the fine pass; see _refine_scale
+    RESCALE_MIN_STEP = 2 * CAL_REFINE_STEP
+
+    def _adopt_measured_scale(self, scale: float) -> None:
+        """Re-derive the config's coordinates at the render scale just measured.
+
+        Until now this measurement only resized the *templates*, so detection self-corrected on
+        a device the density guess got wrong while every fixed coordinate stayed where the guess
+        put it — search regions, the first Nearby slot, the flee button. That is the failure that
+        never shows up on the machine the coordinates were authored on, because there the guess
+        and the measurement are both 1.0 and there is nothing to disagree about.
+
+        Manual alignment still wins: `_on_rescale` hands the fresh config back to whoever applied
+        the hand-aligned device pixels, so a user who has already corrected a point by hand does
+        not have it overwritten by a measurement.
+        """
+        current = self.config.layout.s
+        if not current or abs(scale - current) < self.RESCALE_MIN_STEP:
+            return
+        try:
+            rescaled = self.config.rescale(scale)
+        except Exception:  # noqa: BLE001 - a bad re-derive must not end the run
+            return
+        hook = getattr(self, "_on_rescale", None)
+        if hook is not None:
+            try:
+                rescaled = hook(rescaled) or rescaled
+            except Exception:  # noqa: BLE001
+                pass
+        self.config = rescaled
+        self._trace("scale_fixed",
+                    f"Đo được scale màn hình {scale:.2f} (đoán ban đầu {current:.2f}); "
+                    f"đã căn lại toạ độ theo máy này.", 0.0)
+
     def _ensure_calibrated(self) -> None:
         """Measure how big the UI actually renders on this device (once), from the always-on
         PGSharp menu star, and centre the match-scale sweep on it. This sidesteps guessing the
@@ -1686,28 +1895,111 @@ class CatchRoutine:
         The retries are capped, because the sweep is by far the most expensive thing in the whole
         routine: 17 scales of a colour template match over the full frame, measured at 2.7s on a
         1220x2712 device. The docstring above always promised "once", but nothing enforced it —
-        so a star that never scores 0.82 (menu collapsed, covered, or simply drawn differently by
+        so a star that never reaches CALIBRATION_MIN_SCORE (menu collapsed, covered, or simply drawn differently by
         this PGSharp build) charged that 2.7s to *every cycle, forever*, which is the single
         largest slowdown there is and one that no setting could switch off.
 
         Giving up is safe precisely because the failure is already handled: not locking just
         leaves the wide bracket in place, which is the documented fallback. So after a few
         attempts, stop paying for an answer this device is not going to give."""
-        if self._cal_scale is not None or self._star is None:
+        if self._cal_scale is not None:
             return
         if self._cal_attempts >= self.config.cal_max_attempts:
             return
         self._cal_attempts += 1
-        s, score = best_matching_scale(self.device.screenshot(), self._star,
-                                       CALIBRATION_SWEEP, grayscale=False)
-        if s is not None and score >= 0.82:
+        s, score, source, agreed = self._measure_render_scale()
+        if s is not None and score >= CALIBRATION_MIN_SCORE:
             self._cal_scale = s
             self._scales = scales_around(s)
+            # Centring the template sweep is worth doing on any measurement; moving every
+            # coordinate is only worth doing on one the sources back each other up on.
+            if agreed:
+                self._adopt_measured_scale(s)
         elif self._cal_attempts >= self.config.cal_max_attempts:
             self._trace("calib_giveup",
                         f"Không đo được scale sau {self._cal_attempts} lần "
-                        f"(điểm khớp cao nhất {score:.2f} < 0.82); dùng dải scale rộng mặc định.",
+                        f"(điểm cao nhất {score:.2f} < {CALIBRATION_MIN_SCORE} ở '{source}'); "
+                        f"dùng dải scale rộng mặc định — toạ độ vẫn theo dpi ước lượng.",
                         0.0)
+
+    # Icons to measure the render scale from, best first. All three are drawn by PGSharp as
+    # native Android views, so they share one scale; the list exists because any single one can
+    # be absent or drawn differently by another PGSharp build, and giving up then left every
+    # coordinate on the density guess for the whole run.
+    #
+    # Order is by measured reliability on the authoring device across five real frames: the
+    # Nearby '@' anchor locked at 1.00 every time (score 0.91-0.94 at the reduction used here)
+    # while the menu star, the only source this used to have, wandered to 1.05 on one of them.
+    CAL_SOURCES: tuple[str, ...] = ("_anchor", "_star", "_gear")
+    # Both scene and template are halved for the sweep. Measured: 3.7s -> 0.93s per source with
+    # the answer unchanged, which is what makes trying three sources cheaper than one used to be.
+    CAL_REDUCTION = 0.5
+
+    def _measure_render_scale(self) -> tuple[float | None, float, str, bool]:
+        """Measure the UI render scale from every known icon on screen, and say whether they agree.
+
+        Returns (scale, score, source, trustworthy). Taking the first source that cleared the
+        threshold was wrong, and a real phone showed why: on a 1280x2772@520 screen the three
+        sources peaked at 1.10, 1.04 and 1.07 with score curves flat to within 0.04 across that
+        whole span — so whichever was asked first became the answer, and the spread between them
+        was 6%. The density estimate (1.0833) sits in the middle of that scatter, which is the
+        honest reading: this device cannot be measured more precisely than it was guessed.
+
+        On MuMu the same three sources all returned 0.57. Nothing in a single reading tells those
+        two situations apart, which is the whole problem — so the sources are cross-checked, and
+        `trustworthy` is False when they disagree by more than the grid can explain.
+
+        A disagreeing measurement still centres the template sweep (better than the wide
+        bracket), it just may not move any coordinate.
+        """
+        frame = self.device.screenshot()
+        best: tuple[float | None, float, str] = (None, 0.0, "khong co")
+        readings: list[tuple[float, float, str]] = []
+        for name in self.CAL_SOURCES:
+            template = getattr(self, name, None)
+            if template is None:
+                continue
+            s, score = best_matching_scale(frame, template, CALIBRATION_SWEEP,
+                                           grayscale=False, reduction=self.CAL_REDUCTION)
+            if s is not None and score >= CALIBRATION_MIN_SCORE:
+                s, score = self._refine_scale(frame, template, s, score)
+                readings.append((s, score, name.lstrip("_")))
+            elif score > best[1]:
+                best = (s, score, name.lstrip("_"))
+        if not readings:
+            return (*best, False)
+        # The median, not the best-scoring one: on the flat curves this exists for, the highest
+        # score is decided by noise while the middle of the three is decided by all of them.
+        readings.sort(key=lambda r: r[0])
+        scale, score, source = readings[len(readings) // 2]
+        spread = readings[-1][0] - readings[0][0]
+        agreed = len(readings) < 2 or spread <= self.RESCALE_MIN_STEP
+        if not agreed:
+            self._trace("calib_disagree",
+                        f"Các mốc đo lệch nhau {spread:.2f} "
+                        f"({', '.join(f'{n}={v:.2f}' for v, _s, n in readings)}); "
+                        f"không đủ tin để căn lại toạ độ, giữ ước lượng theo dpi.", 0.0)
+        return (scale, score, source, agreed)
+
+    def _refine_scale(self, frame, template, coarse: float,
+                      coarse_score: float) -> tuple[float, float]:
+        """Re-search one coarse step either side of `coarse` at CAL_REFINE_STEP spacing.
+
+        CALIBRATION_SWEEP steps by 0.05, so its answer carries up to ±0.025 of pure rounding —
+        on MuMu the coarse pass said 0.55 where three sources at 0.01 spacing agree the truth is
+        0.57, and the finer answer also scored better (0.96 against 0.85). Without this the
+        measurement cannot be trusted below the coarse grid, which forces the adopt threshold up
+        to a whole step and lets a real but modest divergence hide inside it.
+        """
+        span = CALIBRATION_SWEEP[1] - CALIBRATION_SWEEP[0]
+        steps = int(round(span / self.CAL_REFINE_STEP))
+        fine = tuple(round(coarse - span + self.CAL_REFINE_STEP * i, 4)
+                     for i in range(2 * steps + 1))
+        fine = tuple(s for s in fine if s > 0)
+        s, score = best_matching_scale(frame, template, fine, grayscale=False,
+                                       reduction=self.CAL_REDUCTION)
+        # Only take the refinement when it is at least as convincing as what it replaces.
+        return (s, score) if s is not None and score >= coarse_score else (coarse, coarse_score)
 
     def run_once(self) -> bool:
         """One catch cycle. Returns True if a ball was thrown."""

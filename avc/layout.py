@@ -33,6 +33,17 @@ import numpy as np
 BASE_RESOLUTION: tuple[int, int] = (1220, 2712)
 BASE_DENSITY: int = 480   # dpi the BASE_RESOLUTION coordinates were authored at
 
+# How far apart Pokémon GO draws the encounter's Berry button and its ball selector on the base
+# device — a ruler for the *game's* own render scale, which does not follow the overlay's.
+# It lives here with the other base-device facts because that is what it is: a property of the
+# screen the coordinates were authored on, measured the same way they were.
+#
+# Both endpoints are located by colour and shape (vision.find_berry_button, vision.find_enc_ball)
+# rather than by any remembered coordinate, so the ruler needs no template and no anchor. Read
+# off five real 1220x2712 encounter frames: 920.4, 919.4, 919.4, 918.4, 919.4 — a 2px spread on
+# 919, and reading those same frames back through it returns 1.0000 ±0.15%.
+BASE_GAME_SPAN: float = 919.0
+
 
 class Layout:
     """Maps BASE_RESOLUTION coordinates onto a device of size (width, height).
@@ -41,11 +52,16 @@ class Layout:
     to fall back to width-ratio scaling (only exact when density scales with width)."""
 
     def __init__(self, width: int, height: int, density: int | None = None,
-                 base: tuple[int, int] = BASE_RESOLUTION, base_density: int = BASE_DENSITY) -> None:
+                 base: tuple[int, int] = BASE_RESOLUTION, base_density: int = BASE_DENSITY,
+                 scale: float | None = None) -> None:
         self.w, self.h = int(width), int(height)
         self.bw, self.bh = base
+        # `scale` is a *measured* render scale and outranks both estimates below. Density and
+        # width are only ever guesses at how the game chose to draw itself; once the routine has
+        # matched a known icon against the real screen it knows the answer, and a guess that is
+        # 13% out (a 1080x2400 panel reporting 480dpi) moves a Nearby slot by most of a slot.
         # dp-anchored UI scales with density; edge anchoring below uses the real w/h.
-        self.s = (density / base_density) if density else (self.w / self.bw)
+        self.s = float(scale) if scale else ((density / base_density) if density else (self.w / self.bw))
 
     def scale(self, v: float) -> int:
         """Scale a pure distance or size (no anchoring)."""
@@ -81,6 +97,13 @@ class Layout:
 
 # Wide one-time sweep used to *measure* the device's real UI render scale (self-calibration).
 CALIBRATION_SWEEP: tuple[float, ...] = tuple(round(0.40 + 0.05 * i, 2) for i in range(17))  # 0.40..1.20
+
+# Match score a calibration source must reach before its scale is believed. It sits here, with
+# the sweep it grades, because both routines and every source share it: it was written out by
+# hand in five places across two files, which is four opportunities for them to disagree and no
+# way to notice. Chosen above the ~0.7 used for ordinary detection, since a wrong answer here
+# would move every coordinate rather than miss one button.
+CALIBRATION_MIN_SCORE: float = 0.82
 
 
 def scales_around(s: float, spread: float = 0.16, steps: int = 5) -> tuple[float, ...]:
