@@ -32,6 +32,15 @@ class AdbError(RuntimeError):
 class Device:
     MUMU_SERIAL = "127.0.0.1:7555"
 
+    # How stale a streamed frame may be before it counts as no frame at all, and how long to
+    # wait for a fresh one before paying for a one-shot capture. See ScreenStream.latest: the
+    # stream is relaunched every 175s and the frame from before that gap otherwise stays live.
+    # 0.5s is well clear of the ~30ms a healthy stream delivers at, so a normal run never
+    # touches this path; 0.6s of waiting is roughly what the screencap fallback costs anyway,
+    # so a restart is ridden out rather than paid for whenever the stream comes back in time.
+    STALE_FRAME_AGE = 0.5
+    STALE_FRAME_WAIT = 0.6
+
     def __init__(self, serial: str | None = None, adb_path: str | None = None) -> None:
         self.adb_path = adb_path or find_adb()
         self.serial = serial
@@ -202,8 +211,10 @@ class Device:
         H.264 compression smear, for when a template match on the stream frame fails."""
         if self._stream is not None and not fresh:
             frame, sequence = self._stream.latest(
+                timeout=5.0 if next_frame else self.STALE_FRAME_WAIT,
                 after_sequence=self._last_frame_sequence if next_frame else None,
                 with_sequence=True,
+                max_age=self.STALE_FRAME_AGE,
             )
             if frame is not None:
                 self._last_frame_sequence = sequence

@@ -60,6 +60,7 @@ class ScreenStream:
             self._half_size = (w // 2 - (w // 2) % 2, h // 2 - (h // 2) % 2)
         self._use_size = self._half_size is not None
         self._frame: np.ndarray | None = None
+        self._frame_at = 0.0        # monotonic time the newest frame was decoded
         self._lock = threading.Lock()
         self._ready = threading.Condition(self._lock)
         self._sequence = 0
@@ -105,6 +106,7 @@ class ScreenStream:
                     got_frame = True
                     with self._ready:
                         self._frame = img
+                        self._frame_at = time.monotonic()
                         self._sequence += 1
                         self._native_cache = None
                         self._ready.notify_all()
@@ -142,11 +144,26 @@ class ScreenStream:
             self._proc = None
 
     def latest(self, timeout: float = 5.0, *, after_sequence: int | None = None,
-               with_sequence: bool = False):
-        """Return the latest frame, optionally waiting until its sequence is newer."""
+               with_sequence: bool = False, max_age: float | None = None):
+        """Return the latest frame, optionally waiting until its sequence is newer.
+
+        `max_age` bounds how old that frame is allowed to be, in seconds. It matters because
+        the worker relaunches `screenrecord` every 175 s — its own hard cap, not a fault — and
+        the last frame decoded before that gap stays in memory throughout it. Without a bound
+        the caller is handed a screen that is seconds out of date and taps on what *was* there,
+        which on the map means tapping past the UI and raising PGSharp's "Stop AutoWalk?" dialog.
+
+        The gap is short on a fast USB link and long on a slow PC or a weak Wi-Fi one, so this
+        only ever misbehaved on other people's machines — and it did so every 175 s, all run.
+
+        Past the bound the frame counts as absent, so the normal "no frame yet" path applies:
+        wait out `timeout` for a fresh one, then let the caller fall back to a one-shot capture.
+        """
         deadline = time.monotonic() + timeout
         with self._ready:
-            while self._frame is None or (after_sequence is not None and self._sequence <= after_sequence):
+            while (self._frame is None
+                   or (after_sequence is not None and self._sequence <= after_sequence)
+                   or (max_age is not None and time.monotonic() - self._frame_at > max_age)):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or self._stop.is_set():
                     return (None, self._sequence) if with_sequence else None
