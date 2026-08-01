@@ -21,11 +21,12 @@ import urllib.request
 import uuid
 import webbrowser
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 import cv2
 import numpy as np
 
+from avc import diag
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
 from avc.shundo import ShundoConfig, ShundoRoutine
@@ -166,6 +167,9 @@ LANG = {
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "grp_pace":      {"vi": "Nhịp độ & an toàn tài khoản", "en": "Pacing & account safety"},
+    "grp_shared":    {"vi": "Dùng chung cho cả 2 chế độ", "en": "Shared by both modes"},
+    "advanced":      {"vi": "Hiện tùy chọn nâng cao (tinh chỉnh mili-giây)",
+                      "en": "Show advanced options (millisecond tuning)"},
     "throw_power":   {"vi": "Lực ném (px, càng lớn càng mạnh):", "en": "Throw power (px, higher = stronger):"},
     "catch_style":   {"vi": "Kiểu bắt:", "en": "Catch style:"},
     "catch_normal":  {"vi": "Auto bắt thường", "en": "Normal auto catch"},
@@ -174,15 +178,20 @@ LANG = {
     "touch_delay":   {"vi": "Chờ bóng sẵn sàng trước ném (giây):", "en": "Ball-ready delay before throw (s):"},
     "post_throw":    {"vi": "Chờ sau ném trước khi thoát (giây):", "en": "Wait after throw before flee (s):"},
     "flee_taps":     {"vi": "Số lần nhấn thoát:", "en": "Flee tap count:"},
-    "flee_gap":      {"vi": "Khoảng cách các lần thoát (giây):", "en": "Flee tap gap (s):"},
+    "flee_gap":      {"vi": "Khoảng cách các lần thoát (giây, shundo tối thiểu 0.45):",
+                      "en": "Flee tap gap (s, Shundo enforces 0.45 min):"},
     "wait_enc":      {"vi": "Chờ mở màn bắt tối đa (giây):", "en": "Max wait for encounter (s):"},
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
-    "settle":        {"vi": "Nghỉ giữa 2 con (giây):", "en": "Rest between catches (s):"},
+    # These two read almost identically in the old wording ("rest between catches" vs "minimum
+    # gap between catches") while meaning opposite things: settle is a ceiling that ends the
+    # moment the next Pokémon shows up, min_gap is a floor that is always served in full.
+    "settle":        {"vi": "Chờ con kế tiếp, tối đa (giây):",
+                      "en": "Wait for next Pokémon, at most (s):"},
     "max_throws":    {"vi": "Số bóng tối đa mỗi con:", "en": "Max throws per Pokémon:"},
-    "min_gap":       {"vi": "Giãn cách tối thiểu giữa 2 con (giây, 0=tắt):",
-                      "en": "Minimum gap between catches (s, 0=off):"},
+    "min_gap":       {"vi": "Bắt chậm lại, cách nhau ít nhất (giây, 0=tắt):",
+                      "en": "Slow down: at least this long between catches (s, 0=off):"},
     "pre_tap":       {"vi": "Chờ giữa tap đơn và tap đôi (giây):",
                       "en": "Gap between single tap and double tap (s):"},
     "cooldown":      {"vi": "Nghỉ khi PGSharp báo cooldown (tránh khoá tài khoản)",
@@ -197,6 +206,10 @@ LANG = {
     "mode":          {"vi": "Chế độ:", "en": "Mode:"},
     "preview":       {"vi": "👁 Xem bot nhìn", "en": "👁 Live view"},
     "calibrate":     {"vi": "🎯 Căn chỉnh tay", "en": "🎯 Manual align"},
+    "export":        {"vi": "🧾 Xuất báo cáo lỗi", "en": "🧾 Export bug report"},
+    "export_ok":     {"vi": "Đã lưu báo cáo lỗi: {} — gửi file này khi báo lỗi.",
+                      "en": "Bug report saved: {} — send this file when reporting."},
+    "export_fail":   {"vi": "Không xuất được báo cáo: {}", "en": "Could not export report: {}"},
     "cal_title":     {"vi": "Căn chỉnh tay — kéo các điểm/khung vào đúng chỗ",
                       "en": "Manual alignment — drag points/boxes into place"},
     "cal_group_catch": {"vi": "Bắt Pokémon", "en": "Catching"},
@@ -359,6 +372,9 @@ class App:
         self.worker: threading.Thread | None = None
         self.paused = False
         self._i18n: list[tuple] = []       # (widget, key) pairs retranslated on language switch
+        # Settings rows keyed by i18n key -> (widgets, advanced?), so a row can be hidden when
+        # it does nothing in the current mode. See _sync_settings_visibility.
+        self._rows: dict[str, tuple] = {}
         self._status_key = "st_ready"
         self._last_throws = 0
         self._empty_streak = 0             # consecutive empty cycles, for the Discord alert
@@ -376,6 +392,7 @@ class App:
 
         self._build_ui()
         self._apply_settings(data)
+        self._sync_settings_visibility()
         self._retranslate()
         self.refresh_devices()
         self.root.after(100, self._drain_log)
@@ -470,6 +487,12 @@ class App:
         sb.pack(side="right", fill="y")
         self.log.config(yscrollcommand=sb.set)
 
+        report_row = ttk.Frame(self.tab_main)
+        report_row.pack(fill="x", padx=8, pady=(0, 6))
+        self.export_btn = ttk.Button(report_row, text=self.tr("export"), command=self.export_report)
+        self.export_btn.pack(side="right")
+        self._i18n.append((self.export_btn, "export"))
+
         # ---- Settings tab ----
         settings_wrap = ttk.Frame(self.tab_settings)
         settings_wrap.pack(fill="both", expand=True, padx=6, pady=(6, 0))
@@ -487,7 +510,15 @@ class App:
         settings_canvas.bind("<MouseWheel>", lambda e: settings_canvas.yview_scroll(
             int(-e.delta / 120), "units"))
 
+        self.show_advanced = tk.BooleanVar(value=False)
+        adv_chk = ttk.Checkbutton(settings_body, text=self.tr("advanced"),
+                                  variable=self.show_advanced,
+                                  command=self._on_advanced_toggle)
+        adv_chk.pack(anchor="w", padx=14, pady=(2, 0))
+        self._i18n.append((adv_chk, "advanced"))
+
         catch_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_catch"))
+        self._grp_catch = catch_grp
         catch_grp.pack(fill="x", **pad)
         self._i18n.append((catch_grp, "grp_catch"))
         self.throw_power = self._spin(catch_grp, "throw_power", 1, 100, 1400, 700)
@@ -498,25 +529,25 @@ class App:
                                                state="readonly", width=30)
         self.catch_style_combo.grid(row=0, column=1, sticky="e", padx=6, pady=2)
         self.catch_style_combo.bind("<<ComboboxSelected>>", self._on_catch_style_change)
+        # Not "advanced": this is the main knob of Quick Catch, so hiding it behind a toggle in
+        # the very mode it belongs to would be the same mistake as showing it in the mode it
+        # does nothing in.
         self.quick_flick = self._spin(catch_grp, "quick_flick", 8, 0.05, 0.5, 0.1,
                                       is_float=True, increment=0.05)
         self.wait_enc = self._spin(catch_grp, "wait_enc", 4, 2, 15, 3.0, is_float=True)
         self.wait_catch = self._spin(catch_grp, "wait_catch", 6, 2, 20, 6.0, is_float=True)
         self.idle_aw = self._spin(catch_grp, "idle_aw", 3, 0, 20, 3)
         self.max_catches = self._spin(catch_grp, "max_catches", 2, 0, 9999, 0)
-        self.settle = self._spin(catch_grp, "settle", 7, 0, 15, 1.2, is_float=True)
+        self.settle = self._spin(catch_grp, "settle", 7, 0, 15, 1.2, is_float=True,
+                                 advanced=True)
         self.touch_delay = self._spin(catch_grp, "touch_delay", 5, 0, 1, 0.2,
-                                      is_float=True, increment=0.05)
-        self.post_throw = self._spin(catch_grp, "post_throw", 9, 0, 3, 0.35,
-                                     is_float=True, increment=0.05)
-        self.flee_taps = self._spin(catch_grp, "flee_taps", 10, 1, 6, 2)
-        self.flee_gap = self._spin(catch_grp, "flee_gap", 11, 0.05, 1, 0.25,
-                                   is_float=True, increment=0.05)
+                                      is_float=True, increment=0.05, advanced=True)
+        # Floor starts at the one the routine enforces: `commit_wait = max(1.0, …)` in
+        # avc/catch.py means anything under a second is silently rounded up to one, so the old
+        # 0-to-3 range let the box show a number the bot never used.
+        self.post_throw = self._spin(catch_grp, "post_throw", 9, 1.0, 3, 1.0,
+                                     is_float=True, increment=0.05, advanced=True)
         self.max_throws = self._spin(catch_grp, "max_throws", 12, 1, 10, 3)
-        self.dim_screen = tk.BooleanVar(value=False)
-        dim_chk = ttk.Checkbutton(catch_grp, text=self.tr("dim"), variable=self.dim_screen)
-        dim_chk.grid(row=13, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._i18n.append((dim_chk, "dim"))
         # Opt-in only. One Feed item remains locked until it loads into Nearby and its encounter
         # is handled, so this cannot advance through the Feed while the map is still loading.
         self.catch_use_feed = tk.BooleanVar(value=False)
@@ -528,15 +559,33 @@ class App:
         feed_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((feed_chk, "catch_feed"))
 
+        # Settings both modes read. They used to sit in the Catching group, which made the flee
+        # taps look like a catching option even though normal catching taps flee exactly once
+        # and Shundo is their main consumer.
+        shared_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shared"))
+        self._grp_shared = shared_grp
+        shared_grp.pack(fill="x", **pad)
+        self._i18n.append((shared_grp, "grp_shared"))
+        self.flee_taps = self._spin(shared_grp, "flee_taps", 0, 1, 6, 2)
+        # 0.25 is the floor avc/catch.py applies; Shundo raises it to 0.45, which the label says
+        # rather than pretending one number means one thing.
+        self.flee_gap = self._spin(shared_grp, "flee_gap", 1, 0.25, 1, 0.25,
+                                   is_float=True, increment=0.05, advanced=True)
+        self.dim_screen = tk.BooleanVar(value=False)
+        dim_chk = ttk.Checkbutton(shared_grp, text=self.tr("dim"), variable=self.dim_screen)
+        dim_chk.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((dim_chk, "dim"))
+
         # Pacing and safety. Kept apart from the catching group because these do not make a catch
         # better or worse — they decide how hard the bot is allowed to push the account.
         pace_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_pace"))
+        self._grp_pace = pace_grp
         pace_grp.pack(fill="x", **pad)
         self._i18n.append((pace_grp, "grp_pace"))
         self.min_gap = self._spin(pace_grp, "min_gap", 0, 0, 30, 3.0,
                                   is_float=True, increment=0.5)
         self.pre_tap = self._spin(pace_grp, "pre_tap", 1, 0, 5, 0.8,
-                                  is_float=True, increment=0.1)
+                                  is_float=True, increment=0.1, advanced=True)
         self.respect_cd = tk.BooleanVar(value=True)
         cd_chk = ttk.Checkbutton(pace_grp, text=self.tr("cooldown"), variable=self.respect_cd)
         cd_chk.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
@@ -555,8 +604,10 @@ class App:
         tr_chk = ttk.Checkbutton(pace_grp, text=self.tr("trace"), variable=self.trace_timing)
         tr_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((tr_chk, "trace"))
+        self._register_row("trace", tr_chk, advanced=True)
 
         sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
+        self._grp_shundo = sh_grp
         sh_grp.pack(fill="x", **pad)
         self._i18n.append((sh_grp, "grp_shundo"))
         note = ttk.Label(sh_grp, text=self.tr("shundo_note"), wraplength=400, foreground="#666")
@@ -581,6 +632,7 @@ class App:
         self.alert_shiny = tk.BooleanVar(value=True)
 
         dc_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_discord"))
+        self._grp_discord = dc_grp
         dc_grp.pack(fill="x", **pad)
         self._i18n.append((dc_grp, "grp_discord"))
         self._label(dc_grp, "webhook", row=0, column=0, sticky="w", padx=6, pady=2)
@@ -648,14 +700,69 @@ class App:
         btn.config(text=self.tr("copied"))
         self.root.after(1500, lambda: btn.config(text=self.tr("copy")))
 
-    def _spin(self, parent, key, row, lo, hi, default, is_float=False, increment=None):
-        self._label(parent, key, row=row, column=0, sticky="w", padx=6, pady=2)
+    def _spin(self, parent, key, row, lo, hi, default, is_float=False, increment=None,
+              advanced=False):
+        lbl = self._label(parent, key, row=row, column=0, sticky="w", padx=6, pady=2)
         var = tk.DoubleVar(value=default) if is_float else tk.IntVar(value=default)
         inc = increment if increment is not None else (0.5 if is_float else 1)
         spin = ttk.Spinbox(parent, from_=lo, to=hi, textvariable=var, width=10, increment=inc)
         spin.grid(row=row, column=1, sticky="e", padx=6, pady=2)
         parent.columnconfigure(1, weight=1)
+        self._rows[key] = ((lbl, spin), advanced)
         return var
+
+    def _register_row(self, key: str, *widgets, advanced: bool = False) -> None:
+        """Track a non-spinbox control so it can be hidden with the rest of its group."""
+        self._rows[key] = (widgets, advanced)
+
+    def _set_row_visible(self, key: str, visible: bool) -> None:
+        entry = self._rows.get(key)
+        if entry is None:
+            return
+        widgets, advanced = entry
+        if visible and advanced and not self.show_advanced.get():
+            visible = False
+        for widget in widgets:
+            if visible:
+                widget.grid()
+            else:
+                widget.grid_remove()
+
+    def _sync_settings_visibility(self) -> None:
+        """Show only the settings that do something in the current mode and catch style.
+
+        Every control here was always visible, which put eight dead ones in front of a user
+        catching normally: the four Shundo rows, plus the Quick Catch flick, the post-throw wait
+        and the two flee-tap rows — all four of those are read only inside `_quick_throw`
+        (avc/catch.py) or by the Shundo routine, so in normal catching they change nothing.
+        A control that does nothing is worse than a missing one: it invites tuning that has no
+        effect, and the effect is then looked for in the wrong place.
+        """
+        catching = self.mode == "catch"
+        quick = self.catch_style == "quick"
+        for frame, visible in (
+            (self._grp_catch, catching),
+            (self._grp_pace, catching),
+            (self._grp_shared, True),
+            (self._grp_shundo, not catching),
+            (self._grp_discord, True),
+        ):
+            frame.pack_forget()
+            if visible:
+                frame.pack(fill="x", padx=8, pady=4)
+        # Quick Catch owns the flick and the post-throw wait outright.
+        for key in ("quick_flick", "post_throw"):
+            self._set_row_visible(key, catching and quick)
+        # The flee taps are spent by Quick Catch and by Shundo; normal catching taps flee once.
+        for key in ("flee_taps", "flee_gap"):
+            self._set_row_visible(key, (catching and quick) or not catching)
+        for key in ("throw_power", "max_catches", "idle_aw", "wait_enc", "wait_catch",
+                    "settle", "touch_delay", "max_throws", "min_gap", "pre_tap", "trace"):
+            self._set_row_visible(key, catching)
+
+    def _on_advanced_toggle(self) -> None:
+        self._sync_settings_visibility()
+        self.save_settings()
 
     # -- mode / shundo action selectors ----------------------------------------
     MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"))
@@ -675,11 +782,13 @@ class App:
 
     def _on_mode_change(self, _event=None) -> None:
         self.mode = self._code_from_choice(self.mode_var, self.MODES, self.mode)
+        self._sync_settings_visibility()
         self.save_settings()
 
     def _on_catch_style_change(self, _event=None) -> None:
         self.catch_style = self._code_from_choice(
             self.catch_style_var, self.CATCH_STYLES, self.catch_style)
+        self._sync_settings_visibility()
         self.save_settings()
 
     def _on_action_change(self, _event=None) -> None:
@@ -749,9 +858,12 @@ class App:
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
         self.settle.set(max(0.0, float(data.get("settle", self.settle.get()))))
         self.touch_delay.set(timing("touch_delay", 200.0, 0.2))
-        self.post_throw.set(timing("post_throw", 350.0, 0.35))
+        # Clamp both to the floor the routine actually enforces, so a settings file written
+        # before those floors existed stops displaying a number the bot never used. Purely a
+        # display correction: these values were already being raised at the point of use.
+        self.post_throw.set(max(1.0, timing("post_throw", 350.0, 0.35)))
         self.flee_taps.set(data.get("flee_taps", int(self.flee_taps.get())))
-        self.flee_gap.set(timing("flee_gap", 250.0, 0.25))
+        self.flee_gap.set(max(0.25, timing("flee_gap", 250.0, 0.25)))
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
         self.dim_screen.set(data.get("dim_screen", False))
         self.catch_use_feed.set(data.get("catch_use_feed", False))
@@ -763,6 +875,7 @@ class App:
         # Deliberately not persisted as on: tracing is a debugging aid, and a settings file that
         # silently keeps it enabled grows a timing.log for the rest of the user's life.
         self.trace_timing.set(data.get("trace_timing", False))
+        self.show_advanced.set(bool(data.get("show_advanced", False)))
         if data.get("mode") in ("catch", "shundo"):
             self.mode = data["mode"]
         if data.get("catch_style") in ("normal", "quick"):
@@ -794,6 +907,7 @@ class App:
             "settle": float(self.settle.get()),
             "touch_delay": float(self.touch_delay.get()),
             "post_throw": float(self.post_throw.get()),
+            "show_advanced": bool(self.show_advanced.get()),
             "flee_taps": int(self.flee_taps.get()),
             "flee_gap": float(self.flee_gap.get()),
             "max_throws": int(self.max_throws.get()),
@@ -1842,6 +1956,10 @@ class App:
                 cfg = self._apply_manual(cfg, "shundo")
                 self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
+                # If the routine re-derives coordinates from a measured render scale, the
+                # hand-aligned points must be laid back over the result — they are the user's
+                # own correction and outrank any measurement.
+                self.routine._on_rescale = lambda c: self._apply_manual(c, "shundo")
             else:
                 throw_power = abs(int(self.throw_power.get()))
                 cfg = CatchConfig(
@@ -1870,9 +1988,22 @@ class App:
                 cfg = self._apply_manual(cfg, "catch")
                 self.routine = CatchRoutine(self.device, cfg)
                 self.routine._on_trace = self.log_queue.put
+                self.routine._on_rescale = lambda c: self._apply_manual(c, "catch")
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))
             return
+
+        # Stamp the log with what this run is running on, before the run produces a single line.
+        # Without it the trace that follows cannot be read: the same message means different
+        # things on a 1220x2712 phone over USB and on a smaller one over a slow Wi-Fi link.
+        try:
+            diag.session_banner(diag.device_info(self.device, {
+                "che_do": self.mode,
+                "kieu_bat": getattr(self, "catch_style", "?"),
+                "can_chinh_tay": "co" if self.manual else "khong",
+            }))
+        except Exception:  # noqa: BLE001
+            pass
 
         self.paused = False
         self._empty_streak = 0
@@ -2026,10 +2157,48 @@ class App:
         self.root.after(100, self._drain_log)
 
     def _log(self, text: str) -> None:
+        # Every line the pane shows also goes to disk. The pane holds the last few hundred lines
+        # and is gone the moment the window closes, which is why a "it stops working sometimes"
+        # report never arrived with anything attached to it.
+        diag.write(text)
         self.log.config(state="normal")
         self.log.insert("end", text + "\n")
         self.log.see("end")
         self.log.config(state="disabled")
+
+    def export_report(self) -> None:
+        """Bundle the log, the redacted settings and a screenshot into one zip to send back."""
+        default = f"baocao-{time.strftime('%Y%m%d-%H%M')}.zip"
+        dest = filedialog.asksaveasfilename(
+            parent=self.root, defaultextension=".zip", initialfile=default,
+            filetypes=[("Zip", "*.zip")],
+        )
+        if not dest:
+            return
+        screenshot = None
+        notes: dict = {}
+        if self.device is not None:
+            try:
+                screenshot = self.device.screenshot(fresh=True)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                notes = diag.device_info(self.device)
+            except Exception:  # noqa: BLE001
+                pass
+        routine = self.routine
+        if routine is not None:
+            # The measured render scale is the one number that says whether detection is running
+            # on a calibrated device or on the wide fallback bracket — see _ensure_calibrated.
+            notes["scale_do_duoc"] = getattr(routine, "_cal_scale", None) or "(chua khoa duoc)"
+            notes["che_do"] = self.mode
+        try:
+            diag.export(dest, settings_path=_settings_path(),
+                        screenshot=screenshot, notes=notes)
+        except Exception as e:  # noqa: BLE001
+            self._log(self.tr("export_fail").format(e))
+            return
+        self._log(self.tr("export_ok").format(dest))
 
 
 def main() -> None:
