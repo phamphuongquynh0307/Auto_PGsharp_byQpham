@@ -545,23 +545,10 @@ class ShundoRoutine:
                         break
                     self.device.tap(cx, cy)
                 return True
-        # Never tap a close button while an encounter is up — that region overlaps game UI.
-        # A stray Pokéstop screen is closed by its templated X as well; no blind fixed-spot
-        # tap here: the catch routine's "two blue side patches" heuristic false-positives on
-        # water-heavy maps and would press the map's pokeball menu instead.
-        if not self._encounter_visible(frame):
-            close = find_popup_close(
-                frame,
-                self._close_btns,
-                threshold=self.config.popup_threshold,
-                scales=self._scales,
-                fallback_scales=CALIBRATION_SWEEP,
-                cache=fast_cache,
-            )
-            if close is not None:
-                self.device.tap(*close.center)
-                self.stats.last_event = "popup"
-                return True
+        # Do not run a second, lower-confidence X search here. The high-confidence search
+        # above already handles real close buttons. Repeating it at the generic 0.70 popup
+        # threshold occasionally matched moving map art while waiting for a spawn and tapped
+        # a screen that had no popup at all.
         return False
 
     def _drain_popups(self, frame=None) -> bool:

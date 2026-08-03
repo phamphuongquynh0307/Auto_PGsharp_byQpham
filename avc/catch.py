@@ -1410,21 +1410,8 @@ class CatchRoutine:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
-        # Generic modal X. The safe search area is derived from this frame's dimensions,
-        # and a wide scale fallback covers phones/emulators whose game UI ignores density.
-        if self._ball_in(frame) is None:
-            close = find_popup_close(
-                frame,
-                (self._close_btn, self._close_btn_blue, self._close_btn_white),
-                threshold=self.config.popup_threshold,
-                scales=self._popup_scales,
-                fallback_scales=CALIBRATION_SWEEP,
-                cache=fast_cache,
-            )
-            if close is not None:
-                self.device.tap(*close.center)
-                self.stats.last_event = "popup"
-                return True
+        # The high-confidence X search at the start is the only generic close-button path.
+        # A second pass at 0.70 used to match animated map art and create unexplained taps.
         return False
 
     def _drain_popups(self, frame=None) -> bool:

@@ -59,6 +59,8 @@ class PopupCloseScaleTests(unittest.TestCase):
         with patch("avc.catch.find_popup_close", return_value=None) as close:
             routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
 
+        self.assertEqual(1, close.call_count)
+        self.assertEqual(0.82, close.call_args.kwargs["threshold"])
         self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
 
     def test_medal_x_wins_before_the_share_button_can_match_weather(self):
@@ -111,6 +113,8 @@ class PopupCloseScaleTests(unittest.TestCase):
         with patch("avc.shundo.find_popup_close", return_value=None) as close:
             routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
 
+        self.assertEqual(1, close.call_count)
+        self.assertEqual(0.82, close.call_args.kwargs["threshold"])
         self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
 
 
