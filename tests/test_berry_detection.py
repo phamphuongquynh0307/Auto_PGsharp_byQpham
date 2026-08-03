@@ -28,6 +28,14 @@ class BerryVisionTests(unittest.TestCase):
 
         self.assertIsNone(find_berry_button(frame))
 
+    def test_red_white_map_creature_above_button_band_is_not_a_berry(self):
+        frame = np.full((2712, 1220, 3), (120, 190, 120), dtype=np.uint8)
+        center = (170, 2330)  # the live false positive was ~380 base px above the bottom
+        cv2.circle(frame, center, 85, (230, 230, 230), -1)
+        cv2.circle(frame, center, 45, (40, 80, 230), -1)
+
+        self.assertIsNone(find_berry_button(frame))
+
 
 class CatchBerryStateTests(unittest.TestCase):
     def test_catch_uses_berry_for_eager_and_strict_checks(self):

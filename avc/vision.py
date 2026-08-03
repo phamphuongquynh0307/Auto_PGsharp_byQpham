@@ -110,6 +110,35 @@ def find_popup_close(
                                         scales=sweep, max_matches=1, region=region, cache=cache))
         if candidates:
             return max(candidates, key=lambda match: match.score)
+
+    # Some menus use the same X glyph inside a white disc whose surrounding artwork and
+    # shadow changed between game versions.  Matching the old full-button crop then fails
+    # even though the X itself is pixel-identical.  Retry only the central glyph in a much
+    # tighter bottom-centre region, where Pokemon GO places these close controls.  Keeping
+    # this separate from the broad modal search prevents unrelated map art from becoming a
+    # tap target.
+    gx0, gy0 = int(width * 0.25), int(height * 0.78)
+    gx1, gy1 = int(width * 0.75), int(height * 0.99)
+    glyph_region = (gx0, gy0, gx1 - gx0, gy1 - gy0)
+    for sweep in (scales, fallback_scales):
+        if not sweep:
+            continue
+        candidates = []
+        for template in usable:
+            th, tw = template.shape[:2]
+            glyph = template[th // 4:th - th // 4, tw // 4:tw - tw // 4]
+            if glyph.size:
+                candidates.extend(find_fast(
+                    scene,
+                    glyph,
+                    threshold=max(0.78, threshold),
+                    scales=sweep,
+                    max_matches=1,
+                    region=glyph_region,
+                    cache=cache,
+                ))
+        if candidates:
+            return max(candidates, key=lambda match: match.score)
     return None
 
 
@@ -279,6 +308,8 @@ def find_berry_button(
 
     A red ball flying elsewhere is rejected by the corner and component bounds. Map avatar
     details are rejected by the minimum glyph area and the required pale button surround.
+    The surround must form a ring on every side at the UI's bottom-anchored position; a
+    red/white Pokemon on the map can have the same colour totals, but not that geometry.
     """
     height, width = scene.shape[:2]
     if height < 80 or width < 80:
@@ -318,6 +349,13 @@ def find_berry_button(
         cy = int(round(centres[i][1])) + y0
         if cx > width * 0.24:
             continue
+        # The game UI anchors this control 245 base pixels above the bottom. A map Pokemon
+        # triggered a real false positive 380 base pixels above it, so use the UI anchor as
+        # a deliberately generous band rather than allowing the whole bottom quarter.
+        expected_bottom = 245.0 * scale
+        bottom_tolerance = max(radius * 0.80, 60.0 * scale)
+        if abs((height - cy) - expected_bottom) > bottom_tolerance:
+            continue
 
         dx0, dx1 = max(0, cx - radius), min(width, cx + radius + 1)
         dy0, dy1 = max(0, cy - radius), min(height, cy + radius + 1)
@@ -333,8 +371,26 @@ def find_berry_button(
             & disk
         )
         berry_fill = float(berry.sum()) / float(disk.sum())
-        light_fill = float(((disk_s < 70) & (disk_v > 150) & disk).sum()) / float(disk.sum())
+        light = (disk_s < 70) & (disk_v > 150)
+        light_fill = float((light & disk).sum()) / float(disk.sum())
         if berry_fill < min_berry_fill or light_fill < 0.20:
+            continue
+
+        # A Berry button has a pale circular surround around the central raspberry. Colour
+        # totals alone accepted the orange/white head of a bird on the map; its light pixels
+        # occupied only one side. Require the outer ring to be both substantial and present
+        # in all four quadrants.
+        radius_sq = float(radius * radius)
+        annulus = disk & (xx * xx + yy * yy >= radius_sq * 0.55 * 0.55)
+        if not annulus.any() or float(light[annulus].mean()) < 0.35:
+            continue
+        quadrants = (
+            annulus & (xx < 0) & (yy < 0),
+            annulus & (xx >= 0) & (yy < 0),
+            annulus & (xx < 0) & (yy >= 0),
+            annulus & (xx >= 0) & (yy >= 0),
+        )
+        if any(not q.any() or float(light[q].mean()) < 0.25 for q in quadrants):
             continue
         candidates.append((float(area) + light_fill * 1000.0, (cx, cy)))
 

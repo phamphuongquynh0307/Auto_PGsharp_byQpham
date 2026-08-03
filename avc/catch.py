@@ -1263,10 +1263,29 @@ class CatchRoutine:
                         0.0)
             return True
 
+        # Medal/share screens have a real close X at the bottom, but their green SHARE button
+        # is visually close enough to the weather warning's "I AM SAFE" pill to score just over
+        # the generic 0.70 threshold. Take a high-confidence X before inspecting green action
+        # buttons so the safe close always wins over SHARE/SAVE IMAGE.
+        if self._ball_in(frame) is None:
+            close = find_popup_close(
+                frame,
+                (self._close_btn, self._close_btn_blue, self._close_btn_white),
+                threshold=max(0.82, self.config.popup_threshold),
+                scales=self._popup_scales,
+                fallback_scales=CALIBRATION_SWEEP,
+                cache=fast_cache,
+            )
+            if close is not None:
+                self.device.tap(*close.center)
+                self.stats.last_event = "popup"
+                return True
+
         # Weather warning "Weather conditions are potentially dangerous" -> tap the green
         # "I AM SAFE" button to dismiss it (it's a full modal that blocks the whole flow).
         if self._popup_weather is not None:
-            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
+            m = find_fast(frame, self._popup_weather,
+                          threshold=max(0.82, self.config.popup_threshold),
                           scales=self._popup_scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
@@ -1399,6 +1418,7 @@ class CatchRoutine:
                 (self._close_btn, self._close_btn_blue, self._close_btn_white),
                 threshold=self.config.popup_threshold,
                 scales=self._popup_scales,
+                fallback_scales=CALIBRATION_SWEEP,
                 cache=fast_cache,
             )
             if close is not None:

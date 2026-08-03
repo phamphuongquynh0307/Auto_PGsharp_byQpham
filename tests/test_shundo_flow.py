@@ -40,7 +40,7 @@ def bare_routine():
     routine.device = FakeDevice()
     routine.config = SimpleNamespace(
         encounter_open_wait=3.0,
-        encounter_no_answer_attempts=2,
+        encounter_no_answer_attempts=1,
         teleport_wait=0.0,
         bar_clear_timeout=0.0,
         spawn_wait_log=20.0,
@@ -52,6 +52,7 @@ def bare_routine():
         poll_interval=0.0,
         enc_berry_radius=95,
         enc_berry_min_fill=0.06,
+        iv_read_tries=1,
         layout=SimpleNamespace(s=1.0),
     )
     routine.stats = ShundoStats()
@@ -79,26 +80,25 @@ class ShundoAnswerTests(unittest.TestCase):
             min_berry_fill=0.06,
         )
 
-    def test_timeout_is_a_miss_and_does_not_advance_checked_count(self):
+    def test_one_confirmed_no_answer_is_the_final_blocked_result(self):
         routine = bare_routine()
         routine._poll = lambda _predicate, _timeout: None
 
         outcome = routine._attempt_nearby((900, 500))
 
-        self.assertEqual("miss", outcome)
-        self.assertEqual(0, routine.stats.checked)
+        self.assertEqual("blocked", outcome)
+        self.assertEqual(1, routine.stats.checked)
         self.assertEqual([(900, 500)], routine.device.double_taps)
 
-    def test_second_confirmed_timeout_is_treated_as_silent_non_shiny_block(self):
+    def test_blocked_result_does_not_double_tap_the_same_pokemon_again(self):
         routine = bare_routine()
         routine._poll = lambda _predicate, _timeout: None
 
-        first = routine._attempt_nearby((900, 500))
-        second = routine._attempt_nearby((900, 500))
+        outcome = routine._attempt_nearby((900, 500))
 
-        self.assertEqual("miss", first)
-        self.assertEqual("blocked", second)
+        self.assertEqual("blocked", outcome)
         self.assertEqual(1, routine.stats.checked)
+        self.assertEqual([(900, 500)], routine.device.double_taps)
 
     def test_visible_blocked_answer_advances_checked_count(self):
         routine = bare_routine()
@@ -108,6 +108,32 @@ class ShundoAnswerTests(unittest.TestCase):
 
         self.assertEqual("blocked", outcome)
         self.assertEqual(1, routine.stats.checked)
+
+    def test_stream_shiny_candidate_needs_a_fresh_encounter_confirmation(self):
+        routine = bare_routine()
+        states = iter((False, False))
+        routine._encounter_visible = lambda _frame: next(states)
+        routine._poll = lambda _predicate, _timeout: "shiny"
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("miss", outcome)
+        self.assertEqual(0, routine.stats.checked)
+        self.assertEqual(0, routine.stats.shinies)
+        self.assertEqual([{"fresh": True}, {"fresh": True}], routine.device.screenshot_calls)
+
+    def test_freshly_confirmed_stream_candidate_is_counted_as_shiny(self):
+        routine = bare_routine()
+        states = iter((False, True))
+        routine._encounter_visible = lambda _frame: next(states)
+        routine._poll = lambda _predicate, _timeout: "shiny"
+        routine._is_hundo = lambda _frame: False
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("shiny", outcome)
+        self.assertEqual(1, routine.stats.checked)
+        self.assertEqual(1, routine.stats.shinies)
 
     def test_pending_miss_returns_before_the_next_feed_can_be_tapped(self):
         routine = bare_routine()

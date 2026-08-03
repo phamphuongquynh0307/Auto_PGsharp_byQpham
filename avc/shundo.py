@@ -85,10 +85,10 @@ class ShundoConfig:
     # (a second double-tap would land on the opening encounter screen). No encounter in that
     # window ⇒ the Pokémon is non-shiny and we move on.
     encounter_open_wait: float = 3.0
-    # Some PGSharp builds silently block a non-shiny without rendering the toast. Retry
-    # one confirmed map double-tap, then treat a second no-encounter answer as non-shiny.
-    # Attempts where the map/slot cannot be confirmed do not count toward this limit.
-    encounter_no_answer_attempts: int = 2
+    # Some PGSharp builds silently block a non-shiny without rendering the toast. One
+    # confirmed double-tap with no encounter is therefore the final non-shiny answer;
+    # never double-tap the same Pokemon a second time.
+    encounter_no_answer_attempts: int = 1
 
     # Encounter confirmation: the raspberry glyph inside the bottom-left Berry button.
     # Camera and Poke Ball checks are deliberately excluded because their stale/animated pixels
@@ -497,9 +497,26 @@ class ShundoRoutine:
         # UI, so its Settings gear matches on every ordinary map frame — the handler fired every
         # cycle and tapped the star, fighting the user's own layout. The expanded menu overlaps
         # neither sidebar nor any tap target, so nothing needs closing.
+        # Medal/share screens expose a high-confidence bottom X. Handle it before green warning
+        # buttons: the SHARE pill can otherwise resemble the weather warning at low resolution.
+        if not self._encounter_visible(frame):
+            close = find_popup_close(
+                frame,
+                self._close_btns,
+                threshold=max(0.82, self.config.popup_threshold),
+                scales=self._scales,
+                fallback_scales=CALIBRATION_SWEEP,
+                cache=fast_cache,
+            )
+            if close is not None:
+                self.device.tap(*close.center)
+                self.stats.last_event = "popup"
+                return True
+
         # Weather warning -> tap the green "I AM SAFE" button (a full modal blocking the flow).
         if self._popup_weather is not None:
-            m = find_fast(frame, self._popup_weather, threshold=self.config.popup_threshold,
+            m = find_fast(frame, self._popup_weather,
+                          threshold=max(0.82, self.config.popup_threshold),
                           scales=self._scales, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
@@ -538,6 +555,7 @@ class ShundoRoutine:
                 self._close_btns,
                 threshold=self.config.popup_threshold,
                 scales=self._scales,
+                fallback_scales=CALIBRATION_SWEEP,
                 cache=fast_cache,
             )
             if close is not None:
@@ -596,16 +614,14 @@ class ShundoRoutine:
     def _attempt_nearby(self, target: tuple[int, int]) -> str:
         """Try one Nearby entry and return blocked/shiny/shundo/miss.
 
-        A single timeout used to be treated as ``blocked``. That advanced QuickSniper even
-        when the map had not finished loading or the double-tap was not accepted. The first
-        confirmed timeout now keeps the current entry pending; a second confirmed timeout
-        covers PGSharp builds that silently block non-shiny Pokémon without showing a toast.
+        The map and occupied Nearby slot are freshly confirmed before one double-tap. If
+        PGSharp keeps the screen on the map without rendering its blocked toast, that single
+        no-encounter answer is treated as non-shiny and the feed advances.
         """
         cfg = self.config
         frame = self.device.screenshot(fresh=True)
         if self._encounter_visible(frame):
-            self.stats.checked += 1
-            return self._grade_encounter()
+            return self._grade_encounter(confirmed_frame=frame)
 
         # Never tap a coordinate remembered from an earlier map frame. The sidebar can
         # move or collapse while loading; confirm the occupied slot again on this frame.
@@ -641,10 +657,14 @@ class ShundoRoutine:
             return "miss"
 
         self._pending_no_answers = 0
-        self.stats.checked += 1
         if answer == "blocked":
+            self.stats.checked += 1
             self.stats.last_event = "blocked"
             return "blocked"
+        # A streamed H.264 frame is only a candidate. Compression smear or a delayed
+        # decoder frame can briefly resemble the Berry button while the live screen is
+        # already back on the map. _grade_encounter takes a crisp one-shot frame and
+        # refuses to count/report the shiny unless that independent frame confirms it.
         return self._grade_encounter()
 
     def _flee_to_map(self) -> bool | None:
@@ -779,10 +799,11 @@ class ShundoRoutine:
         # while it's up, so this must be checked before looking for the feed). Grade it
         # now instead of idling forever.
         if self._encounter_visible(frame):
-            self._pending_nearby = None
-            self._pending_no_answers = 0
-            self.stats.checked += 1
-            return self._grade_encounter()
+            outcome = self._grade_encounter()
+            if outcome != "miss":
+                self._pending_nearby = None
+                self._pending_no_answers = 0
+            return outcome
 
         # A previous double-tap got no visible answer. Retry that same Nearby entry;
         # never consume another QuickSniper item merely because the answer timed out.
@@ -910,20 +931,32 @@ class ShundoRoutine:
             self._pending_no_answers = 0
         return outcome
 
-    def _grade_encounter(self) -> str:
+    def _grade_encounter(self, confirmed_frame=None) -> str:
         """We're inside an open encounter — a shiny. Read the pill; shundo = 15/15/15."""
         cfg = self.config
+        frame = confirmed_frame
+        if frame is None:
+            # Live H.264 detections are candidates only. A separate one-shot ADB frame
+            # must still show the Berry button before a shiny is counted or reported.
+            frame = self.device.screenshot(fresh=True)
+            if not self._encounter_visible(frame):
+                self.stats.last_event = "miss"
+                return "miss"
+
+        self.stats.checked += 1
         self.stats.shinies += 1
-        for _ in range(cfg.iv_read_tries):
+        for attempt in range(cfg.iv_read_tries):
             if self.stop_event.is_set():
                 return "shiny"
             # The normal stream is intentionally half-resolution for smooth MuMu
             # operation. A rare shiny gets a crisp one-shot frame for tiny IV glyphs.
-            if self._is_hundo(self.device.screenshot(fresh=True)):
+            if self._is_hundo(frame):
                 self.stats.shundos += 1
                 self.stats.last_event = "shundo"
                 return "shundo"
-            self._interruptible_sleep(0.4)
+            if attempt + 1 < cfg.iv_read_tries:
+                self._interruptible_sleep(0.4)
+                frame = self.device.screenshot(fresh=True)
         self.stats.last_event = "shiny"
         return "shiny"
 
