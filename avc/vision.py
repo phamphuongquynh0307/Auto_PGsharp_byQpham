@@ -32,6 +32,58 @@ def _to_gray(img: np.ndarray) -> np.ndarray:
     return img
 
 
+def find_disconnected_goplus(scene: np.ndarray, *, scale: float = 1.0) -> tuple[int, int] | None:
+    """Locate Pokémon GO's disconnected accessory button in the upper-right icon rail.
+
+    The rail is dynamic: event buttons come and go, moving Go Plus vertically, so a remembered
+    coordinate is unsafe. The disconnected button itself is stable — a muted red upper
+    semicircle over a blue-grey lower half with a dark centre. Only the narrow right-edge rail is
+    searched, and the red cap must have the measured size/shape of that control. A connected or
+    connecting button is deliberately not returned, so callers cannot turn Go Plus back off.
+    """
+    if scene is None or scene.ndim != 3 or scene.shape[2] < 3:
+        return None
+    h, w = scene.shape[:2]
+    s = max(0.25, float(scale or 1.0))
+    # The icon hugs the right edge, while its vertical slot moves as event icons are inserted.
+    x0 = max(0, w - int(round(160 * s)))
+    y0 = max(0, int(round(100 * s)))
+    y1 = min(h, int(round(1100 * s)))
+    if x0 >= w or y0 >= y1:
+        return None
+    roi = scene[y0:y1, x0:w]
+    b, g, r = (channel.astype(np.int16) for channel in cv2.split(roi)[:3])
+    red = ((r > g + 25) & (r > b + 25) & (r > 110)).astype(np.uint8) * 255
+    kernel_size = max(1, int(round(3 * s)))
+    red = cv2.morphologyEx(
+        red,
+        cv2.MORPH_OPEN,
+        np.ones((kernel_size, kernel_size), dtype=np.uint8),
+    )
+    contours, _hierarchy = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[tuple[float, tuple[int, int]]] = []
+    for contour in contours:
+        x, y, cw, ch = cv2.boundingRect(contour)
+        if not (55 * s <= cw <= 105 * s and 20 * s <= ch <= 65 * s):
+            continue
+        fill = cv2.contourArea(contour) / max(1, cw * ch)
+        if fill < 0.35:
+            continue
+        cx = x0 + x + cw // 2
+        # The dark centre sits just below the red cap's bounding box.
+        cy = y0 + y + ch + int(round(8 * s))
+        radius = max(4, int(round(20 * s)))
+        core = scene[max(0, cy - radius):min(h, cy + radius),
+                     max(0, cx - radius):min(w, cx + radius)]
+        if core.size == 0:
+            continue
+        dark_fraction = float((core[..., :3].mean(axis=2) < 115).mean())
+        if dark_fraction < 0.25:
+            continue
+        candidates.append((fill + dark_fraction, (cx, cy)))
+    return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
+
+
 def find(
     scene: np.ndarray,
     template: np.ndarray,

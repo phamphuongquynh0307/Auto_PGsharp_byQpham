@@ -55,12 +55,14 @@ class VisibilityTests(unittest.TestCase):
         self.assertFalse(self._shown("post_throw"))
         self.assertFalse(self._shown("flee_taps"))
         self.assertFalse(self._shown("flee_gap"))
+        self.assertTrue(self._shown("no_balls_goplus"))
 
     def test_quick_catch_shows_its_own_knobs(self):
         self._configure("catch", "quick")
 
         self.assertTrue(self._shown("quick_flick"))
         self.assertTrue(self._shown("flee_taps"))
+        self.assertFalse(self._shown("no_balls_goplus"))
 
     def test_shundo_hides_the_catching_rows_but_keeps_the_flee_taps(self):
         self._configure("shundo")
@@ -97,6 +99,7 @@ class HiddenPersistenceTests(unittest.TestCase):
             root = tk.Tk()
             app = gui.App(root)
             app.throw_power.set(1234)
+            app.no_balls_goplus.set(False)
             app.mode = "shundo"          # hides the whole catching group
             app._sync_settings_visibility()
             app.save_settings()
@@ -105,10 +108,12 @@ class HiddenPersistenceTests(unittest.TestCase):
             with open(gui._settings_path(), encoding="utf-8") as fh:
                 saved = json.load(fh)
             self.assertEqual(1234, saved["throw_power"])
+            self.assertFalse(saved["no_balls_goplus"])
 
             root = tk.Tk()
             reloaded = gui.App(root)
             self.assertEqual(1234, reloaded.throw_power.get())
+            self.assertFalse(reloaded.no_balls_goplus.get())
             root.destroy()
         finally:
             gui._settings_path = real_path

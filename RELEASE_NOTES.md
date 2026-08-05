@@ -1,35 +1,42 @@
-# v1.2.2
+# v1.2.3
 
 ## Tiếng Việt
 
-### Không còn tự bấm khi đang chờ Pokémon load
+### Nhận đúng hết bóng trên giao diện mới
 
-- Trong vòng chờ spawn, bot kiểm tra popup trên từng frame để tự đóng các cảnh báo thật.
-- Sau lượt dò nút X an toàn ở ngưỡng `0.82`, code cũ còn lặp lại một lượt ở ngưỡng thấp `0.70`. Bản đồ hoặc Pokémon chuyển động đôi lúc khớp nhầm lượt thứ hai này, khiến bot bấm dù màn hình không có popup.
-- Đã xóa hoàn toàn lượt dò X ngưỡng thấp trong cả chế độ bắt thường và Shundo.
-- Nút X thật vẫn được nhận bằng một lượt dò duy nhất ở ngưỡng `0.82`, gồm cả cách dò riêng phần glyph cho popup huy chương.
+- Pokémon GO mới có thể ẩn biểu tượng bóng thay vì hiện `x0`; bot giờ nhận cả hai kiểu.
+- Chỉ báo hết bóng khi encounter còn mở, bóng vắng 1,2 giây qua 3 frame và ảnh ADB mới vẫn xác nhận.
+
+### Tự bật Go Plus khi hết bóng
+
+- Auto bắt thường (có key) có tùy chọn **Hết bóng: khởi động Go Plus sau AutoWalk**.
+- Bot thoát encounter, bật AutoWalk rồi tìm nút Go Plus đang tắt để quay PokéStop trong 10 phút.
+- Dò bằng hình ảnh nên vẫn đúng khi icon đổi vị trí; Go Plus đang chạy sẽ không bị bấm tắt.
+- Bắt nhanh không key và trường hợp tắt tùy chọn sẽ không chạm Go Plus.
 
 ### Kiểm chứng
 
-- Ảnh map trong báo cáo lỗi có điểm khớp X giả `0.666`; bản mới từ chối và trả về `popup=False`, `taps=[]`.
-- Popup huy chương thật từng ghi nhận điểm khớp khoảng `0.93`, vẫn cao hơn ngưỡng mới và đóng bình thường.
-- 89 bài test đạt; 7 bài giao diện được bỏ qua trong môi trường không có display.
-- Đã build thành công bản EXE Windows.
+- 100 bài test đạt; 7 bài GUI được bỏ qua trong môi trường không có display.
+- Bộ dò tìm đúng nút Go Plus trên ảnh thật 1220×2712; EXE Windows build thành công.
 
 ---
 
 ## English
 
-### No more unexplained taps while waiting for a Pokémon to load
+### Out-of-ball detection for the new UI
 
-- While waiting for a spawn, the bot checks every frame so it can dismiss genuine blocking popups.
-- After the safe close-X search at `0.82`, the old code repeated the same search at the generic `0.70` threshold. Moving map art or Pokémon could occasionally cross that second threshold and trigger a tap when no popup existed.
-- The low-confidence X pass has been removed completely from both Catch and Shundo modes.
-- Real close buttons still use one `0.82` search, including the glyph-only fallback required by medal popups.
+- New Pokémon GO builds may hide the entire ball selector instead of showing `x0`; both states are now supported.
+- An empty bag is reported only while the encounter remains open, the ball is absent for at least 1.2 seconds across three frames, and a fresh ADB capture confirms it. This avoids false alerts from animations or smeared stream frames.
+
+### Start Go Plus automatically when balls run out
+
+- Normal keyed catching now has an **Out of balls: start Go Plus after AutoWalk** setting.
+- The bot leaves the encounter, starts AutoWalk, then locates and taps a disconnected Go Plus button so PokéStops can be spun during the ten-minute refill pause.
+- Visual detection follows the button when event icons move it vertically and deliberately ignores an already connected accessory.
+- Quick/no-key catching and a disabled setting never touch Go Plus.
+- An already-running AutoWalk row is recognized and left running instead of being tapped off.
 
 ### Verification
 
-- The reported map screenshot scores `0.666` against the false X match; the fixed build rejects it with `popup=False` and `taps=[]`.
-- A real medal close X previously measured about `0.93`, so it remains safely detectable.
-- 89 tests pass; 7 display-dependent GUI tests are skipped in the headless environment.
-- The Windows executable builds successfully.
+- 100 tests pass; 7 display-dependent GUI tests are skipped in the headless environment.
+- The detector locates the real Go Plus button on a 1220×2712 device screenshot, and the Windows executable builds successfully.

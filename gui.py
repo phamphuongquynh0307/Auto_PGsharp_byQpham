@@ -85,8 +85,8 @@ LANG = {
         "• Theo dõi hoạt động ở khung \"Nhật ký\" phía dưới.\n"
         "\n"
         "⑤ HẾT POKÉ BALL\n"
-        "• Khi hết bóng, app tự thoát màn bắt, báo Discord, tạm ngừng 10 phút và vẫn tự di "
-        "chuyển (AutoWalk) để đi kiếm bóng, rồi tự bắt lại.\n"
+        "• Khi hết bóng, app tự thoát màn bắt và bật AutoWalk trong 10 phút. Ở chế độ bắt có "
+        "key, có thể bật thêm tùy chọn khởi động Go Plus để quay PokéStop.\n"
         "\n"
         "⑥ THÔNG BÁO DISCORD (tab Cài đặt)\n"
         "• Dán \"Webhook URL\" của kênh Discord để nhận cảnh báo: trống spawn lâu, báo cáo "
@@ -119,8 +119,8 @@ LANG = {
         "• Watch activity in the \"Log\" box below.\n"
         "\n"
         "⑤ OUT OF POKÉ BALLS\n"
-        "• When balls run out, the app leaves the encounter, alerts Discord, holds off catching "
-        "for 10 minutes while still AutoWalking to find balls, then resumes.\n"
+        "• When balls run out, the app leaves the encounter and starts AutoWalk for 10 minutes. "
+        "In keyed catch mode, Go Plus can also be started through its dedicated setting.\n"
         "\n"
         "⑥ DISCORD ALERTS (Settings tab)\n"
         "• Paste a Discord channel \"Webhook URL\" to receive alerts: long dry spells, periodic "
@@ -199,7 +199,9 @@ LANG = {
     "ui_dump":       {"vi": "Đọc overlay PGSharp để soi Nearby chính xác hơn",
                       "en": "Read the PGSharp overlay for a surer Nearby check"},
     "catch_feed":    {"vi": "Nearby hết Pokémon: lấy 1 con từ Feed (mặc định tắt)",
-                      "en": "When Nearby is empty: take 1 Pokémon from Feed (off by default)"},
+                       "en": "When Nearby is empty: take 1 Pokémon from Feed (off by default)"},
+    "no_balls_goplus": {"vi": "Hết bóng: khởi động Go Plus sau AutoWalk (chỉ bắt có key)",
+                         "en": "Out of balls: start Go Plus after AutoWalk (keyed catch only)"},
     "trace":         {"vi": "Ghi log thời gian từng bước (gỡ lỗi, tạo timing.log)",
                       "en": "Log per-step timings for debugging (writes timing.log)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
@@ -332,6 +334,10 @@ LANG = {
     "msg_cycle":     {"vi": "chu kỳ {}: {} | tổng ném: {}", "en": "cycle {}: {} | total thrown: {}"},
     "msg_autowalk":  {"vi": "→ Trống lâu, bấm AutoWalk đi kiếm spawn (lần {})", "en": "→ Dry spell, tapped AutoWalk to find spawns (#{})"},
     "msg_no_balls":  {"vi": "→ Hết Poké Ball! Thoát màn bắt, tạm ngừng 10 phút (vẫn tự di chuyển).", "en": "→ Out of Poké Balls! Left the encounter, holding off 10 min (still auto-walking)."},
+    "msg_no_balls_goplus": {"vi": "→ Hết Poké Ball! Đang bật AutoWalk rồi khởi động Go Plus trong 10 phút.",
+                             "en": "→ Out of Poké Balls! Starting AutoWalk then Go Plus for the 10-minute refill."},
+    "msg_goplus_started": {"vi": "→ Đã bật AutoWalk và bấm khởi động Go Plus.",
+                            "en": "→ AutoWalk is active and Go Plus was started."},
     "msg_done":      {"vi": "Hoàn tất.", "en": "Done."},
     "msg_err":       {"vi": "Lỗi: {}", "en": "Error: {}"},
     "msg_no_init":   {"vi": "Không khởi tạo được: {}", "en": "Could not initialize: {}"},
@@ -346,6 +352,8 @@ LANG = {
     "dc_batt_part":  {"vi": " | pin {}% ({}°C)", "en": " | battery {}% ({}°C)"},
     "dc_low_batt":   {"vi": "🔋 AutoClick: pin còn {}% — cắm sạc đi!", "en": "🔋 AutoClick: battery at {}% — plug in!"},
     "dc_no_balls":   {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt, tạm ngừng 10 phút và bật tự di chuyển.", "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen, pausing 10 min and auto-walking."},
+    "dc_no_balls_goplus": {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; đang bật AutoWalk rồi khởi động Go Plus để quay PokéStop trong 10 phút.",
+                            "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; starting AutoWalk then Go Plus to spin PokéStops for 10 min."},
     "dc_stopped":    {"vi": "🛑 AutoClick dừng vì lỗi: {}", "en": "🛑 AutoClick stopped with error: {}"},
     "dc_sent":       {"vi": "Đã gửi cảnh báo Discord.", "en": "Discord alert sent."},
     "dc_fail":       {"vi": "Gửi Discord thất bại: {}", "en": "Discord send failed: {}"},
@@ -558,6 +566,15 @@ class App:
         )
         feed_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((feed_chk, "catch_feed"))
+        self.no_balls_goplus = tk.BooleanVar(value=True)
+        goplus_chk = ttk.Checkbutton(
+            catch_grp,
+            text=self.tr("no_balls_goplus"),
+            variable=self.no_balls_goplus,
+        )
+        goplus_chk.grid(row=15, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((goplus_chk, "no_balls_goplus"))
+        self._register_row("no_balls_goplus", goplus_chk)
 
         # Settings both modes read. They used to sit in the Catching group, which made the flee
         # taps look like a catching option even though normal catching taps flee exactly once
@@ -753,6 +770,10 @@ class App:
         # Quick Catch owns the flick and the post-throw wait outright.
         for key in ("quick_flick", "post_throw"):
             self._set_row_visible(key, catching and quick)
+        # Go Plus automation belongs to PGSharp's keyed catcher. Quick Catch explicitly exists
+        # for users without that key, so presenting this checkbox there would promise a feature
+        # their mode cannot use.
+        self._set_row_visible("no_balls_goplus", catching and not quick)
         # The flee taps are spent by Quick Catch and by Shundo; normal catching taps flee once.
         for key in ("flee_taps", "flee_gap"):
             self._set_row_visible(key, (catching and quick) or not catching)
@@ -867,6 +888,7 @@ class App:
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
         self.dim_screen.set(data.get("dim_screen", False))
         self.catch_use_feed.set(data.get("catch_use_feed", False))
+        self.no_balls_goplus.set(data.get("no_balls_goplus", True))
         self.min_gap.set(max(0.0, float(data.get("min_gap", self.min_gap.get()))))
         self.pre_tap.set(max(0.0, float(data.get("pre_tap", self.pre_tap.get()))))
         self.respect_cd.set(data.get("respect_cooldown", True))
@@ -913,6 +935,7 @@ class App:
             "max_throws": int(self.max_throws.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "catch_use_feed": bool(self.catch_use_feed.get()),
+            "no_balls_goplus": bool(self.no_balls_goplus.get()),
             "min_gap": float(self.min_gap.get()),
             "pre_tap": float(self.pre_tap.get()),
             "respect_cooldown": bool(self.respect_cd.get()),
@@ -1977,6 +2000,9 @@ class App:
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
                     use_feed_bar=bool(self.catch_use_feed.get()),
+                    start_goplus_on_no_balls=(
+                        self.catch_style == "normal" and bool(self.no_balls_goplus.get())
+                    ),
                     min_catch_interval=max(0.0, float(self.min_gap.get())),
                     pre_tap_delay=max(0.0, float(self.pre_tap.get())),
                     respect_cooldown=bool(self.respect_cd.get()),
@@ -2024,8 +2050,21 @@ class App:
     def _run_worker(self) -> None:
         def on_event(stats, threw):
             if stats.last_event == "no_balls":
-                self.log_queue.put(self.tr("msg_no_balls"))
-                self._send_discord(self.tr("dc_no_balls"), shot=True)
+                # on_event runs on the worker thread; read the plain config value captured at
+                # startup, never a tkinter variable from here.
+                with_goplus = bool(getattr(
+                    getattr(self.routine, "config", None),
+                    "start_goplus_on_no_balls",
+                    False,
+                ))
+                self.log_queue.put(self.tr("msg_no_balls_goplus" if with_goplus else "msg_no_balls"))
+                self._send_discord(
+                    self.tr("dc_no_balls_goplus" if with_goplus else "dc_no_balls"),
+                    shot=True,
+                )
+                return
+            if stats.last_event == "goplus_started":
+                self.log_queue.put(self.tr("msg_goplus_started"))
                 return
             if stats.last_event == "autowalk":
                 self.log_queue.put(self.tr("msg_autowalk").format(stats.autowalks))

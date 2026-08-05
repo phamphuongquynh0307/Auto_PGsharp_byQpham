@@ -38,7 +38,7 @@ from . import uidump
 from .resources import resource_path
 from .vision import (
     best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
-    find_dialog_buttons, load_template, slot_has_pokemon,
+    find_dialog_buttons, find_disconnected_goplus, load_template, slot_has_pokemon,
 )
 
 
@@ -171,9 +171,19 @@ class CatchConfig:
     out_of_balls_template: str = "templates/out_of_balls.png"
     out_of_balls_threshold: float = 0.72
     out_of_balls_region: tuple[int, int, int, int] = (390, 2545, 340, 167)
+    # Newer game builds remove the whole ball selector when the bag is empty instead of showing
+    # the old red ``x0`` badge. Keep the template as the instant/legacy signal, then treat a
+    # stable encounter with no throwable ball for this long as the current signal. Requiring
+    # several distinct frames prevents the selector's entrance animation from looking empty.
+    no_balls_missing_timeout: float = 1.2
+    no_balls_missing_frames: int = 3
     flee_xy: tuple[int, int] = (120, 170)   # encounter flee (running-man) button, top-left
     no_balls_pause: float = 600.0           # seconds to hold off catching when out of balls (10 min)
     no_balls_walk_interval: float = 15.0    # re-check AutoWalk this often during the hold-off
+    # PGSharp's Go Plus support requires a paid key. The GUI only enables this for normal/keyed
+    # catching; the quick/no-key path always leaves the accessory alone.
+    start_goplus_on_no_balls: bool = True
+    goplus_after_autowalk_wait: float = 1.0  # let AutoWalk settle before starting Go Plus
 
     # Throw: swipe from the ball straight up toward the Pokémon. Bigger |throw_dy| = harder throw;
     # too hard sails over the Pokémon, so this is deliberately gentle and tunable in the GUI.
@@ -708,6 +718,54 @@ class CatchRoutine:
         matches = find(frame, self._noball_tpl, threshold=self.config.out_of_balls_threshold,
                        scales=self._scales, grayscale=False, region=self.config.out_of_balls_region)
         return bool(matches)
+
+    def _wait_for_ball_state(self, timeout: float) -> str:
+        """Return ``ready``, ``closed`` or ``empty`` for the current encounter.
+
+        Pokemon GO used to leave an ``x0`` count badge behind when the last ball was spent. In
+        current builds the complete ball selector disappears, so the absence itself has to be
+        read. Absence is only trusted while the independent Berry detector keeps proving the
+        encounter is open, and only after both a time window and multiple frames. That keeps a
+        slow selector animation (or one smeared stream frame) from becoming a false empty-bag
+        alert.
+        """
+        cfg = self.config
+        deadline = time.monotonic() + max(0.0, timeout)
+        missing_frames = 0
+        while not self.stop_event.is_set():
+            self._wait_if_paused()
+            frame = self.device.screenshot(next_frame=True)
+            if not self._in_encounter(frame, strict=True):
+                return "closed"
+            if self._is_out_of_balls(frame):
+                return "empty"
+            if self._ball_ready(frame):
+                return "ready"
+            missing_frames += 1
+            if (time.monotonic() >= deadline
+                    and missing_frames >= max(1, cfg.no_balls_missing_frames)):
+                # The consequence of a false positive is a ten-minute pause, so pay for one
+                # compression-free ADB capture before committing. Several adjacent H.264 frames
+                # can share the same smear; a fresh image cannot.
+                fresh = self.device.screenshot(fresh=True)
+                if not self._in_encounter(fresh, strict=True):
+                    return "closed"
+                if self._is_out_of_balls(fresh) or not self._ball_ready(fresh):
+                    return "empty"
+                return "ready"
+        return "closed"
+
+    def _flag_no_balls(self) -> None:
+        """Leave the encounter and hand the pause/notification work to ``run``."""
+        self.device.tap(*self.config.flee_xy)
+        self._no_balls = True
+        self.stats.last_event = "no_balls"
+        self._trace(
+            "no_balls",
+            "Encounter vẫn mở nhưng biểu tượng bóng đã biến mất; xác nhận hết Poké Ball.",
+            0.0,
+        )
+        self._interruptible_sleep(1.0)
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
         cfg = self.config
@@ -1618,10 +1676,36 @@ class CatchRoutine:
         else:
             return False
 
+        if paused is False:
+            # The visible running-row icon is stronger evidence than the remembered flag. In
+            # particular _wait_no_balls intentionally clears that flag after fleeing; tapping a
+            # row that is already running would stop AutoWalk instead of starting it.
+            self._autowalk_active = True
+            self._trace("autowalk_already_running", "AutoWalk đã chạy; không bấm lại.", 0.0)
+            return False
         if self._autowalk_active and paused is not True:
             # Already walking, and nothing says the row stalled — leave it alone.
             return False
         self.device.tap(*target)
+        return True
+
+    def _try_start_goplus(self) -> bool:
+        """Tap Go Plus once, but only while its disconnected button is visibly present."""
+        frame = self.device.screenshot(fresh=True)
+        if self._in_encounter(frame):
+            self._trace("goplus_skip_encounter", "Đang trong encounter; không bấm Go Plus.", 0.0)
+            return False
+        game_scale = Layout(*self.config.screen, scale=self.config.game_scale).s
+        target = find_disconnected_goplus(frame, scale=game_scale)
+        if target is None:
+            self._trace(
+                "goplus_not_disconnected",
+                "Không thấy nút Go Plus ở trạng thái tắt; không bấm để tránh ngắt kết nối đang chạy.",
+                0.0,
+            )
+            return False
+        self.device.tap(*target)
+        self._trace("goplus_start", f"Đã bấm khởi động Go Plus tại {target}.", 0.0)
         return True
 
     def _wait_no_balls(self, on_event=None) -> None:
@@ -1634,6 +1718,7 @@ class CatchRoutine:
         # We may have fled from an encounter, so the walk state is unknown: force one fresh
         # AutoWalk start. Afterwards _try_autowalk only re-taps a stalled (paused) row.
         self._autowalk_active = False
+        goplus_checked = not (cfg.start_goplus_on_no_balls and not cfg.quick_catch)
         while time.monotonic() < deadline and not self.stop_event.is_set():
             self._wait_if_paused()
             if self.stop_event.is_set():
@@ -1641,6 +1726,16 @@ class CatchRoutine:
             self._drain_popups()
             if self._try_autowalk():
                 self._autowalk_active = True
+            # Start the accessory once, immediately after AutoWalk is confirmed/tapped. It then
+            # spins PokéStops during this ten-minute refill walk. Never retry during the same
+            # empty-bag pause: tapping a connected accessory a second time would disconnect it.
+            if self._autowalk_active and not goplus_checked:
+                self._interruptible_sleep(cfg.goplus_after_autowalk_wait)
+                started = self._try_start_goplus()
+                goplus_checked = True
+                if started and on_event:
+                    self.stats.last_event = "goplus_started"
+                    on_event(self.stats, False)
             self._interruptible_sleep(cfg.no_balls_walk_interval)
 
     def _poll(self, predicate, timeout: float):
@@ -1759,15 +1854,21 @@ class CatchRoutine:
         for attempt in range(max(1, cfg.max_throws_per_encounter)):
             if self.stop_event.is_set():
                 return threw
-            if attempt == 0:
-                # Throw the moment the ball is actually grabbable, not after a fixed pause.
-                # encounter_touch_delay_ms exists because the ball is not interactive the instant
-                # the encounter opens — but it is a worst case, not a required wait, and on this
-                # setup it was configured at 1.5s and paid in full every time. Polling for the
-                # ball turns it into a cap: ready in 200ms means we throw at 200ms.
-                if not self._poll(self._ball_ready, cfg.encounter_touch_delay_ms / 1000.0):
-                    self._trace("ball_not_ready",
-                                "Chưa thấy bóng ở điểm ném sau khi chờ; vẫn thử ném.", 0.0)
+            # Wait for the actual ball on every attempt. The old code only waited before the
+            # first throw and then threw at the fallback coordinate even when the last ball had
+            # just disappeared. _wait_for_ball_state also supports the new no-selector empty-bag
+            # UI, while returning immediately as soon as a normal ball is visible.
+            ready_wait = max(
+                cfg.encounter_touch_delay_ms / 1000.0,
+                cfg.no_balls_missing_timeout,
+            )
+            ball_state = self._wait_for_ball_state(ready_wait)
+            if ball_state == "empty":
+                self._flag_no_balls()
+                return threw
+            if ball_state == "closed":
+                closed = True
+                return threw
             # Reconfirm on a new frame immediately before touching the screen. This closes the
             # stale-frame race where the encounter vanished during the delay and the queued
             # throw landed on the map's centre Poké Ball.
@@ -1802,6 +1903,16 @@ class CatchRoutine:
                     f"Hết {cfg.catch_timeout:.1f}s mà encounter chưa đóng; thử lại.",
                     0.0,
                 )
+        # A one-throw limit can spend the final ball and time out before there is another loop
+        # iteration to observe the missing selector. Confirm once before the ordinary give-up
+        # flee so that configuration still reports and pauses on an empty bag.
+        if not closed and threw and not self.stop_event.is_set():
+            ball_state = self._wait_for_ball_state(cfg.no_balls_missing_timeout)
+            if ball_state == "empty":
+                self._flag_no_balls()
+                return threw
+            if ball_state == "closed":
+                closed = True
         if not closed and not self.stop_event.is_set():
             # Out of throws without ever seeing the encounter close — but "never saw it close" is
             # not "still open": _throw_outcome returns 'timeout' precisely when it could not tell.
@@ -2075,11 +2186,8 @@ class CatchRoutine:
         # reads "x0". Checking here (before hunting the nearby bar) also rescues us when a useless
         # throw left us stuck in the encounter — the nearby bar never returns, but the badge does.
         # Flee via the running-man button and flag the loop to hold off catching.
-        if self._noball_tpl is not None and self._is_out_of_balls(frame):
-            self.device.tap(*cfg.flee_xy)
-            self._no_balls = True
-            self.stats.last_event = "no_balls"
-            self._interruptible_sleep(1.0)
+        if self._is_out_of_balls(frame):
+            self._flag_no_balls()
             return False
 
         # Step 0.75: already inside an encounter? A break-out from the previous throw, an
