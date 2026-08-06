@@ -84,6 +84,96 @@ def find_disconnected_goplus(scene: np.ndarray, *, scale: float = 1.0) -> tuple[
     return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
 
+# Pokéstop blue, measured off a live 1220x2712 map (HSV, OpenCV ranges).
+#
+# The window spans hue 88-122 because a stop is drawn in two quite different blues depending on
+# how far away it is, and both must match. Far off it is a tall royal-blue pillar at hue 112-113
+# with saturation ~200; close up it becomes a turquoise disc over a small cube at hue 90 with
+# saturation ~155. A window fitted to the pillar alone found nothing at all on a screen full of
+# stops standing right beside the avatar — which is precisely the case this feature exists for.
+#
+# What the window must keep out is darker, not bluer:
+#   * map water sits at hue 114 but value ~188, i.e. clearly dimmer. The brightness floor is the
+#     only thing that stops a lake reading as the biggest Pokéstop on screen — the same trap that
+#     made _is_pokestop_screen misfire on water-heavy maps;
+#   * pale blue Pokémon (a Salamence beside the avatar measured hue 99, saturation 138) are
+#     washed out rather than dark, so the saturation floor is what excludes those.
+POKESTOP_HSV_LO = (88, 150, 200)
+POKESTOP_HSV_HI = (122, 255, 255)
+
+
+def find_pokestops(
+    scene: np.ndarray,
+    *,
+    region: tuple[int, int, int, int] | None = None,
+    scale: float = 1.0,
+    min_area: int = 700,
+    max_span: int = 400,
+) -> list[Match]:
+    """Locate unspun Pokéstops by their body colour. Biggest first.
+
+    `region` is an (x, y, w, h) box whose *inscribed ellipse* is the search area — the circle
+    around the avatar the user draws in the calibration window. An ellipse rather than the box
+    because the map is drawn tilted, so a screen circle around the avatar is the honest shape
+    of "near me", and because the box's corners are exactly where the HUD rails live.
+
+    Biggest rather than nearest, because a stop spins non-stop and the rings around it throw off
+    bright blue fragments. Ranking by distance let one of those glints win over the very stop it
+    belongs to — 120 px to the side of the body, which lands on bare map and earns a PGSharp
+    "Stop AutoWalk?" dialog instead of a spin. A fragment is never the biggest blue thing in the
+    circle, so ordering by size settles it without having to guess which shapes are legitimate.
+
+    That matters because the shape genuinely varies: the cube turns continuously, so its
+    silhouette swings between clearly taller than wide and clearly wider than tall (0.5 to 1.6
+    across the frames this was measured on). The aspect window below is therefore deliberately
+    loose — wide enough for any rotation of a cube, tight enough that a HUD pill, which is
+    several times longer than it is tall, still cannot get in.
+    """
+    if scene is None or scene.ndim != 3 or scene.shape[2] < 3:
+        return []
+    h, w = scene.shape[:2]
+    s = max(0.25, float(scale or 1.0))
+    if region is None:
+        region = (0, 0, w, h)
+    rx, ry, rw, rh = region
+    if rw <= 0 or rh <= 0:
+        return []
+    # Clip the box to the screen, but keep the *original* ellipse: a box half off the left edge
+    # still describes a circle centred on the avatar, and re-centring it on the clipped box
+    # would drag the search area sideways.
+    cx0, cy0 = rx + rw / 2.0, ry + rh / 2.0
+    ax, ay = rw / 2.0, rh / 2.0
+    x0, y0 = max(0, int(rx)), max(0, int(ry))
+    x1, y1 = min(w, int(rx + rw)), min(h, int(ry + rh))
+    if x0 >= x1 or y0 >= y1:
+        return []
+
+    roi = scene[y0:y1, x0:x1]
+    mask = cv2.inRange(cv2.cvtColor(roi, cv2.COLOR_BGR2HSV),
+                       np.array(POKESTOP_HSV_LO, np.uint8),
+                       np.array(POKESTOP_HSV_HI, np.uint8))
+    # Close over the white highlight band and the pole seam that split one body into pieces.
+    k = max(3, int(round(15 * s)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+
+    floor = max(1, int(round(min_area * s * s)))
+    span = max(8, int(round(max_span * s)))
+    count, _labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+    found: list[tuple[float, Match]] = []
+    for i in range(1, count):
+        bx, by, bw, bh, area = (int(v) for v in stats[i])
+        if area < floor or bw > span or bh > span:
+            continue
+        if not 0.3 <= bw / max(1, bh) <= 3.0:
+            continue
+        cx, cy = x0 + float(centroids[i][0]), y0 + float(centroids[i][1])
+        if ((cx - cx0) / ax) ** 2 + ((cy - cy0) / ay) ** 2 > 1.0:
+            continue
+        found.append((area, Match(x0 + bx, y0 + by, bw, bh, area / float(bw * bh))))
+    found.sort(key=lambda item: -item[0])
+    return [m for _area, m in found]
+
+
 def find(
     scene: np.ndarray,
     template: np.ndarray,

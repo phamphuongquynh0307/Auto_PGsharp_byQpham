@@ -21,6 +21,7 @@ import urllib.request
 import uuid
 import webbrowser
 import tkinter as tk
+from dataclasses import replace
 from tkinter import filedialog, ttk
 
 import cv2
@@ -30,6 +31,7 @@ from avc import diag
 from avc.catch import CatchConfig, CatchRoutine
 from avc.device import Device
 from avc.shundo import ShundoConfig, ShundoRoutine
+from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
 DONATE_KOFI = "https://ko-fi.com/qpham7286"
@@ -47,6 +49,7 @@ CALIB_ITEMS = [
     ("out_of_balls_region", "region", "catch",  "cal_noball",  "#ff8800"),
     ("pill_region",         "region", "shundo", "cal_pill",    "#3399ff"),
     ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
+    ("spin_region",         "region", "catch",  "cal_spin",    "#00e5ff"),
 ]
 
 CALIB_GROUP_FIELDS = {
@@ -54,6 +57,10 @@ CALIB_GROUP_FIELDS = {
     "quick": ("nearby_slot", "ball_fallback", "berry_start", "berry_end", "flee_xy",
               "pokestop_close_xy", "out_of_balls_region"),
     "shundo": ("flee_xy", "pill_region", "toast_region"),
+    # Only the scan circle: the spin mode taps what it finds inside it and needs no other
+    # fixed point. Flee comes along because a Go Plus catch can drop an encounter on top of
+    # the map, and leaving it is the one blind tap this mode makes.
+    "spin": ("spin_region", "flee_xy"),
 }
 
 LANG = {
@@ -202,6 +209,20 @@ LANG = {
                        "en": "When Nearby is empty: take 1 Pokémon from Feed (off by default)"},
     "no_balls_goplus": {"vi": "Hết bóng: khởi động Go Plus sau AutoWalk (chỉ bắt có key)",
                          "en": "Out of balls: start Go Plus after AutoWalk (keyed catch only)"},
+    "no_balls_spin": {"vi": "Hết bóng: vừa đi vừa quay PokéStop (không cần key)",
+                       "en": "Out of balls: spin PokéStops while walking (no key needed)"},
+    "no_balls_min":  {"vi": "Hết bóng: quay stop bao nhiêu phút rồi bắt lại",
+                       "en": "Out of balls: minutes of spinning before catching resumes"},
+    "grp_spin":      {"vi": "Quay PokéStop", "en": "PokéStop spinning"},
+    "spin_note":     {"vi": "Quét đúng màu xanh của PokéStop chưa quay trong vòng tròn quanh nhân vật rồi bấm. "
+                            "Stop đã quay chuyển tím nên tự bị bỏ qua. Mỗi lần chạm map PGSharp sẽ hỏi "
+                            "\"Stop AutoWalk?\" — bot luôn bấm CANCEL.",
+                      "en": "Scans the unspun-PokéStop blue inside the circle around your avatar and taps it. "
+                            "A spun stop turns violet, so it drops out by itself. Every map touch makes PGSharp "
+                            "ask \"Stop AutoWalk?\" — the bot always answers CANCEL."},
+    "spin_radius":   {"vi": "Bán kính vòng quét quanh nhân vật (px)", "en": "Scan circle radius around avatar (px)"},
+    "spin_interval": {"vi": "Giãn cách giữa 2 lần bấm stop (giây)", "en": "Gap between stop taps (s)"},
+    "spin_min_area": {"vi": "Đốm xanh nhỏ nhất tính là stop (px²)", "en": "Smallest blue blob counted as a stop (px²)"},
     "trace":         {"vi": "Ghi log thời gian từng bước (gỡ lỗi, tạo timing.log)",
                       "en": "Log per-step timings for debugging (writes timing.log)"},
     "dim":           {"vi": "Tắt sáng màn hình khi chạy (giảm nóng)", "en": "Screen off while running (less heat)"},
@@ -245,6 +266,9 @@ LANG = {
     "cal_stop":      {"vi": "Nút đóng Pokéstop (X)", "en": "Pokéstop close (X)"},
     "cal_noball":    {"vi": "Khung 'hết bóng' (x0)", "en": "Out-of-balls box (x0)"},
     "cal_toast":     {"vi": "Khung toast (Shundo)", "en": "Toast box (Shundo)"},
+    "cal_spin":      {"vi": "Vòng quét PokéStop (kéo ôm quanh nhân vật)",
+                      "en": "PokéStop scan circle (drag it around your avatar)"},
+    "cal_group_spin": {"vi": "Quay stop", "en": "Spin stops"},
     "pv_legend":     {"vi": "Bắt: vàng = ô Nearby sẽ bấm • xanh lá = điểm ném + hướng ném • cam = thanh feed "
                             "(chỉ khi Nearby trống) • đỏ = khung nhận encounter • hồng = nút thoát.   "
                             "Shundo: xanh lá = ô feed • vàng nhạt = thanh @ • cam = vùng đọc IV • trắng = vùng toast.",
@@ -267,6 +291,7 @@ LANG = {
                             "Untick 'Control with mouse' to just watch."},
     "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
     "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
+    "mode_spin":     {"vi": "Quay PokéStop khi đi đường", "en": "Spin PokéStops while walking"},
     "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
     "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
                       "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
@@ -333,6 +358,10 @@ LANG = {
     "msg_empty":     {"vi": "(không có pokemon)", "en": "(no pokémon)"},
     "msg_cycle":     {"vi": "chu kỳ {}: {} | tổng ném: {}", "en": "cycle {}: {} | total thrown: {}"},
     "msg_autowalk":  {"vi": "→ Trống lâu, bấm AutoWalk đi kiếm spawn (lần {})", "en": "→ Dry spell, tapped AutoWalk to find spawns (#{})"},
+    "msg_spin":      {"vi": "→ Đã bấm PokéStop (lần {})", "en": "→ Tapped a PokéStop (#{})"},
+    "msg_spin_idle": {"vi": "chu kỳ {}: chưa có PokéStop xanh nào trong vùng quét",
+                      "en": "cycle {}: no unspun PokéStop inside the scan circle"},
+    "spun":          {"vi": "Đã bấm stop: {}", "en": "Stops tapped: {}"},
     "msg_no_balls":  {"vi": "→ Hết Poké Ball! Thoát màn bắt, tạm ngừng 10 phút (vẫn tự di chuyển).", "en": "→ Out of Poké Balls! Left the encounter, holding off 10 min (still auto-walking)."},
     "msg_no_balls_goplus": {"vi": "→ Hết Poké Ball! Đang bật AutoWalk rồi khởi động Go Plus trong 10 phút.",
                              "en": "→ Out of Poké Balls! Starting AutoWalk then Go Plus for the 10-minute refill."},
@@ -456,7 +485,7 @@ class App:
         mode_row = ttk.Frame(self.tab_main)
         mode_row.pack(fill="x", **pad)
         self._label(mode_row, "mode").pack(side="left")
-        self.mode = "catch"            # "catch" | "shundo"
+        self.mode = "catch"            # "catch" | "shundo" | "spin"
         self.mode_var = tk.StringVar()
         self.mode_combo = ttk.Combobox(mode_row, textvariable=self.mode_var, state="readonly", width=28)
         self.mode_combo.pack(side="left", padx=6)
@@ -575,6 +604,23 @@ class App:
         goplus_chk.grid(row=15, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((goplus_chk, "no_balls_goplus"))
         self._register_row("no_balls_goplus", goplus_chk)
+        # The bag refills from PokéStops, so spinning them is the one thing that actually
+        # shortens an empty-bag hold — and unlike Go Plus it needs no PGSharp key, which is why
+        # this box stays visible in Quick Catch where the Go Plus one is hidden.
+        self.no_balls_spin = tk.BooleanVar(value=False)
+        spin_chk = ttk.Checkbutton(
+            catch_grp,
+            text=self.tr("no_balls_spin"),
+            variable=self.no_balls_spin,
+            command=self._sync_settings_visibility,
+        )
+        spin_chk.grid(row=16, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((spin_chk, "no_balls_spin"))
+        self._register_row("no_balls_spin", spin_chk)
+        # How long the hold lasts. It was a fixed ten minutes in avc/catch.py; the spinning walk
+        # makes the right length a judgement call (how dense the stops are), so it is a setting.
+        self.no_balls_min = self._spin(catch_grp, "no_balls_min", 17, 1, 120, 10, is_float=True,
+                                       increment=1)
 
         # Settings both modes read. They used to sit in the Catching group, which made the flee
         # taps look like a catching option even though normal catching taps flee exactly once
@@ -622,6 +668,27 @@ class App:
         tr_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((tr_chk, "trace"))
         self._register_row("trace", tr_chk, advanced=True)
+
+        # Spinning knobs live in their own group because two different things read them: the
+        # "Quay PokéStop" mode, and the out-of-balls hold of either catch style. Putting them in
+        # the Catching group would have tied them to a mode they outlive.
+        spin_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_spin"))
+        self._grp_spin = spin_grp
+        spin_grp.pack(fill="x", **pad)
+        self._i18n.append((spin_grp, "grp_spin"))
+        spin_note = ttk.Label(spin_grp, text=self.tr("spin_note"), wraplength=400,
+                              foreground="#666")
+        spin_note.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
+        self._i18n.append((spin_note, "spin_note"))
+        # 450 is half the box the player drew around their own avatar once the handle became
+        # draggable. It sits between the ~220 px ring the game paints (too tight once the pole a
+        # cube stands on is counted) and the 900 px first guess (which tapped stops streets away,
+        # opened their info screen, and closed it again).
+        self.spin_radius = self._spin(spin_grp, "spin_radius", 1, 150, 1200, 450, increment=20)
+        self.spin_gap = self._spin(spin_grp, "spin_interval", 2, 0.5, 15, 2.0,
+                                   is_float=True, increment=0.5)
+        self.spin_min_area = self._spin(spin_grp, "spin_min_area", 3, 200, 12000, 700,
+                                        increment=100, advanced=True)
 
         sh_grp = ttk.LabelFrame(settings_body, text=self.tr("grp_shundo"))
         self._grp_shundo = sh_grp
@@ -757,11 +824,16 @@ class App:
         """
         catching = self.mode == "catch"
         quick = self.catch_style == "quick"
+        spinning = self.mode == "spin"
+        # The spin knobs are read by the spin mode *and* by a catching run that was told to
+        # spin when the bag empties, so they follow the option rather than the mode.
+        spin_used = spinning or (catching and bool(self.no_balls_spin.get()))
         for frame, visible in (
             (self._grp_catch, catching),
             (self._grp_pace, catching),
             (self._grp_shared, True),
-            (self._grp_shundo, not catching),
+            (self._grp_spin, spin_used),
+            (self._grp_shundo, self.mode == "shundo"),
             (self._grp_discord, True),
         ):
             frame.pack_forget()
@@ -774,7 +846,12 @@ class App:
         # for users without that key, so presenting this checkbox there would promise a feature
         # their mode cannot use.
         self._set_row_visible("no_balls_goplus", catching and not quick)
-        # The flee taps are spent by Quick Catch and by Shundo; normal catching taps flee once.
+        # Spinning to refill needs no key, so it stays on offer in both catch styles. Its
+        # length only means anything once the box is ticked.
+        self._set_row_visible("no_balls_spin", catching)
+        self._set_row_visible("no_balls_min", catching and bool(self.no_balls_spin.get()))
+        # The flee taps are spent by Quick Catch, by Shundo and by the spin mode leaving an
+        # encounter Go Plus opened; normal catching taps flee once.
         for key in ("flee_taps", "flee_gap"):
             self._set_row_visible(key, (catching and quick) or not catching)
         for key in ("throw_power", "max_catches", "idle_aw", "wait_enc", "wait_catch",
@@ -786,7 +863,7 @@ class App:
         self.save_settings()
 
     # -- mode / shundo action selectors ----------------------------------------
-    MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"))
+    MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"), ("spin", "mode_spin"))
     CATCH_STYLES = (("normal", "catch_normal"), ("quick", "catch_quick"))
     ACTIONS = (("pause", "act_pause"), ("stop", "act_stop"))
     SHINY_ACTIONS = (("skip", "act_skip"), ("pause", "act_pause"))
@@ -889,6 +966,12 @@ class App:
         self.dim_screen.set(data.get("dim_screen", False))
         self.catch_use_feed.set(data.get("catch_use_feed", False))
         self.no_balls_goplus.set(data.get("no_balls_goplus", True))
+        self.no_balls_spin.set(data.get("no_balls_spin", False))
+        self.no_balls_min.set(max(1.0, float(data.get("no_balls_min", self.no_balls_min.get()))))
+        self.spin_radius.set(max(300, int(data.get("spin_radius", int(self.spin_radius.get())))))
+        self.spin_gap.set(max(0.5, float(data.get("spin_interval", self.spin_gap.get()))))
+        self.spin_min_area.set(max(800, int(data.get("spin_min_area",
+                                                     int(self.spin_min_area.get())))))
         self.min_gap.set(max(0.0, float(data.get("min_gap", self.min_gap.get()))))
         self.pre_tap.set(max(0.0, float(data.get("pre_tap", self.pre_tap.get()))))
         self.respect_cd.set(data.get("respect_cooldown", True))
@@ -898,7 +981,7 @@ class App:
         # silently keeps it enabled grows a timing.log for the rest of the user's life.
         self.trace_timing.set(data.get("trace_timing", False))
         self.show_advanced.set(bool(data.get("show_advanced", False)))
-        if data.get("mode") in ("catch", "shundo"):
+        if data.get("mode") in ("catch", "shundo", "spin"):
             self.mode = data["mode"]
         if data.get("catch_style") in ("normal", "quick"):
             self.catch_style = data["catch_style"]
@@ -936,6 +1019,11 @@ class App:
             "dim_screen": bool(self.dim_screen.get()),
             "catch_use_feed": bool(self.catch_use_feed.get()),
             "no_balls_goplus": bool(self.no_balls_goplus.get()),
+            "no_balls_spin": bool(self.no_balls_spin.get()),
+            "no_balls_min": float(self.no_balls_min.get()),
+            "spin_radius": int(self.spin_radius.get()),
+            "spin_interval": float(self.spin_gap.get()),
+            "spin_min_area": int(self.spin_min_area.get()),
             "min_gap": float(self.min_gap.get()),
             "pre_tap": float(self.pre_tap.get()),
             "respect_cooldown": bool(self.respect_cd.get()),
@@ -1395,8 +1483,11 @@ class App:
             # overlay must show what the *running* mode sees, not always shundo's boxes.
             catch_cfg = self._apply_manual(CatchConfig().scale_to(*self._pv_size, dens), "catch")
             shundo_cfg = self._apply_manual(ShundoConfig().scale_to(*self._pv_size, dens), "shundo")
+            spin_cfg = self._apply_manual(
+                self._spin_config(CatchConfig()).scale_to(*self._pv_size, dens), "catch")
             self._pv_dets = {"catch": CatchRoutine(dev, catch_cfg),
-                             "shundo": ShundoRoutine(dev, shundo_cfg)}
+                             "shundo": ShundoRoutine(dev, shundo_cfg),
+                             "spin": SpinRoutine(dev, spin_cfg)}
             # Only stop the stream on close if we were the ones who started it; while the bot
             # runs it owns the stream and pulling it out from under the routine would stall it.
             self._pv_owns_stream = dev._stream is None
@@ -1582,7 +1673,7 @@ class App:
                 continue
             try:
                 frame = self._pv_device().screenshot()
-                det = self._pv_dets["shundo" if self.mode == "shundo" else "catch"]
+                det = self._pv_dets.get(self.mode) or self._pv_dets["catch"]
                 layer = np.zeros_like(frame)
                 det.annotate(frame, canvas=layer)
                 # Anything the annotate pass drew is non-black; that is the composite mask.
@@ -1645,6 +1736,9 @@ class App:
         """Auto positions (device px) for this screen, used as starting handles."""
         c = CatchConfig().scale_to(w, h, dens)
         s = ShundoConfig().scale_to(w, h, dens)
+        # Through _spin_config so the handle opens on the circle the radius setting describes,
+        # rather than on the bare dataclass default the user never chose.
+        spin = self._spin_config(CatchConfig()).scale_to(w, h, dens)
         return {
             "nearby_slot":         list(c.nearby_slot),
             "ball_fallback":       list(c.ball_fallback),
@@ -1655,6 +1749,7 @@ class App:
             "out_of_balls_region": list(c.out_of_balls_region),
             "pill_region":         list(s.pill_region),
             "toast_region":        list(s.toast_region),
+            "spin_region":         list(spin.spin_region),
         }
 
     def open_calibrate(self) -> None:
@@ -1707,7 +1802,7 @@ class App:
             cv.create_image(0, 0, anchor="nw", image=self._cal_photo)
         groups = ttk.Notebook(body); groups.pack(side="left", fill="y", padx=(10, 0))
         for mode, title in (("normal", "cal_group_normal"), ("quick", "cal_group_quick"),
-                            ("shundo", "cal_group_shundo")):
+                            ("shundo", "cal_group_shundo"), ("spin", "cal_group_spin")):
             page = ttk.Frame(groups)
             groups.add(page, text=self.tr(title))
             for field, kind, item_mode, key, color in self._cal_items(mode):
@@ -1726,8 +1821,9 @@ class App:
             ttk.Button(allrow, text=self.tr("cal_center_all"),
                        command=lambda g=mode: self._cal_center_all(g)).pack(fill="x")
         self._cal_groups = groups
-        self._cal_group = "shundo" if self.mode == "shundo" else self.catch_style
-        groups.select({"normal": 0, "quick": 1, "shundo": 2}[self._cal_group])
+        self._cal_group = ({"shundo": "shundo", "spin": "spin"}.get(self.mode)
+                           or self.catch_style)
+        groups.select({"normal": 0, "quick": 1, "shundo": 2, "spin": 3}[self._cal_group])
         groups.bind("<<NotebookTabChanged>>", self._cal_group_changed)
         self._cal_active = None
         cv.bind("<ButtonPress-1>", self._cal_press)
@@ -1830,13 +1926,18 @@ class App:
             self._cal_center(field)
 
     def _cal_group_changed(self, _event=None) -> None:
-        self._cal_group = ("normal", "quick", "shundo")[self._cal_groups.index("current")]
+        self._cal_group = ("normal", "quick", "shundo", "spin")[self._cal_groups.index("current")]
         self._cal_active = None
         self._cal_redraw()
 
     def _cal_items(self, group: str | None = None):
+        """Handles for one tab. A field with no entry in `_cal` is dropped rather than raised
+        on: every caller loops over these, so one missing default used to abort the redraw
+        part-way and leave a window with some markers drawn, some silently absent, and no
+        error anywhere — which is how a new handle can look like a broken drag."""
         fields = set(CALIB_GROUP_FIELDS[group or self._cal_group])
-        return [item for item in CALIB_ITEMS if item[0] in fields]
+        have = getattr(self, "_cal", {})
+        return [item for item in CALIB_ITEMS if item[0] in fields and item[0] in have]
 
     def _cal_drag(self, e) -> None:
         if not self._cal_active:
@@ -1895,6 +1996,31 @@ class App:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _spin_config(self, cfg):
+        """Fold the spinning settings into a CatchConfig, in BASE_RESOLUTION coordinates.
+
+        Applied *before* scale_to so the scan circle is re-anchored onto the phone by the same
+        code path as every other coordinate — writing device pixels here instead would mean the
+        circle alone never followed a measured render scale. Manual alignment still wins, since
+        it is laid over the result afterwards.
+        """
+        r = max(50, int(self.spin_radius.get()))
+        # Centred on the avatar's feet, with a radius big enough to swallow the pole a stop's
+        # cube stands on (measured 179 px and 164 px above its own ground disc). Lifting the
+        # circle instead was the tidier theory and the worse default: it drops stops standing
+        # just below the avatar, which are as reachable as the ones above. Radius from the box
+        # the player drew over their own map — the only measurement here made by someone who
+        # can see which stops are actually in range.
+        cx, cy = 610, 1750
+        return replace(
+            cfg,
+            spin_region=(cx - r, cy - r, 2 * r, 2 * r),
+            spin_interval=max(0.5, float(self.spin_gap.get())),
+            spin_min_area=max(200, int(self.spin_min_area.get())),
+            spin_on_no_balls=bool(self.no_balls_spin.get()),
+            no_balls_pause=max(60.0, float(self.no_balls_min.get()) * 60.0),
+        )
+
     def _apply_manual(self, cfg, mode: str):
         """Overwrite tap points / boxes with the manually-aligned device-pixel values."""
         m = self.manual
@@ -1937,6 +2063,8 @@ class App:
                 cfg.pokestop_close_xy = P("pokestop_close_xy")
             if R("out_of_balls_region"):
                 cfg.out_of_balls_region = R("out_of_balls_region")
+            if R("spin_region"):
+                cfg.spin_region = R("spin_region")
         else:
             if P("flee_xy"):
                 cfg.flee_xy = P("flee_xy")
@@ -1983,6 +2111,20 @@ class App:
                 # hand-aligned points must be laid back over the result — they are the user's
                 # own correction and outrank any measurement.
                 self.routine._on_rescale = lambda c: self._apply_manual(c, "shundo")
+            elif self.mode == "spin":
+                # A CatchConfig without the catching: SpinRoutine is a CatchRoutine that spins
+                # instead of throwing, so it inherits the popup handling, the AutoWalk restarts
+                # and the calibration wholesale — and reads them out of the same config.
+                cfg = self._spin_config(CatchConfig(
+                    flee_taps=max(1, int(self.flee_taps.get())),
+                    flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
+                ))
+                if dev_size is not None:
+                    cfg = cfg.scale_to(*dev_size, dev_dens)
+                cfg = self._apply_manual(cfg, "catch")
+                self.routine = SpinRoutine(self.device, cfg)
+                self.routine._on_trace = self.log_queue.put
+                self.routine._on_rescale = lambda c: self._apply_manual(c, "catch")
             else:
                 throw_power = abs(int(self.throw_power.get()))
                 cfg = CatchConfig(
@@ -2009,6 +2151,7 @@ class App:
                     use_ui_dump=bool(self.use_ui_dump.get()),
                     trace_timing=bool(self.trace_timing.get()),
                 )
+                cfg = self._spin_config(cfg)
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 cfg = self._apply_manual(cfg, "catch")
@@ -2068,6 +2211,18 @@ class App:
                 return
             if stats.last_event == "autowalk":
                 self.log_queue.put(self.tr("msg_autowalk").format(stats.autowalks))
+                return
+            if stats.last_event == "spin":
+                self.log_queue.put(self.tr("msg_spin").format(stats.spins))
+                # Not __count__: that counter is labelled "Thrown", and this mode never throws.
+                self.log_queue.put("__countstr__" + self.tr("spun").format(stats.spins))
+                return
+            # An empty cycle means different things in different modes, and the catch line below
+            # says "no Pokémon" — which is nonsense while spinning stops, and worse, reads as a
+            # fault when the mode is working exactly as intended.
+            if self.mode == "spin":
+                self.log_queue.put(self.tr("msg_spin_idle").format(stats.cycles))
+                self.log_queue.put("__countstr__" + self.tr("spun").format(stats.spins))
                 return
             tag = self.tr("msg_throw") if threw else self.tr("msg_empty")
             self.log_queue.put(self.tr("msg_cycle").format(stats.cycles, tag, stats.throws))

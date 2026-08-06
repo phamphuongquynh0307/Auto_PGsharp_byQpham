@@ -38,7 +38,8 @@ from . import uidump
 from .resources import resource_path
 from .vision import (
     best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
-    find_dialog_buttons, find_disconnected_goplus, load_template, slot_has_pokemon,
+    find_dialog_buttons, find_disconnected_goplus, find_pokestops, load_template,
+    slot_has_pokemon,
 )
 
 
@@ -156,6 +157,12 @@ class CatchConfig:
     # Throw start point. Sits on the encounter ball's upper half: high enough that a blind
     # throw on the map (y >= 2467 is the map's pokeball menu button) can't press the menu.
     ball_fallback: tuple[int, int] = (610, 2380)
+    # "Is there still a ball to throw?" is read at the ball's round centre button — a light grey
+    # hub inside a thick black band — not at its dome. The dome's colour is the *ball type*
+    # (red Poké, blue Great, black/yellow Ultra, purple Master), so a red-only dome test called
+    # a full bag empty the moment the game switched type; the hub looks the same on every type.
+    ball_hub: tuple[int, int] = (610, 2615)
+    ball_hub_radius: int = 90
     # Encounter signal: the raspberry glyph inside the bottom-left Berry button. The fixed
     # circular footprint prevents red Pokemon, thrown balls, and map controls from being
     # mistaken for an encounter. The detector scans for and returns the button's real centre;
@@ -175,7 +182,9 @@ class CatchConfig:
     # the old red ``x0`` badge. Keep the template as the instant/legacy signal, then treat a
     # stable encounter with no throwable ball for this long as the current signal. Requiring
     # several distinct frames prevents the selector's entrance animation from looking empty.
-    no_balls_missing_timeout: float = 1.2
+    # The window also has to outlast the swap the game does when one ball type runs out and the
+    # next takes over, which briefly leaves the selector empty while the bag is not.
+    no_balls_missing_timeout: float = 2.0
     no_balls_missing_frames: int = 3
     flee_xy: tuple[int, int] = (120, 170)   # encounter flee (running-man) button, top-left
     no_balls_pause: float = 600.0           # seconds to hold off catching when out of balls (10 min)
@@ -184,6 +193,37 @@ class CatchConfig:
     # catching; the quick/no-key path always leaves the accessory alone.
     start_goplus_on_no_balls: bool = True
     goplus_after_autowalk_wait: float = 1.0  # let AutoWalk settle before starting Go Plus
+
+    # ---- PokéStop spinning (the "Quay stop" mode, and optionally the out-of-balls hold) ----
+    # An unspun stop is one flat bright blue and a spun one is violet, so the colour test is
+    # also the "worth tapping" test — see vision.find_pokestops. Needs no PGSharp key and no
+    # Go Plus, which is the whole point: it is the refill path for users who have neither.
+    #
+    # The search area is the *ellipse inscribed in this box*. A circle rather than the whole
+    # screen because the screen's edges are HUD: the right icon rail, the PGSharp menu column and
+    # the bottom controls are all blue-ish, and one tap that strayed onto the rail opened a
+    # full-screen map view that took a Back press to leave — which then asked whether to quit
+    # Pokémon GO. The box is drag/resizable in the calibration window, since how far a stop can
+    # sit and still be in range depends on the player's zoom level, not on the app.
+    #
+    # Default: radius 450 around the avatar's feet (610, 1750) — half the box the player drew
+    # over their own map. Wide enough to cover the pole a stop's cube stands on (~170 px above
+    # its ground disc), which is why it is not the ~220 px ring the game itself paints.
+    # See App._spin_config, which rebuilds this from the GUI's radius setting.
+    spin_region: tuple[int, int, int, int] = (160, 1300, 900, 900)
+    # px² of solid blue before a blob counts as a stop. Deliberately small: the point is to spot
+    # the *colour*, not to outline a whole stop. A stop standing next to the avatar is drawn as a
+    # disc over a cube barely 45 px across, so a floor set to the size of the far-away pillar
+    # (2000+) skipped exactly the stops that were close enough to tap.
+    spin_min_area: int = 700
+    spin_interval: float = 2.0      # pause between stop taps
+    spin_settle: float = 1.2        # let the tap land (and PGSharp's dialog appear) before reading
+    # A tapped stop keeps its blue for a moment, and one that was out of range keeps it for good.
+    # Remembering where we just tapped is what stops the loop from spending every cycle on the
+    # same unreachable stop while the walk carries real ones past it.
+    spin_skip_seconds: float = 60.0
+    spin_skip_radius: int = 140
+    spin_on_no_balls: bool = False  # spin PokéStops during the empty-bag AutoWalk hold
 
     # Throw: swipe from the ball straight up toward the Pokémon. Bigger |throw_dy| = harder throw;
     # too hard sails over the Pokémon, so this is deliberately gentle and tunable in the GUI.
@@ -424,6 +464,8 @@ class CatchConfig:
             autowalk_offset_y=L.scale(self.autowalk_offset_y),
             # --- Pokémon GO's own UI (engine-drawn; never follows a measured overlay scale) ---
             ball_fallback=G.point(self.ball_fallback, "BC"),    # throw start, bottom-centre
+            ball_hub=G.point(self.ball_hub, "BC"),              # ball centre button
+            ball_hub_radius=max(8, G.scale(self.ball_hub_radius)),
             berry_start=G.point(self.berry_start, "BL"),        # Berry drawer, bottom-left
             berry_end=G.point(self.berry_end, "BL"),
             out_of_balls_region=G.region(self.out_of_balls_region, "BC"),
@@ -432,6 +474,10 @@ class CatchConfig:
             maybe_later_region=G.region(self.maybe_later_region, "MC"),
             flee_xy=G.point(self.flee_xy, "TL"),                # flee button, top-left
             pokestop_close_xy=G.point(self.pokestop_close_xy, "BC"),
+            # The avatar is drawn about the middle of the map, so the scan circle around it is
+            # anchored to the screen centre rather than to any edge.
+            spin_region=G.region(self.spin_region, "MC"),
+            spin_skip_radius=max(8, G.scale(self.spin_skip_radius)),
             throw_dy=G.scale(self.throw_dy),
             jitter_px=max(1, G.scale(self.jitter_px)),
             enc_berry_radius=max(8, G.scale(self.enc_berry_radius)),
@@ -444,7 +490,8 @@ class CatchStats:
     throws: int = 0        # balls actually thrown (a break-out costs more than one)
     encounters: int = 0    # Pokémon engaged — what max_catches counts
     autowalks: int = 0
-    last_event: str = ""   # "throw" | "idle" | "autowalk"
+    spins: int = 0         # PokéStops tapped
+    last_event: str = ""   # "throw" | "idle" | "autowalk" | "spin"
 
 
 class CatchRoutine:
@@ -514,6 +561,9 @@ class CatchRoutine:
         # Star -> AutoWalk-row offset measured on this device, replacing the config guess as
         # soon as the row is seen once.
         self._aw_offset: tuple[int, int] | None = None
+        # (when, x, y) of stops already tapped, so the loop moves on instead of re-tapping one
+        # that stayed blue because it was out of range. Expired by spin_skip_seconds.
+        self._spin_seen: list[tuple[float, int, int]] = []
         self._on_trace = None
         self._trace_last_key = ""
         self._trace_last_at = 0.0
@@ -688,26 +738,35 @@ class CatchRoutine:
         return self.config.ball_fallback if self._in_encounter(frame, strict=strict) else None
 
     def _ball_ready(self, frame) -> bool:
-        """True when a throwable ball is sitting at the throw start point.
+        """True when a throwable ball — *of any type* — is sitting at the throw start point.
 
         Only consulted while the encounter is known to be open, so the map's centre Poké Ball
         button can't be what we're seeing. During the flight/shake animation the ball has left
         that spot; it reappears there the moment the Pokémon breaks out, which is the cue to
-        throw again immediately rather than waiting out ``catch_timeout``. The ball is a
-        high-contrast red/white disc, so either the red dome or the white body identifies it
-        against the encounter background.
+        throw again immediately rather than waiting out ``catch_timeout``.
+
+        Read at the ball's centre button rather than at its dome. Only the dome carries the
+        ball type's colour, so testing it for red answered "no ball left" for a bag full of
+        Great/Ultra/Master Balls — the routine then fled and sat out ``no_balls_pause`` with
+        balls in hand. The centre button is identical on every type: a light, near-grey hub
+        ringed by a thick black band. Requiring *both* — some black band and a light hub —
+        is also what keeps flat scenery out: dark ground gives the band with no hub, and a
+        pale sky or snow map gives the hub with no band.
         """
-        bx, by = self.config.ball_fallback
-        radius = max(6, self.config.s(34))
-        patch = frame[max(0, by - radius):by + radius,
-                      max(0, bx - radius):bx + radius]
+        cx, cy = self.config.ball_hub
+        radius = max(8, self.config.ball_hub_radius)
+        patch = frame[max(0, cy - radius):cy + radius,
+                      max(0, cx - radius):cx + radius]
         if patch.size == 0:
             return False
         p = patch.astype(int)
-        b, g, r = p[..., 0], p[..., 1], p[..., 2]
-        red = (r > 130) & (r - g > 45) & (r - b > 45)
-        white = (r > 175) & (g > 175) & (b > 175)
-        return float((red | white).mean()) >= 0.45
+        hi, lo = p.max(axis=2), p.min(axis=2)
+        band = float((hi < 80).mean())                      # black ring around the hub
+        hub = float(((lo > 140) & (hi - lo < 45)).mean())    # the light grey hub itself
+        # Measured on a real encounter: band 0.26-0.38 and hub 0.33-0.53 across +/-25px of
+        # placement error, several radii and three device scales. The bounds sit well outside
+        # that, since the cost of reading a present ball as absent is a ten-minute pause.
+        return 0.10 <= band <= 0.70 and hub >= 0.18
 
     def _is_out_of_balls(self, frame) -> bool:
         """True when the encounter's ball-count badge reads 'x0' (the red pill at the bottom
@@ -1708,6 +1767,64 @@ class CatchRoutine:
         self._trace("goplus_start", f"Đã bấm khởi động Go Plus tại {target}.", 0.0)
         return True
 
+    # -- PokéStop spinning -----------------------------------------------------------
+    def _spin_recent(self, x: int, y: int) -> bool:
+        """True if this spot was tapped recently enough to be worth skipping."""
+        cfg = self.config
+        now = time.monotonic()
+        self._spin_seen = [s for s in self._spin_seen if now - s[0] < cfg.spin_skip_seconds]
+        r = cfg.spin_skip_radius
+        return any(abs(px - x) <= r and abs(py - y) <= r for _t, px, py in self._spin_seen)
+
+    def find_stops(self, frame):
+        """Unspun PokéStops inside the scan circle, nearest to the avatar first."""
+        cfg = self.config
+        return find_pokestops(
+            frame,
+            region=cfg.spin_region,
+            scale=Layout(*cfg.screen, scale=cfg.game_scale).s,
+            min_area=cfg.spin_min_area,
+        )
+
+    def spin_once(self, frame=None) -> bool:
+        """Tap the nearest unspun PokéStop in the scan circle. True if one was tapped.
+
+        The tap is not the end of it: PGSharp answers *every* touch that reaches the map with
+        its "Tap to Walk/Teleport — Stop AutoWalk?" dialog, which is modal and blocks the next
+        cycle until it is answered (always CANCEL — OK would teleport and stop the walk). If the
+        stop opened its photo-disc screen instead of spinning on the spot, the same sweep closes
+        that. Both live in _handle_popups already, so this only has to give them a turn.
+        """
+        cfg = self.config
+        if frame is None:
+            frame = self.device.screenshot()
+        target = next((m for m in self.find_stops(frame)
+                       if not self._spin_recent(*m.center)), None)
+        if target is None:
+            # Silent: the caller already reports its own empty cycle, and a detector trace
+            # saying the same thing in different words reads as two separate problems.
+            return False
+        x, y = target.center
+        self.device.tap(x, y)
+        self._spin_seen.append((time.monotonic(), x, y))
+        self.stats.spins += 1
+        self._trace("spin_tap", f"Bấm PokéStop tại ({x},{y}), ô {target.width}x{target.height}.", 0.0)
+        self._interruptible_sleep(cfg.spin_settle)
+        self._drain_popups()
+        return True
+
+    def _spin_for(self, seconds: float) -> None:
+        """Spend `seconds` tapping stops, one every spin_interval."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline and not self.stop_event.is_set():
+            self._wait_if_paused()
+            if self.stop_event.is_set():
+                return
+            frame = self.device.screenshot()
+            if not self._drain_popups(frame):
+                self.spin_once(frame)
+            self._interruptible_sleep(self.config.spin_interval)
+
     def _wait_no_balls(self, on_event=None) -> None:
         """Out of Poké Balls: hold off catching for no_balls_pause seconds so we don't burn
         cycles on an empty bag. Keep AutoWalk moving during the wait so the avatar keeps
@@ -1736,7 +1853,12 @@ class CatchRoutine:
                 if started and on_event:
                     self.stats.last_event = "goplus_started"
                     on_event(self.stats, False)
-            self._interruptible_sleep(cfg.no_balls_walk_interval)
+            # Spinning stops is what actually refills the bag, so spend the interval doing it
+            # rather than standing still. Works with or without a PGSharp key, unlike Go Plus.
+            if cfg.spin_on_no_balls:
+                self._spin_for(cfg.no_balls_walk_interval)
+            else:
+                self._interruptible_sleep(cfg.no_balls_walk_interval)
 
     def _poll(self, predicate, timeout: float):
         """Screenshot repeatedly until predicate(frame) is truthy or timeout. Returns its value or None."""
@@ -2448,6 +2570,9 @@ class CatchRoutine:
         bx, by = cfg.ball_fallback
         ready = self._ball_ready(frame)
         cv2.circle(img, (bx, by), max(10, cfg.s(34)), (0, 255, 0) if ready else (0, 160, 0), 4)
+        # The window "còn bóng?" is actually read in — the ball's centre button, not its dome.
+        cv2.circle(img, cfg.ball_hub, cfg.ball_hub_radius,
+                   (0, 255, 0) if ready else (0, 160, 0), 3)
         cv2.arrowedLine(img, (bx, by), (bx, by + cfg.throw_dy), (0, 255, 0), 4, tipLength=0.08)
         cv2.putText(img, "THROW", (bx + cfg.s(45), by), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, (0, 255, 0), 2)

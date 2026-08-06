@@ -84,6 +84,7 @@ class NoBallsRecoveryTests(unittest.TestCase):
             no_balls_pause=10.0,
             no_balls_walk_interval=0.0,
             goplus_after_autowalk_wait=0.0,
+            spin_on_no_balls=False,
             start_goplus_on_no_balls=True,
             quick_catch=False,
         )
@@ -120,6 +121,7 @@ class NoBallsRecoveryTests(unittest.TestCase):
                     no_balls_pause=10.0,
                     no_balls_walk_interval=0.0,
                     goplus_after_autowalk_wait=0.0,
+                    spin_on_no_balls=False,
                     start_goplus_on_no_balls=enabled,
                     quick_catch=quick,
                 )
