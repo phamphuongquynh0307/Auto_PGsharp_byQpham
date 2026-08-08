@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
-from avc.shundo import ShundoRoutine, ShundoStats
+from avc.shundo import KEEP_PENDING, ShundoRoutine, ShundoStats
 
 
 class FakeDevice:
@@ -41,6 +41,8 @@ def bare_routine():
     routine.config = SimpleNamespace(
         encounter_open_wait=3.0,
         encounter_no_answer_attempts=1,
+        nearby_recheck_attempts=6,
+        nearby_recheck_gap=0.0,
         teleport_wait=0.0,
         bar_clear_timeout=0.0,
         spawn_wait_log=20.0,
@@ -57,12 +59,62 @@ def bare_routine():
     )
     routine.stats = ShundoStats()
     routine._pending_no_answers = 0
+    routine._pending_no_target = 0
     routine.stop_event = threading.Event()
     routine.pause_event = threading.Event()
     routine._encounter_visible = lambda _frame: False
     routine._raw_target_in_bar = lambda _frame: (900, 500)
     routine._interruptible_sleep = lambda _seconds: None
     return routine
+
+
+class PendingEntryRecheckTests(unittest.TestCase):
+    """An entry the crisp capture cannot see is looked at again — but not forever.
+
+    The stream and the one-shot capture disagree for seconds at a time (measured live: 12
+    looks over 15s before the bar read occupied again), so re-looking is right. An entry that
+    despawned never comes back, though, and the old code had no way out of that.
+    """
+
+    def unseen_routine(self):
+        routine = bare_routine()
+        routine._raw_target_in_bar = lambda _frame: None
+        routine._poll = lambda _predicate, _timeout: None
+        return routine
+
+    def test_an_unseen_entry_is_looked_at_again_without_tapping(self):
+        routine = self.unseen_routine()
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("recheck", outcome)
+        self.assertEqual([], routine.device.double_taps)   # no QuickSniper item spent
+        self.assertEqual(0, routine.stats.checked)
+
+    def test_the_recheck_gives_up_instead_of_looping_forever(self):
+        routine = self.unseen_routine()
+
+        outcomes = [routine._attempt_nearby((900, 500)) for _ in range(6)]
+
+        self.assertEqual(["recheck"] * 5 + ["lost"], outcomes)
+        self.assertEqual([], routine.device.double_taps)
+
+    def test_giving_up_releases_the_entry_so_the_feed_advances(self):
+        self.assertIn("recheck", KEEP_PENDING)
+        self.assertIn("miss", KEEP_PENDING)
+        self.assertNotIn("lost", KEEP_PENDING)
+
+    def test_the_budget_refills_when_the_entry_comes_back(self):
+        routine = bare_routine()
+        seen = iter([None, None, (900, 500)])
+        routine._raw_target_in_bar = lambda _frame: next(seen)
+        routine._poll = lambda _predicate, _timeout: None
+
+        outcomes = [routine._attempt_nearby((900, 500)) for _ in range(3)]
+
+        self.assertEqual(["recheck", "recheck", "blocked"], outcomes)
+        self.assertEqual(0, routine._pending_no_target)
+        self.assertEqual([(900, 500)], routine.device.double_taps)
 
 
 class ShundoAnswerTests(unittest.TestCase):

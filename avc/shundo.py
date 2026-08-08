@@ -90,6 +90,20 @@ class ShundoConfig:
     # never double-tap the same Pokemon a second time.
     encounter_no_answer_attempts: int = 1
 
+    # A queued Nearby entry is confirmed on a crisp ADB capture before it is double-tapped,
+    # and the two capture paths do disagree: the stream can show the bar occupied while the
+    # one-shot reads the slot empty. Re-looking is right — the entry usually returns and no
+    # QuickSniper item is spent — but it needs an end. Without one, an entry that genuinely
+    # despawned parks the run on that slot for good, re-taking a full ADB capture as fast as
+    # ADB can serve them. After this many looks the entry is written off and the feed moves on.
+    #
+    # The budget is set from the one disagreement measured live: twelve looks over fifteen
+    # seconds, and then the bar read occupied again. A budget under that would have thrown away
+    # an entry that was about to work, so it sits above it — roughly 20s of looking, which is
+    # inside the range a normal cycle already spends waiting for a spawn to load.
+    nearby_recheck_attempts: int = 15
+    nearby_recheck_gap: float = 0.5     # pause between those looks, so they don't spin on ADB
+
     # Encounter confirmation: the raspberry glyph inside the bottom-left Berry button.
     # Camera and Poke Ball checks are deliberately excluded because their stale/animated pixels
     # can remain over map frames and falsely report a shiny.
@@ -233,7 +247,13 @@ class ShundoStats:
     checked: int = 0    # encounter attempts (double-taps that got an answer)
     shinies: int = 0    # encounters that actually opened
     shundos: int = 0
-    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "miss" | "nospawn" | "idle" | "popup"
+    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "miss" | "recheck" | "lost"
+                          # | "nospawn" | "idle" | "popup"
+
+
+# Outcomes that leave the queued Nearby entry in place for another look, instead of finishing
+# with it. Everything else — an answer, or giving the entry up — releases it.
+KEEP_PENDING = ("miss", "recheck")
 
 
 class ShundoRoutine:
@@ -257,6 +277,8 @@ class ShundoRoutine:
         # latter covers builds that silently block non-shiny Pokémon without a toast.
         self._pending_nearby: tuple[int, int] | None = None
         self._pending_no_answers = 0
+        # Looks spent trying to see the pending entry again on a crisp capture.
+        self._pending_no_target = 0
         # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
         # avoids teleporting, so the run cannot continue.
         self._teleport_blocked = False
@@ -597,9 +619,21 @@ class ShundoRoutine:
                     return True
         return False
 
+    # -- pending Nearby entry ---------------------------------------------------------
+    def _queue_pending(self, target: tuple[int, int]) -> None:
+        """Take `target` as the entry to work on, with both retry budgets full."""
+        self._pending_nearby = target
+        self._pending_no_answers = 0
+        self._pending_no_target = 0
+
+    def _release_pending(self) -> None:
+        self._pending_nearby = None
+        self._pending_no_answers = 0
+        self._pending_no_target = 0
+
     # -- main loop --------------------------------------------------------------------
     def _attempt_nearby(self, target: tuple[int, int]) -> str:
-        """Try one Nearby entry and return blocked/shiny/shundo/miss.
+        """Try one Nearby entry and return blocked/shiny/shundo/miss/recheck/lost.
 
         The map and occupied Nearby slot are freshly confirmed before one double-tap. If
         PGSharp keeps the screen on the map without rendering its blocked toast, that single
@@ -614,8 +648,17 @@ class ShundoRoutine:
         # move or collapse while loading; confirm the occupied slot again on this frame.
         current = self._raw_target_in_bar(frame)
         if current is None:
-            self.stats.last_event = "miss"
-            return "miss"
+            # Not an answer about this Pokémon — we simply cannot see it — so look again
+            # rather than spending the next QuickSniper item. Bounded, because an entry that
+            # despawned never comes back and the run has to move on. See nearby_recheck_*.
+            self._pending_no_target += 1
+            if self._pending_no_target >= max(1, cfg.nearby_recheck_attempts):
+                self.stats.last_event = "lost"
+                return "lost"
+            self._interruptible_sleep(cfg.nearby_recheck_gap)
+            self.stats.last_event = "recheck"
+            return "recheck"
+        self._pending_no_target = 0
         self.device.double_tap(*current)
 
         def encounter_answer(f):
@@ -770,7 +813,7 @@ class ShundoRoutine:
 
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
-        blocked | shiny | shundo | miss | nospawn | idle | popup | goplus."""
+        blocked | shiny | shundo | miss | recheck | lost | nospawn | idle | popup | goplus."""
         cfg = self.config
         if self._teleport_blocked:
             return "goplus"
@@ -787,18 +830,17 @@ class ShundoRoutine:
         # now instead of idling forever.
         if self._encounter_visible(frame):
             outcome = self._grade_encounter()
-            if outcome != "miss":
-                self._pending_nearby = None
-                self._pending_no_answers = 0
+            if outcome not in KEEP_PENDING:
+                self._release_pending()
             return outcome
 
-        # A previous double-tap got no visible answer. Retry that same Nearby entry;
-        # never consume another QuickSniper item merely because the answer timed out.
+        # A previous double-tap got no visible answer, or the entry could not be seen to tap
+        # at all. Retry that same Nearby entry; never consume another QuickSniper item merely
+        # because the answer timed out.
         if self._pending_nearby is not None:
             outcome = self._attempt_nearby(self._pending_nearby)
-            if outcome != "miss":
-                self._pending_nearby = None
-                self._pending_no_answers = 0
+            if outcome not in KEEP_PENDING:
+                self._release_pending()
             return outcome
 
         # The first cycle must check a Pokémon already present in Nearby before consuming
@@ -811,12 +853,10 @@ class ShundoRoutine:
             fresh = self.device.screenshot(fresh=True)
             initial_target = self._target_in_bar(fresh)
             if initial_target is not None:
-                self._pending_nearby = initial_target
-                self._pending_no_answers = 0
+                self._queue_pending(initial_target)
                 outcome = self._attempt_nearby(initial_target)
-                if outcome != "miss":
-                    self._pending_nearby = None
-                    self._pending_no_answers = 0
+                if outcome not in KEEP_PENDING:
+                    self._release_pending()
                 return outcome
 
         # The feed may remain visible during a transition, but it is unsafe to touch
@@ -910,12 +950,10 @@ class ShundoRoutine:
             return "nospawn"
         # Step 3: keep this QuickSniper item pending through the bounded no-answer retry.
         # It advances only after an encounter, a toast, or repeated confirmed map taps.
-        self._pending_nearby = loaded
-        self._pending_no_answers = 0
+        self._queue_pending(loaded)
         outcome = self._attempt_nearby(loaded)
-        if outcome != "miss":
-            self._pending_nearby = None
-            self._pending_no_answers = 0
+        if outcome not in KEEP_PENDING:
+            self._release_pending()
         return outcome
 
     def _grade_encounter(self, confirmed_frame=None) -> str:

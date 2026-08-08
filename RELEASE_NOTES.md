@@ -1,75 +1,49 @@
-# v1.3.0
+# v1.3.1
 
 ## Tiếng Việt
 
-### Chế độ mới: Quay PokéStop khi đi đường
+### Tối ưu bắt Pokémon liên tục
 
-- Thêm chế độ **Quay PokéStop khi đi đường** bên cạnh Auto bắt và Chấm shundo.
-- Không cần key PGSharp, không cần Go Plus: bot nhận PokéStop bằng **màu**. Stop chưa quay là một khối xanh dương sáng, quay rồi chuyển tím nên tự rơi ra khỏi vùng quét.
-- Chỉ bấm những stop nằm trong **vòng tròn quanh nhân vật**; vòng này kéo/chỉnh được trong cửa sổ căn chỉnh vì tầm với phụ thuộc mức zoom bản đồ của từng người. Dùng vòng tròn (không phải cả màn hình) để tay bot không chạm nhầm dãy icon và menu PGSharp ở rìa màn hình.
-- Chọn đốm xanh **to nhất** chứ không phải gần nhất: vòng sáng xoay quanh stop bắn ra những mảnh xanh nhỏ, xếp theo khoảng cách thì một mảnh vụn thắng cả cái stop của nó và cú bấm rơi xuống bản đồ trống.
-- Nhớ chỗ vừa bấm trong 60 giây, nên một stop ngoài tầm (vẫn xanh) không ăn hết mọi chu kỳ trong khi AutoWalk đang đưa các stop thật đi ngang.
-- AutoWalk chỉ được bật **một lần** lúc bắt đầu. Ở chế độ này không có stop trong tầm không có nghĩa là phải đi chỗ khác — stop đứng yên tại chỗ của nó — nên bấm lại hàng AutoWalk mỗi chu kỳ chỉ tổ tắt mất cái đang chạy.
-- Mỗi lần chạm bản đồ PGSharp đều hỏi "Stop AutoWalk?"; bot luôn bấm **CANCEL**. Nếu stop mở màn ảnh photo-disc thì cùng lượt quét đó đóng luôn.
+- Bỏ UI dump nặng khỏi đường mở encounter. Tool giờ chỉ đọc stream hình ảnh và ném ngay ở frame đầu tiên thấy nút Berry, không chờ hết timeout.
+- Luôn gửi một tap mở đầu rất ngắn trước double-tap Nearby. Ngay cả khi thiết lập là `0`, tool giữ sàn 0,12 giây để PGSharp không bỏ mất lần mở encounter đầu tiên.
+- Timeout mở encounter trở thành trần an toàn cho màn chuyển trắng chậm; trường hợp bình thường vẫn đi tiếp ngay khi game sẵn sàng.
+- Sau khi bắt xong, thời gian **chờ Nearby cập nhật** giờ là thời gian refresh thật. Tool xóa bằng chứng slot cũ, chỉ dùng frame chụp sau thời gian chờ để xác nhận con tiếp theo, tránh bấm lại dòng Pokémon vừa bị xóa rồi mất thêm 4 giây timeout.
+- Mỗi Pokémon mới bắt đầu trên một phiên cảm ứng sạch. Tránh trạng thái pointer còn sót sau cú vuốt ném bóng qua Wi-Fi làm cú tap Nearby kế tiếp bị gửi nhưng PGSharp không nhận.
+- Kết quả thực tế: loại bỏ nhịp xen kẽ “bắt thành công → tap hỏng → chờ 4 giây → thử lại”; khoảng con 1 đến con 2 giờ chủ yếu còn thời gian refresh 1 giây và animation thật của game.
 
-### Hết bóng: vừa đi vừa quay stop
+### Sửa Shundo bị kẹt ở một Pokémon đã mất
 
-- Auto bắt có thêm tùy chọn **Hết bóng: vừa đi vừa quay PokéStop (không cần key)**.
-- Quay stop mới là thứ thật sự làm đầy lại túi, nên 10 phút chờ giờ không đứng yên nữa. Khác Go Plus, cách này chạy được cả với **Bắt nhanh không key**.
-- Thời gian chờ hết bóng thành **thiết lập chỉnh được (phút)** thay vì cố định 10 phút, vì stop dày hay thưa là chuyện của từng khu.
-
-### Sửa: còn bóng loại khác thì ném tiếp, đừng báo hết
-
-- Trước đây bot dò quả bóng bằng **màu đỏ ở phần vòm**. Hết Poké Ball thường, game tự đổi sang Great (xanh), Ultra (đen/vàng) hay Master (tím) — dò không ra đỏ, bot tưởng hết bóng, chạy trốn rồi ngồi im 10 phút trong khi túi vẫn đầy.
-- Giờ đọc ở **nút tròn giữa quả bóng**: lõi xám sáng nằm trong vành đen dày. Chỗ này giống hệt nhau ở mọi loại bóng, chỉ có vòm mới đổi màu. Bot ném tới khi thật sự không còn quả nào.
-- Bắt buộc thấy **cả hai** (vành đen và lõi sáng) nên nền tối (bản đồ đêm, cỏ tối) hay nền sáng (tuyết, trời) đều không bị nhận nhầm là còn bóng.
-- Cửa sổ xác nhận hết bóng nới 1,2 → 2,0 giây để chịu được lúc game đang chuyển từ loại bóng này sang loại kia, khi ô chọn bóng trống vài khung hình dù túi chưa hết.
-- Live view vẽ thêm vòng tròn ngay chỗ đang đọc, nhìn màn hình là biết bot bắt đúng chỗ chưa.
-
-### Khác
-
-- Sửa lỗi build: file spec giờ **hỏi trước** xem Tcl/Tk của máy có chạy được không, chỉ ép TCL_LIBRARY/TK_LIBRARY khi nó thật sự hỏng. Ép sẵn như trước làm PyInstaller dò tkinter thất bại và loại luôn tkinter, ra file EXE chết ngay khi mở.
+- Khi stream thấy entry nhưng ảnh ADB nét tạm thời không thấy, tool giữ nguyên entry và nhìn lại thay vì tiêu tốn mục QuickSniper tiếp theo.
+- Giới hạn việc nhìn lại: tối đa 15 lần, cách nhau 0,5 giây. Entry đã despawn được bỏ qua để thanh feed tiếp tục chạy, thay vì chụp ADB vô hạn.
+- Nhật ký phân biệt rõ **đang nhìn lại** và **entry đã mất**; thời gian nhìn lại không còn bị tính nhầm là hoạt động, nên cảnh báo idle vẫn hoạt động đúng.
 
 ### Kiểm chứng
 
-- 131 bài test đạt, không bài nào lỗi.
-- Bộ dò bóng chạy đúng trên ảnh chụp thật 1220×2712: đo được vành đen 0,26–0,38 và lõi sáng 0,33–0,53, ổn định qua lệch ±25px, nhiều bán kính và 3 mức tỉ lệ máy — ngưỡng đặt cách xa khoảng đó. Khung bóng đang bay và các khung màn hình bản đồ đều đọc đúng là "không có bóng".
+- 140 bài test đạt, không bài nào lỗi; 17 bài phụ thuộc môi trường được bỏ qua đúng điều kiện.
+- Đã kiểm tra trực tiếp trên thiết bị 1220×2712 qua ADB Wi-Fi và đối chiếu timestamp tap → encounter → ném trong log.
 - EXE Windows build thành công.
 
 ---
 
 ## English
 
-### New mode: spin PokéStops while walking
+### Smoother consecutive catches
 
-- **Spin PokéStops while walking** joins Auto catch and Shundo check as a third mode.
-- No PGSharp key and no Go Plus: stops are recognized by **colour**. An unspun stop is one flat bright blue; a spun one turns violet and drops out of the scan by itself.
-- Only stops inside the **circle around your avatar** are tapped, and that circle is drag/resizable in the calibration window, since how far a stop can sit and still be in range depends on your map zoom rather than on the app. A circle rather than the whole screen keeps taps off the right icon rail and the PGSharp menu column at the screen edges.
-- The **biggest** blue blob wins, not the nearest: the rings spinning around a stop throw off bright blue fragments, and ranking by distance let a fragment beat the very stop it belonged to, landing the tap on bare map.
-- Tapped spots are remembered for 60 seconds, so a stop that stayed blue because it was out of range cannot eat every cycle while the walk carries real ones past.
-- AutoWalk is started **once**, at the start. Here an empty cycle does not mean the area dried up — stops stand where they stand — so re-tapping that row every cycle could achieve exactly one thing: stopping a walk that was running fine.
-- Every map touch makes PGSharp raise its "Stop AutoWalk?" dialog; the bot always answers **CANCEL**. If a stop opens its photo-disc screen instead of spinning in place, the same sweep closes it.
+- Removed the expensive UI hierarchy dump from the encounter-opening path. The routine now reads only the video stream and throws on the first frame where the Berry button is ready.
+- A very short priming tap always precedes the Nearby double-tap. Even a configured value of `0` keeps a 120 ms floor so PGSharp does not drop the first encounter gesture.
+- The encounter timeout is now only a safety ceiling for slow white transitions; normal openings continue immediately.
+- **Wait for Nearby refresh** is now a real post-catch refresh period. Old slot evidence is discarded, and only a frame captured after that period may prime the next cycle. This prevents tapping the consumed row and then paying a four-second failed-open timeout.
+- Every next Pokémon starts on a clean touch-control session, preventing a lost pointer-up after a Wi-Fi throw from silently swallowing the following Nearby tap.
+- In practice this removes the alternating rhythm of “successful catch → dead tap → four-second timeout → retry”; the remaining gap is the configured one-second refresh plus the game's real animation time.
 
-### Out of balls: spin stops during the hold
+### Fixed Shundo getting stuck on a lost entry
 
-- Catching gains an **Out of balls: spin PokéStops while walking (no key needed)** option.
-- Spinning stops is what actually refills the bag, so the ten-minute hold is no longer spent standing still — and unlike Go Plus this path works in **Quick Catch without a key**.
-- The hold's length is now a **setting in minutes** instead of a fixed ten, because how dense the stops are is a local matter.
-
-### Fixed: a different ball type is not an empty bag
-
-- The ball was detected by the **red of its dome**. When the last Poké Ball was spent the game switched to Great (blue), Ultra (black/yellow) or Master (purple), the red test found nothing, and the bot fled the encounter and sat out a ten-minute pause with a full bag.
-- Readiness is now read at the **ball's round centre button** — a light grey hub inside a thick black band — which is identical on every ball type; only the dome carries the type's colour. Throwing continues until no ball of any type is left.
-- **Both** halves are required (some black band and a light hub), so dark scenery (night maps, dark grass) and pale scenery (snow, sky) cannot be mistaken for a ball.
-- The empty-bag confirmation window widens from 1.2 to 2.0 seconds so it outlasts the swap the game does when one ball type runs out and the next takes over, which briefly empties the selector while the bag is not.
-- The live view draws the window that is actually being read, so a mis-aimed detector is visible at a glance.
-
-### Also
-
-- Build fix: the spec now **asks first** whether this Python's Tcl/Tk starts, and only forces TCL_LIBRARY/TK_LIBRARY when it genuinely cannot. Forcing them unconditionally broke PyInstaller's own tkinter probe, which then excluded tkinter and produced an EXE that died before the GUI could open.
+- When the stream sees an entry but a crisp ADB capture temporarily does not, the same entry is rechecked instead of consuming the next QuickSniper item.
+- Rechecks are bounded to 15 attempts at 0.5-second intervals. A genuinely despawned entry is released so the feed can advance instead of taking ADB captures forever.
+- The log now distinguishes **rechecking** from a **lost entry**, and rechecking no longer counts as activity, so idle alerts remain accurate.
 
 ### Verification
 
-- 131 tests pass, none failing.
-- The ball detector was measured on a real 1220×2712 screenshot: black band 0.26-0.38 and light hub 0.33-0.53, stable across ±25px of placement error, several radii and three device scales — the thresholds sit well outside that range. A ball mid-throw and map screens all read correctly as "no ball".
+- 140 tests pass with no failures; 17 environment-dependent tests are skipped under their expected conditions.
+- Verified live on a 1220×2712 device over Wi-Fi ADB by comparing tap → encounter → throw timestamps in the diagnostic log.
 - The Windows executable builds successfully.

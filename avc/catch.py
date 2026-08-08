@@ -93,8 +93,10 @@ class CatchConfig:
     # A single tap lands on the slot first, then the double-tap follows after this pause. The
     # lone tap wakes/selects the row so the double-tap that follows is read as a real
     # double-tap rather than the first two touches of a cold slot. Set to 0 to go straight to
-    # the double-tap.
+    # the minimum safety delay below; fully removing the priming tap made this phone accept only
+    # every other encounter gesture.
     pre_tap_delay: float = 0.8
+    pre_tap_min_delay: float = 0.12
     # Corroboration for a Nearby sighting: a second hit within this many seconds confirms the
     # first. Counting over a window rather than over *consecutive* frames is what stops one
     # smeared stream frame from wiping the evidence and leaving the bot idle in front of a full
@@ -253,6 +255,10 @@ class CatchConfig:
     # instant the expected state appears, so short cases stay fast and slow ones don't get missed.
     anchor_timeout: float = 1.5     # max wait for the nearby bar to (re)appear at cycle start
     encounter_timeout: float = 3.0  # max wait for the encounter to open after tapping a slot
+    # Some phones spend longer than encounter_timeout on the white map -> encounter transition.
+    # This is an upper bound, not a fixed sleep: polling returns on the first Berry-button frame,
+    # so a normal fast opening does not pay any of the extra budget.
+    encounter_transition_grace: float = 2.0
     catch_timeout: float = 6.0      # max wait per throw for the encounter to end (ball gone)
     settle_after_catch: float = 1.2  # let the nearby list refresh before the next cycle
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
@@ -1873,6 +1879,50 @@ class CatchRoutine:
             if time.monotonic() >= deadline:
                 return None
 
+    def _engage_nearby(self, slot: tuple[int, int]) -> None:
+        """Prime a Nearby row, then send the double-tap that opens its encounter."""
+        cfg = self.config
+        self.device.tap(*self._jitter(*slot))
+        delay = max(cfg.pre_tap_min_delay, cfg.pre_tap_delay)
+        self._trace("nearby_pre_tap",
+                    f"Tap mở đầu tại {slot}; chờ {delay:.2f}s rồi double-tap.", 0.0)
+        self._interruptible_sleep(delay)
+        if not self.stop_event.is_set():
+            self._double_tap(*slot)
+
+    def _wait_for_engaged_encounter(self) -> tuple[int, int] | None:
+        """Poll the cheap video stream until the just-tapped encounter is actually ready.
+
+        A UI hierarchy dump made the common path 2-3 seconds slower than the game itself.  The
+        Berry detector already supplies the exact state needed here, and this poll returns on its
+        first positive frame; the combined timeout is only a ceiling for genuinely slow opens.
+        """
+        cfg = self.config
+        timeout = max(0.0, cfg.encounter_timeout) + max(0.0, cfg.encounter_transition_grace)
+        return self._poll(self._ball_in, timeout)
+
+    def _settle_after_encounter(self) -> None:
+        """Let PGSharp replace the consumed Nearby row before another gesture can target it.
+
+        The old adaptive poll returned immediately on the still-rendered sprite from the catch
+        that had just closed.  The next cycle then tapped that dead row and spent four seconds
+        timing out.  Here the configured settle value is a real refresh floor.  Only a frame
+        captured after the floor may seed the next cycle's two-frame corroboration.
+        """
+        cfg = self.config
+        self._nearby_last_seen_at = None
+        delay = max(0.0, cfg.settle_after_catch)
+        if delay <= 0 or self.stop_event.is_set():
+            return
+        self._interruptible_sleep(delay)
+        if self.stop_event.is_set():
+            return
+        found = self._scan_slots(self.device.screenshot(next_frame=True))
+        if found is not None:
+            self._nearby_last_seen_at = time.monotonic()
+            self._trace("settle_next_ready",
+                        f"Nearby đã refresh; Pokémon kế tiếp sẵn tại {found}.", 0.0)
+
     def _throw_vector(self, ball_xy: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
         """Start and end point of one flick. The start is jittered in both axes so the throw
         isn't pixel-identical every time, but the end only follows it — jittering the two ends
@@ -2053,26 +2103,14 @@ class CatchRoutine:
                             "Hết lượt ném nhưng encounter đã đóng; bỏ qua tap thoát.", 0.0)
         if threw:
             self.stats.encounters += 1
-        if cfg.settle_after_catch > 0:
-            # Settle until the *next* Pokemon is on the bar, not merely until the map is back.
-            # Two thirds of a cycle used to be spent on the map, and the tail of it was this: the
-            # bar had already refilled while the routine was still waiting to be told the map had
-            # returned, then went round the whole preamble again before looking. Ending the wait
-            # on a sighting hands the next cycle a bar it can engage at once.
-            #
-            # Landing a sighting here also stamps _nearby_last_seen_at, so the corroboration in
-            # _occupied_slot_in is already half satisfied and the next cycle can confirm on its
-            # first frame instead of waiting for a second one.
-            #
-            # _bar_visible is still accepted, so an empty bar ends the wait as soon as the map is
-            # back rather than burning the whole budget on a spawn that may not come.
-            found = self._poll(
-                lambda f: self._scan_slots(f) or (True if self._bar_visible(f) else None),
-                cfg.settle_after_catch,
-            )
-            if isinstance(found, tuple):
-                self._trace("settle_next_ready",
-                            f"Encounter đóng, Pokémon kế tiếp đã sẵn tại {found}.", 0.0)
+            # A normal throw and the next Nearby tap used to share one scrcpy control socket.
+            # Wi-Fi can lose the throw's final UP while keeping that socket alive, so the next
+            # tap is delivered into stale pointer state and silently ignored.  Starting the next
+            # encounter from a clean socket is cheaper than the four-second failed-open timeout.
+            close_control = getattr(self.device, "close_control", None)
+            if close_control is not None:
+                close_control()
+        self._settle_after_encounter()
         return threw
 
     # Derived, not chosen: the measurement is a point on a grid of CAL_REFINE_STEP, so a gap
@@ -2399,64 +2437,25 @@ class CatchRoutine:
             self._interruptible_sleep(cfg.idle_poll)
             return False
 
-        # Step 2: engage it. A single tap goes in first and the double-tap follows after
-        # pre_tap_delay. The ball-selector poll returns the instant the encounter opens; if it
-        # never shows within encounter_timeout the slot was empty or the Pokémon fled.
-        if cfg.pre_tap_delay > 0:
-            self.device.tap(*self._jitter(*slot))
-            self._trace("nearby_pre_tap",
-                        f"Tap đơn mở đầu tại {slot}; chờ {cfg.pre_tap_delay:.1f}s rồi double-tap.",
-                        0.0)
-            self._interruptible_sleep(cfg.pre_tap_delay)
-            if self.stop_event.is_set():
-                return False
-            # No encounter check in between: the single tap on its own does not open the
-            # encounter, and the ball-selector test can read positive on the map right after it,
-            # which threw a ball at nothing. The double-tap below is what actually engages the
-            # Pokémon, so it always runs.
+        # Step 2: prime the row, then engage it.  Even the GUI's zero-delay setting keeps a tiny
+        # 120ms floor: without that primer this PGSharp build accepted only every other gesture,
+        # which cost several seconds per miss instead of saving a fraction of one.
+        self._engage_nearby(slot)
+        if self.stop_event.is_set():
+            return False
         self._mark("tap-don")
         self._last_engage_at = time.monotonic()
-        self._double_tap(*slot)
         tapped_at = time.monotonic()
         self._trace(
             "nearby_tap",
             f"Đã xác nhận Pokémon tại {slot} và bấm mở encounter.",
             0.0,
         )
-        # Start the gesture on the first stream frame where the throwable ball is ready.
-        # The early centre-ball signal appears before the selector animation. A short
-        # fallback cap prevents a lagging stream from stalling the catch.
-        ball_xy = self._poll(self._ball_in, min(cfg.encounter_timeout, 1.5))
+        # Start the gesture on the first stream frame where the throwable ball is ready.  A slow
+        # white transition is kept inside this cycle instead of being misreported as a failed
+        # encounter and rediscovered by the next one.
+        ball_xy = self._wait_for_engaged_encounter()
         self._mark("cho-encounter")
-        if ball_xy is None:
-            # Do not rely on the user's device behaving like ours. If a fresh frame still
-            # shows the same occupied Nearby slot, the first double-tap did not open it.
-            # Retry once with a plain tap; if the sidebar has disappeared, never tap blindly.
-            retry_frame = self.device.screenshot(next_frame=True)
-            # The encounter may simply have been slow: check this newer frame before touching
-            # anything. On devices that keep the sidebars visible during an encounter the
-            # "slot still occupied" test below is true even once it opened, so without this
-            # the retry fires a stray tap onto the encounter screen.
-            ball_xy = self._ball_in(retry_frame)
-            if ball_xy is not None:
-                self._trace("encounter_late_open",
-                            "Encounter mở trễ; bỏ qua tap thử lại và ném luôn.", 0.0)
-                return self._finish_encounter(ball_xy)
-            retry_slot = self._occupied_slot_in(retry_frame)
-            same_slot = (
-                retry_slot is not None
-                and abs(retry_slot[0] - slot[0]) <= cfg.s(80)
-                and abs(retry_slot[1] - slot[1]) <= cfg.s(80)
-            )
-            if same_slot:
-                self.device.tap(*retry_slot)
-                self._trace(
-                    "nearby_tap_retry",
-                    f"Nearby vẫn còn sau double-click; thử lại một tap tại {retry_slot}.",
-                    0.0,
-                )
-            # Slow MuMu streams can lag the ball in; spend the rest of encounter_timeout on it.
-            ball_xy = self._poll(self._ball_in, max(0.0, cfg.encounter_timeout - 1.5))
         if self.stop_event.is_set():
             return False
         if ball_xy is None:

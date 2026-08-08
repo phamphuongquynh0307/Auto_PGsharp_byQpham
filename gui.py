@@ -321,6 +321,12 @@ LANG = {
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
     "msg_s_miss":    {"vi": "(chưa xác nhận được trạng thái — giữ nguyên Pokémon để kiểm tra lại)",
                        "en": "(state not confirmed — keeping the same Pokémon for another check)"},
+    # Not an answer about the Pokémon — the bot simply cannot see it to tap. Says so, instead
+    # of the line above, which reads as if an IV/shiny check were in progress.
+    "msg_s_recheck": {"vi": "(ảnh nét chưa thấy Pokémon trên thanh @ — nhìn lại, chưa bấm)",
+                      "en": "(the crisp capture cannot see the Pokémon on the @ bar — looking again, no tap yet)"},
+    "msg_s_lost":    {"vi": "(thanh @ không còn con này — bỏ qua, đi tiếp mục feed kế)",
+                      "en": "(the @ bar no longer shows this one — giving it up, moving to the next feed entry)"},
     "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
                       "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
     "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
@@ -2262,11 +2268,18 @@ class App:
                 self.log_queue.put(self.tr("msg_s_flee_failed"))
             elif outcome == "miss":
                 self.log_queue.put(self.tr("msg_s_miss"))
+            elif outcome == "recheck":
+                self.log_queue.put(self.tr("msg_s_recheck"))
+            elif outcome == "lost":
+                self.log_queue.put(self.tr("msg_s_lost"))
             elif outcome == "nospawn":
                 self.log_queue.put(self.tr("msg_s_nospawn"))
             elif outcome == "idle":
                 self.log_queue.put(self.tr("msg_s_idle"))
-            self._tick_alerts(stats, outcome not in ("idle", "popup"), shundo=True)
+            # A recheck is the bot standing still waiting to see the bar again, so it must not
+            # count as activity — otherwise a run stuck looking at nothing never trips the
+            # idle alert. Giving the entry up does advance the feed, so that one does.
+            self._tick_alerts(stats, outcome not in ("idle", "popup", "recheck"), shundo=True)
 
         dim = self.dim_screen.get()
         try:
