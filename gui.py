@@ -29,6 +29,8 @@ import numpy as np
 
 from avc import diag
 from avc.catch import CatchConfig, CatchRoutine
+from avc.coord_shundo import CoordShundoConfig, CoordShundoRoutine
+from avc.coord_source import CoordBridge, CoordQueue
 from avc.device import Device
 from avc.shundo import ShundoConfig, ShundoRoutine
 from avc.spin import SpinRoutine
@@ -49,6 +51,9 @@ CALIB_ITEMS = [
     ("out_of_balls_region", "region", "catch",  "cal_noball",  "#ff8800"),
     ("pill_region",         "region", "shundo", "cal_pill",    "#3399ff"),
     ("toast_region",        "region", "shundo", "cal_toast",   "#cc66ff"),
+    ("teleport_xy",         "point",  "coord", "cal_teleport", "#00d2d3"),
+    ("teleport_input_xy",   "point",  "coord", "cal_coord_input", "#54a0ff"),
+    ("teleport_ok_xy",      "point",  "coord", "cal_coord_ok", "#1dd1a1"),
     ("spin_region",         "region", "catch",  "cal_spin",    "#00e5ff"),
 ]
 
@@ -57,6 +62,7 @@ CALIB_GROUP_FIELDS = {
     "quick": ("nearby_slot", "ball_fallback", "berry_start", "berry_end", "flee_xy",
               "pokestop_close_xy", "out_of_balls_region"),
     "shundo": ("flee_xy", "pill_region", "toast_region"),
+    "coord": ("teleport_xy", "teleport_input_xy", "teleport_ok_xy"),
     # Only the scan circle: the spin mode taps what it finds inside it and needs no other
     # fixed point. Flee comes along because a Go Plus catch can drop an encounter on top of
     # the map, and leaving it is the one blind tap this mode makes.
@@ -238,6 +244,7 @@ LANG = {
     "cal_group_catch": {"vi": "Bắt Pokémon", "en": "Catching"},
     "cal_group_both":  {"vi": "Dùng chung", "en": "Shared"},
     "cal_group_shundo":{"vi": "Shundo", "en": "Shundo"},
+    "cal_group_coord": {"vi": "Discord Coord", "en": "Discord Coord"},
     "cal_group_normal": {"vi": "Bắt thường (có key)", "en": "Normal catch (with key)"},
     "cal_group_quick":  {"vi": "Bắt nhanh (không key)", "en": "Quick catch (no key)"},
     "cal_hint":      {"vi": "Kéo dấu (+) tới đúng nút/pokémon; kéo góc khung để đổi kích thước. "
@@ -259,6 +266,10 @@ LANG = {
     "cal_nearby":    {"vi": "Điểm bấm Pokémon (nearby)", "en": "Pokémon tap (nearby)"},
     "cal_ball":      {"vi": "Điểm ném bóng", "en": "Ball throw point"},
     "cal_berry_start": {"vi": "Quick Catch: nút Berry", "en": "Quick Catch: Berry button"},
+    "cal_pg_menu": {"vi": "Nút mở menu PGSharp", "en": "Open PGSharp menu"},
+    "cal_teleport": {"vi": "Dòng Teleport", "en": "Teleport row"},
+    "cal_coord_input": {"vi": "Ô nhập Coordinates", "en": "Coordinates input"},
+    "cal_coord_ok": {"vi": "Nút OK Teleport", "en": "Teleport OK button"},
     "cal_berry_end": {"vi": "Quick Catch: kéo Berry tới", "en": "Quick Catch: Berry drag target"},
     "cal_flee":      {"vi": "Nút Flee (thoát)", "en": "Flee button"},
     "cal_camera":    {"vi": "Khung quét camera (chung)", "en": "Camera scan box (shared)"},
@@ -291,6 +302,7 @@ LANG = {
                             "Untick 'Control with mouse' to just watch."},
     "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
     "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
+    "mode_coord_shundo": {"vi": "Shundo từ Discord Coord", "en": "Shundo from Discord coords"},
     "mode_spin":     {"vi": "Quay PokéStop khi đi đường", "en": "Spin PokéStops while walking"},
     "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
     "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
@@ -319,6 +331,13 @@ LANG = {
     "st_shiny":      {"vi": "✨ SHINY — chờ bạn xử lý!", "en": "✨ SHINY — waiting for you!"},
     "msg_s_shundo":  {"vi": "🌟💯 SHUNDO!!! Bot {} — vào máy bắt ngay!", "en": "🌟💯 SHUNDO!!! Bot {} — go catch it now!"},
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
+    "msg_coord_idle": {"vi": "(đang chờ coord từ extension — hàng đợi hiện trống)",
+                         "en": "(waiting for a coordinate from the extension — queue is empty)"},
+    "msg_coord_using": {"vi": "→ Đang chấm {}{} | còn {} coord", "en": "→ Checking {}{} | {} coords left"},
+    "msg_coord_bridge": {"vi": "✓ Bộ nhận Discord Coord đang chạy tại 127.0.0.1:{}.",
+                           "en": "✓ Discord Coord receiver is listening on 127.0.0.1:{}."},
+    "msg_coord_bridge_fail": {"vi": "✗ Không mở được bộ nhận Discord Coord: {}",
+                                "en": "✗ Could not start the Discord Coord receiver: {}"},
     "msg_s_miss":    {"vi": "(chưa xác nhận được trạng thái — giữ nguyên Pokémon để kiểm tra lại)",
                        "en": "(state not confirmed — keeping the same Pokémon for another check)"},
     # Not an answer about the Pokémon — the bot simply cannot see it to tap. Says so, instead
@@ -411,6 +430,10 @@ class App:
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.routine: CatchRoutine | None = None
+        self.coord_queue = CoordQueue()
+        self.coord_bridge = CoordBridge(self.coord_queue)
+        self._coord_bridge_error = ""
+        self._coord_idle_logged = False
         self.device: Device | None = None
         self.worker: threading.Thread | None = None
         self.paused = False
@@ -437,9 +460,16 @@ class App:
         self._apply_settings(data)
         self._sync_settings_visibility()
         self._retranslate()
+        try:
+            port = self.coord_bridge.start()
+            self._log(self.tr("msg_coord_bridge").format(port))
+        except OSError as error:
+            self._coord_bridge_error = str(error)
+            self._log(self.tr("msg_coord_bridge_fail").format(error))
         self.refresh_devices()
         self.root.after(100, self._drain_log)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.bind("<Destroy>", self._on_root_destroy, add="+")
 
     def tr(self, key: str) -> str:
         return LANG[key][self.lang]
@@ -491,7 +521,7 @@ class App:
         mode_row = ttk.Frame(self.tab_main)
         mode_row.pack(fill="x", **pad)
         self._label(mode_row, "mode").pack(side="left")
-        self.mode = "catch"            # "catch" | "shundo" | "spin"
+        self.mode = "catch"            # "catch" | "shundo" | "coord_shundo" | "spin"
         self.mode_var = tk.StringVar()
         self.mode_combo = ttk.Combobox(mode_row, textvariable=self.mode_var, state="readonly", width=28)
         self.mode_combo.pack(side="left", padx=6)
@@ -839,7 +869,7 @@ class App:
             (self._grp_pace, catching),
             (self._grp_shared, True),
             (self._grp_spin, spin_used),
-            (self._grp_shundo, self.mode == "shundo"),
+            (self._grp_shundo, self.mode in ("shundo", "coord_shundo")),
             (self._grp_discord, True),
         ):
             frame.pack_forget()
@@ -869,7 +899,8 @@ class App:
         self.save_settings()
 
     # -- mode / shundo action selectors ----------------------------------------
-    MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"), ("spin", "mode_spin"))
+    MODES = (("catch", "mode_catch"), ("shundo", "mode_shundo"),
+             ("coord_shundo", "mode_coord_shundo"), ("spin", "mode_spin"))
     CATCH_STYLES = (("normal", "catch_normal"), ("quick", "catch_quick"))
     ACTIONS = (("pause", "act_pause"), ("stop", "act_stop"))
     SHINY_ACTIONS = (("skip", "act_skip"), ("pause", "act_pause"))
@@ -987,7 +1018,7 @@ class App:
         # silently keeps it enabled grows a timing.log for the rest of the user's life.
         self.trace_timing.set(data.get("trace_timing", False))
         self.show_advanced.set(bool(data.get("show_advanced", False)))
-        if data.get("mode") in ("catch", "shundo", "spin"):
+        if data.get("mode") in ("catch", "shundo", "coord_shundo", "spin"):
             self.mode = data["mode"]
         if data.get("catch_style") in ("normal", "quick"):
             self.catch_style = data["catch_style"]
@@ -1085,8 +1116,13 @@ class App:
                 self.device.kill_server()
             except Exception:  # noqa: BLE001
                 pass
+        self.coord_bridge.stop()
         self.save_settings()
         self.root.destroy()
+
+    def _on_root_destroy(self, event) -> None:
+        if event.widget is self.root:
+            self.coord_bridge.stop()
 
     # -- device ---------------------------------------------------------------
     OFFLINE_TAG = " (offline)"
@@ -1492,8 +1528,9 @@ class App:
             spin_cfg = self._apply_manual(
                 self._spin_config(CatchConfig()).scale_to(*self._pv_size, dens), "catch")
             self._pv_dets = {"catch": CatchRoutine(dev, catch_cfg),
-                             "shundo": ShundoRoutine(dev, shundo_cfg),
-                             "spin": SpinRoutine(dev, spin_cfg)}
+                              "shundo": ShundoRoutine(dev, shundo_cfg),
+                              "coord_shundo": ShundoRoutine(dev, shundo_cfg),
+                              "spin": SpinRoutine(dev, spin_cfg)}
             # Only stop the stream on close if we were the ones who started it; while the bot
             # runs it owns the stream and pulling it out from under the routine would stall it.
             self._pv_owns_stream = dev._stream is None
@@ -1742,6 +1779,7 @@ class App:
         """Auto positions (device px) for this screen, used as starting handles."""
         c = CatchConfig().scale_to(w, h, dens)
         s = ShundoConfig().scale_to(w, h, dens)
+        cs = CoordShundoConfig().scale_to(w, h, dens)
         # Through _spin_config so the handle opens on the circle the radius setting describes,
         # rather than on the bare dataclass default the user never chose.
         spin = self._spin_config(CatchConfig()).scale_to(w, h, dens)
@@ -1755,6 +1793,9 @@ class App:
             "out_of_balls_region": list(c.out_of_balls_region),
             "pill_region":         list(s.pill_region),
             "toast_region":        list(s.toast_region),
+            "teleport_xy":         list(cs.teleport_xy),
+            "teleport_input_xy":   list(cs.teleport_input_xy),
+            "teleport_ok_xy":      list(cs.teleport_ok_xy),
             "spin_region":         list(spin.spin_region),
         }
 
@@ -1808,7 +1849,8 @@ class App:
             cv.create_image(0, 0, anchor="nw", image=self._cal_photo)
         groups = ttk.Notebook(body); groups.pack(side="left", fill="y", padx=(10, 0))
         for mode, title in (("normal", "cal_group_normal"), ("quick", "cal_group_quick"),
-                            ("shundo", "cal_group_shundo"), ("spin", "cal_group_spin")):
+                            ("shundo", "cal_group_shundo"), ("coord", "cal_group_coord"),
+                            ("spin", "cal_group_spin")):
             page = ttk.Frame(groups)
             groups.add(page, text=self.tr(title))
             for field, kind, item_mode, key, color in self._cal_items(mode):
@@ -1827,9 +1869,9 @@ class App:
             ttk.Button(allrow, text=self.tr("cal_center_all"),
                        command=lambda g=mode: self._cal_center_all(g)).pack(fill="x")
         self._cal_groups = groups
-        self._cal_group = ({"shundo": "shundo", "spin": "spin"}.get(self.mode)
-                           or self.catch_style)
-        groups.select({"normal": 0, "quick": 1, "shundo": 2, "spin": 3}[self._cal_group])
+        self._cal_group = ({"shundo": "shundo", "coord_shundo": "coord", "spin": "spin"}.get(self.mode)
+                            or self.catch_style)
+        groups.select({"normal": 0, "quick": 1, "shundo": 2, "coord": 3, "spin": 4}[self._cal_group])
         groups.bind("<<NotebookTabChanged>>", self._cal_group_changed)
         self._cal_active = None
         cv.bind("<ButtonPress-1>", self._cal_press)
@@ -1932,7 +1974,7 @@ class App:
             self._cal_center(field)
 
     def _cal_group_changed(self, _event=None) -> None:
-        self._cal_group = ("normal", "quick", "shundo", "spin")[self._cal_groups.index("current")]
+        self._cal_group = ("normal", "quick", "shundo", "coord", "spin")[self._cal_groups.index("current")]
         self._cal_active = None
         self._cal_redraw()
 
@@ -2078,6 +2120,13 @@ class App:
                 cfg.pill_region = R("pill_region")
             if R("toast_region"):
                 cfg.toast_region = R("toast_region")
+            if mode == "coord_shundo":
+                if P("teleport_xy"):
+                    cfg.teleport_xy = P("teleport_xy")
+                if P("teleport_input_xy"):
+                    cfg.teleport_input_xy = P("teleport_input_xy")
+                if P("teleport_ok_xy"):
+                    cfg.teleport_ok_xy = P("teleport_ok_xy")
         return cfg
 
     def on_play(self) -> None:
@@ -2099,9 +2148,13 @@ class App:
                 dev_dens = self.device.density()
             except Exception:  # noqa: BLE001
                 dev_size = dev_dens = None
-            if self.mode == "shundo":
-                cfg = ShundoConfig(
-                    spawn_timeout=max(0.0, float(self.tp_wait.get())),
+            if self.mode in ("shundo", "coord_shundo"):
+                config_type = CoordShundoConfig if self.mode == "coord_shundo" else ShundoConfig
+                cfg = config_type(
+                    # Discord Coord must never consume another coordinate merely because
+                    # this spawn is slow. It waits until the current spawn can be checked.
+                    spawn_timeout=(0.0 if self.mode == "coord_shundo"
+                                   else max(0.0, float(self.tp_wait.get()))),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
@@ -2110,13 +2163,17 @@ class App:
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
-                cfg = self._apply_manual(cfg, "shundo")
-                self.routine = ShundoRoutine(self.device, cfg)
+                manual_mode = "coord_shundo" if self.mode == "coord_shundo" else "shundo"
+                cfg = self._apply_manual(cfg, manual_mode)
+                if self.mode == "coord_shundo":
+                    self.routine = CoordShundoRoutine(self.device, self.coord_queue, cfg)
+                else:
+                    self.routine = ShundoRoutine(self.device, cfg)
                 self.routine._on_waiting = lambda s: self.log_queue.put(self.tr("msg_s_waiting").format(s))
                 # If the routine re-derives coordinates from a measured render scale, the
                 # hand-aligned points must be laid back over the result — they are the user's
                 # own correction and outrank any measurement.
-                self.routine._on_rescale = lambda c: self._apply_manual(c, "shundo")
+                self.routine._on_rescale = lambda c, m=manual_mode: self._apply_manual(c, m)
             elif self.mode == "spin":
                 # A CatchConfig without the catching: SpinRoutine is a CatchRoutine that spins
                 # instead of throwing, so it inherits the popup handling, the AutoWalk restarts
@@ -2183,6 +2240,7 @@ class App:
         self.paused = False
         self._empty_streak = 0
         self._alert_fired = False
+        self._coord_idle_logged = False
         self._run_started = time.monotonic()
         self._last_report = time.monotonic()
         self._last_batt_check = 0.0
@@ -2237,6 +2295,18 @@ class App:
 
         def on_shundo_event(stats, outcome):
             self.log_queue.put("__countstr__" + self.tr("s_counts").format(stats.checked, stats.shinies, stats.shundos))
+            if outcome != "coord_idle":
+                self._coord_idle_logged = False
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo"):
+                # A confirmed result releases exactly one new-coordinate credit to Edge.
+                # Ambiguous miss/recheck cycles keep the same item and release nothing.
+                self.coord_queue.mark_completed()
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "nospawn", "lost"):
+                item = getattr(self.routine, "current_coord", None)
+                if item is not None:
+                    name = f" ({item.pokemon})" if item.pokemon else ""
+                    self.log_queue.put(self.tr("msg_coord_using").format(
+                        item.coordinate, name, self.coord_queue.qsize()))
             if outcome == "shundo":
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
                 self.log_queue.put(self.tr("msg_s_shundo").format(how))
@@ -2276,10 +2346,15 @@ class App:
                 self.log_queue.put(self.tr("msg_s_nospawn"))
             elif outcome == "idle":
                 self.log_queue.put(self.tr("msg_s_idle"))
+            elif outcome == "coord_idle":
+                if not self._coord_idle_logged:
+                    self.log_queue.put(self.tr("msg_coord_idle"))
+                    self._coord_idle_logged = True
             # A recheck is the bot standing still waiting to see the bar again, so it must not
             # count as activity — otherwise a run stuck looking at nothing never trips the
             # idle alert. Giving the entry up does advance the feed, so that one does.
-            self._tick_alerts(stats, outcome not in ("idle", "popup", "recheck"), shundo=True)
+            self._tick_alerts(
+                stats, outcome not in ("idle", "coord_idle", "popup", "recheck"), shundo=True)
 
         dim = self.dim_screen.get()
         try:
@@ -2288,14 +2363,15 @@ class App:
                 self.log_queue.put(self.tr("msg_dim"))
             # Keep the continuous stream light in both modes. Shundo requests a crisp
             # one-shot capture only when an encounter opens and IV digits must be read.
-            if self.mode == "shundo":
+            if self.mode in ("shundo", "coord_shundo"):
                 self.device.start_stream(half=True, bitrate="2M")
             else:
                 self.device.start_stream()
-            self.routine.run(on_event=on_shundo_event if self.mode == "shundo" else on_event)
+            self.routine.run(
+                on_event=on_shundo_event if self.mode in ("shundo", "coord_shundo") else on_event)
             # A safety stop already has a precise error in the log. Do not immediately
             # overwrite its meaning with the generic "Done." message.
-            if self.mode == "shundo" and self.routine.stats.last_event == "flee_failed":
+            if self.mode in ("shundo", "coord_shundo") and self.routine.stats.last_event == "flee_failed":
                 self.log_queue.put("__done__")
             else:
                 self.log_queue.put("__done__" + self.tr("msg_done"))

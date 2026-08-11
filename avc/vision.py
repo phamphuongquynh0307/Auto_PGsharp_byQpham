@@ -334,6 +334,7 @@ def slot_has_pokemon(
     min_core_range: float = 50.0,
     min_core_edge: float = 0.055,
     min_edge_prominence: float = 0.0,
+    min_foreground_bright_fraction: float = 0.008,
 ) -> bool:
     """Detect a Pokemon sprite in the exact sidebar slot that will be tapped.
 
@@ -390,10 +391,19 @@ def slot_has_pokemon(
     side_edge = float(edges[surround].mean()) if surround.any() else 0.0
     core_pixels = gray[core]
     core_range = float(np.percentile(core_pixels, 98) - np.percentile(core_pixels, 20))
+    # Objects behind PGSharp's translucent sidebar are uniformly darkened. A Pokémon icon is
+    # drawn on top of that layer and retains full-bright pixels. This optional gate rejects
+    # detailed gyms/map art bleeding through an empty bar — the live false positive measured
+    # 0.0% here, while the real first-slot icon measured 25.3%.
+    # HSV value keeps vivid blue/red/yellow sprites eligible even when their grayscale
+    # luminance is modest. Map content behind the dark overlay remains below this value.
+    foreground_values = hsv[core][..., 2]
+    foreground_bright = float((foreground_values >= 175).mean())
     return (
         core_range >= min_core_range
         and core_edge >= min_core_edge
         and core_edge - side_edge >= min_edge_prominence
+        and foreground_bright >= max(0.0, float(min_foreground_bright_fraction))
     )
 
 

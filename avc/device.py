@@ -469,6 +469,31 @@ class Device:
     def key(self, keycode: str) -> None:
         self._run(["shell", "input", "keyevent", keycode])
 
+    def clear_text(self, max_chars: int = 64) -> None:
+        """Delete a bounded existing field value using one ADB command."""
+        count = max(1, min(256, int(max_chars)))
+        self._run([
+            "shell", "input", "keyevent", "KEYCODE_MOVE_END", *(["KEYCODE_DEL"] * count)
+        ])
+
+    def input_coordinate(self, coordinate: str) -> None:
+        """Type a validated ``latitude,longitude`` with deterministic Android key events.
+
+        ``adb shell input text`` occasionally loses punctuation or a leading minus through
+        MuMu's active IME. Physical key events avoid that IME text-conversion path while still
+        being sent in one ADB command.
+        """
+        text = str(coordinate).strip()
+        if not text or any(char not in "-0123456789.," for char in text):
+            raise ValueError("coordinate contains unsupported input characters")
+        punctuation = {
+            "-": "KEYCODE_MINUS",
+            ".": "KEYCODE_PERIOD",
+            ",": "KEYCODE_COMMA",
+        }
+        keycodes = [punctuation.get(char, f"KEYCODE_{char}") for char in text]
+        self._run(["shell", "input", "keyevent", *keycodes])
+
     def back(self) -> None:
         self.key("KEYCODE_BACK")
 

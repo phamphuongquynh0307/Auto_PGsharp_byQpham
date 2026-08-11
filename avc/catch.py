@@ -102,6 +102,9 @@ class CatchConfig:
     # smeared stream frame from wiping the evidence and leaving the bot idle in front of a full
     # bar. 0 accepts a single frame (fastest, most false positives).
     nearby_presence_window: float = 1.5
+    # A PGSharp sprite is drawn above the translucent sidebar and retains full-value pixels;
+    # gyms/map art bleeding through an empty bar is darkened. Shared by Nearby and Feed scans.
+    slot_foreground_bright_fraction: float = 0.008
     # Last word before declaring the bar empty: re-read it on a one-shot capture, which has no
     # H.264 smear to hide a small sprite. Costs ~1s, so it is spent at most this often. Negative
     # disables it.
@@ -960,7 +963,9 @@ class CatchRoutine:
         half_width = 70 if cfg.force_slot else cfg.s(70)
         height = 110 if cfg.force_slot else cfg.s(110)
 
-        if slot_has_pokemon(frame, slot, half_width=half_width, height=height):
+        if slot_has_pokemon(
+                frame, slot, half_width=half_width, height=height,
+                min_foreground_bright_fraction=cfg.slot_foreground_bright_fraction):
             return slot
         if cfg.force_slot:
             # Step off slots at the measured pitch, stopping above the '@' that ends the bar.
@@ -969,7 +974,9 @@ class CatchRoutine:
                 y = slot[1] + n * cfg.slot_pitch
                 if y > bottom or y >= frame.shape[0]:
                     break
-                if slot_has_pokemon(frame, (slot[0], y), half_width=half_width, height=height):
+                if slot_has_pokemon(
+                        frame, (slot[0], y), half_width=half_width, height=height,
+                        min_foreground_bright_fraction=cfg.slot_foreground_bright_fraction):
                     self._trace("nearby_infer_top",
                                 f"Đọc được Pokémon ở slot dưới (y={y}); danh sách không có chỗ "
                                 f"trống nên tap slot đầu {slot}.")
@@ -983,7 +990,9 @@ class CatchRoutine:
         bottom = self._anchor_cache[1] - cfg.s(80)
         y = slot[1] + step
         while y <= bottom:
-            if slot_has_pokemon(frame, (slot[0], y), half_width=half_width, height=height):
+            if slot_has_pokemon(
+                    frame, (slot[0], y), half_width=half_width, height=height,
+                    min_foreground_bright_fraction=cfg.slot_foreground_bright_fraction):
                 self._trace("nearby_infer_top",
                             f"Đọc được Pokémon ở slot dưới (y={y}); danh sách không có chỗ "
                             f"trống nên tap slot đầu {slot}.")
@@ -1163,7 +1172,10 @@ class CatchRoutine:
             return None
 
         def occupied(slot: tuple[int, int]) -> tuple[int, int] | None:
-            present = slot_has_pokemon(frame, slot, half_width=cfg.s(70), height=cfg.s(110))
+            present = slot_has_pokemon(
+                frame, slot, half_width=cfg.s(70), height=cfg.s(110),
+                min_foreground_bright_fraction=cfg.slot_foreground_bright_fraction,
+            )
             self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
             return slot if present and self._feed_presence_streak >= 2 else None
 

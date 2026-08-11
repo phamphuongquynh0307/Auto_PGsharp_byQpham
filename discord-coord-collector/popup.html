@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coord Collector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Coord Collector</h1>
+    <span id="stateBadge" class="badge stopped">Đang dừng</span>
+  </header>
+
+  <p id="status" class="status">Đang tải…</p>
+  <p id="toolStatus" class="tool-status">Tool: chưa kết nối</p>
+
+  <button id="startButton" class="primary single-action">Bắt đầu</button>
+
+  <div class="stats">
+    <div><strong id="savedCount">0</strong><span>đã lấy</span></div>
+    <div><strong id="queueCount">0</strong><span>đang chờ</span></div>
+  </div>
+
+  <section class="import-panel">
+    <h2>Nhập danh sách coord</h2>
+    <textarea id="coordInput" rows="6" spellcheck="false" placeholder="Dán mỗi coord một dòng, ví dụ:&#10;10.762622,106.660172&#10;21.028511,105.804817"></textarea>
+    <div class="actions">
+      <button id="pasteButton">Dán từ clipboard</button>
+      <button id="importButton" class="primary">Nhập danh sách</button>
+    </div>
+    <p class="source-note">Chú thích mặc định: <strong>Từ Discord Pokedex100</strong></p>
+    <p id="importResult" class="import-result" aria-live="polite"></p>
+  </section>
+
+  <div class="section-heading">
+    <h2>Coord gần nhất</h2>
+    <button id="clearButton" class="danger compact">Xóa dữ liệu cũ</button>
+  </div>
+  <div id="records" class="records"><p>Chưa có coord.</p></div>
+
+  <p class="hint">Bấm Bắt đầu một lần rồi để đó. Tool sẽ bỏ qua bài cũ và tự lấy một coord khi Discord có bài mới.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -41,7 +41,9 @@ def bare_routine():
     routine.config = SimpleNamespace(
         encounter_open_wait=3.0,
         encounter_no_answer_attempts=1,
+        require_confirmed_check=False,
         nearby_recheck_attempts=6,
+        nearby_presence_frames=2,
         nearby_recheck_gap=0.0,
         teleport_wait=0.0,
         bar_clear_timeout=0.0,
@@ -118,12 +120,103 @@ class PendingEntryRecheckTests(unittest.TestCase):
 
 
 class ShundoAnswerTests(unittest.TestCase):
-    def test_berry_button_is_the_only_encounter_signal(self):
+    def test_nearby_presence_confirmation_reads_config_without_name_error(self):
+        routine = bare_routine()
+        routine._nearby_presence_streak = 0
+        routine._nearby_last_y = None
+        routine.config.nearby_presence_frames = 3
+        routine.config.s = lambda value: value
+        routine._raw_target_in_bar = lambda _frame: (900, 500)
+
+        outcomes = [routine._target_in_bar(object()) for _ in range(3)]
+
+        self.assertEqual([None, None, (900, 500)], outcomes)
+
+    def test_nearby_presence_allows_adjacent_scanner_rows(self):
+        routine = bare_routine()
+        routine._nearby_presence_streak = 0
+        routine._nearby_last_y = None
+        routine.config.nearby_presence_frames = 3
+        routine.config.s = lambda value: value
+        ys = iter((500, 540, 500))
+        routine._raw_target_in_bar = lambda _frame: (900, next(ys))
+
+        outcomes = [routine._target_in_bar(object()) for _ in range(3)]
+
+        self.assertEqual([None, None, (900, 500)], outcomes)
+
+    def test_confirmed_mode_keeps_same_entry_when_post_tap_image_is_ambiguous(self):
+        routine = bare_routine()
+        routine.config.require_confirmed_check = True
+        routine.config.encounter_no_answer_attempts = 2
+        routine._anchor_in = lambda _frame: (1100, 1166)
+        routine._blocked_toast_in = lambda _frame: False
+        routine._poll = lambda _predicate, _timeout: None
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("miss", outcome)
+        self.assertEqual(0, routine.stats.checked)
+        self.assertEqual([{"fresh": True}, {"fresh": True}], routine.device.screenshot_calls)
+
+    def test_confirmed_mode_accepts_two_real_no_answer_checks_as_non_shiny(self):
+        routine = bare_routine()
+        routine.config.require_confirmed_check = True
+        routine.config.encounter_no_answer_attempts = 2
+        routine._anchor_in = lambda _frame: (1100, 1166)
+        routine._blocked_toast_in = lambda _frame: False
+        routine._poll = lambda _predicate, _timeout: None
+
+        first = routine._attempt_nearby((900, 500))
+        second = routine._attempt_nearby((900, 500))
+
+        self.assertEqual(("miss", "blocked"), (first, second))
+        self.assertEqual(1, routine.stats.checked)
+        self.assertEqual([(900, 500), (900, 500)], routine.device.double_taps)
+
+    def test_confirmed_mode_accepts_toast_visible_on_post_tap_image(self):
+        routine = bare_routine()
+        routine.config.require_confirmed_check = True
+        routine._anchor_in = lambda _frame: (1100, 1166)
+        routine._blocked_toast_in = lambda _frame: True
+        routine._poll = lambda _predicate, _timeout: None
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("blocked", outcome)
+        self.assertEqual(1, routine.stats.checked)
+
+    def test_confirmed_mode_rejects_a_stream_only_blocked_answer(self):
+        routine = bare_routine()
+        routine.config.require_confirmed_check = True
+        routine.config.encounter_no_answer_attempts = 2
+        routine._anchor_in = lambda _frame: (1100, 1166)
+        routine._blocked_toast_in = lambda _frame: False
+        routine._poll = lambda _predicate, _timeout: "blocked"
+
+        outcome = routine._attempt_nearby((900, 500))
+
+        self.assertEqual("miss", outcome)
+        self.assertEqual(0, routine.stats.checked)
+        self.assertEqual([{"fresh": True}, {"fresh": True}], routine.device.screenshot_calls)
+
+    def test_confirmed_mode_never_gives_up_an_unseen_pending_entry(self):
+        routine = bare_routine()
+        routine.config.require_confirmed_check = True
+        routine._raw_target_in_bar = lambda _frame: None
+
+        outcomes = [routine._attempt_nearby((900, 500)) for _ in range(20)]
+
+        self.assertEqual(["recheck"] * 20, outcomes)
+        self.assertEqual(0, routine.stats.checked)
+
+    def test_encounter_requires_berry_and_ball_selector(self):
         routine = bare_routine()
         routine._anchor_in = lambda _frame: (1100, 1166)
         detector = ShundoRoutine._encounter_visible.__get__(routine, ShundoRoutine)
 
-        with patch("avc.shundo.find_berry_button", return_value=(163, 2460)) as berry:
+        with (patch("avc.shundo.find_berry_button", return_value=(163, 2460)) as berry,
+              patch("avc.shundo.find_enc_ball", return_value=(1060, 2440)) as ball):
             self.assertTrue(detector(object()))
         berry.assert_called_once_with(
             ANY,
@@ -131,6 +224,15 @@ class ShundoAnswerTests(unittest.TestCase):
             radius=95,
             min_berry_fill=0.06,
         )
+        ball.assert_called_once_with(ANY, scale=1.0)
+
+    def test_map_berry_lookalike_is_not_an_encounter_without_ball_selector(self):
+        routine = bare_routine()
+        detector = ShundoRoutine._encounter_visible.__get__(routine, ShundoRoutine)
+
+        with (patch("avc.shundo.find_berry_button", return_value=(163, 2460)),
+              patch("avc.shundo.find_enc_ball", return_value=None)):
+            self.assertFalse(detector(object()))
 
     def test_one_confirmed_no_answer_is_the_final_blocked_result(self):
         routine = bare_routine()
@@ -218,6 +320,7 @@ class ShundoAnswerTests(unittest.TestCase):
 
     def test_continuously_occupied_bar_does_not_stall_after_flee(self):
         routine = bare_routine()
+        routine.config.require_confirmed_check = True
         routine._teleport_blocked = False
         routine._pending_nearby = None
         routine._on_waiting = None

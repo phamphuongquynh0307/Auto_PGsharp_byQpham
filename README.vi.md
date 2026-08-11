@@ -6,6 +6,13 @@ Công cụ Windows tự động bắt Pokemon trong Pokemon GO dùng với PGSha
 
 > **Dự án cá nhân.** Repo được công khai để tham khảo và không nhận đóng góp code từ bên ngoài.
 
+## Tải bản mới nhất
+
+- [Tải AutoCatchPokemonPGSharp.exe](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/AutoCatchPokemonPGSharp.exe)
+- [Tải Discord Coord Collector cho Edge](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/discord-coord-collector-v0.3.0.zip)
+
+Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải nén ZIP, mở `edge://extensions`, bật **Developer mode**, chọn **Load unpacked** rồi trỏ tới thư mục vừa giải nén.
+
 ## Tính năng
 
 - **Tự động bắt Pokemon** — bắt các Pokemon xuất hiện trong danh sách gần đây của PGSharp.
@@ -13,6 +20,7 @@ Công cụ Windows tự động bắt Pokemon trong Pokemon GO dùng với PGSha
 - **Tùy chỉnh cú ném** — chỉnh lực ném và thời gian flick cho từng điện thoại.
 - **Căn chỉnh thủ công** — tinh chỉnh tọa độ chạm khi tự co giãn chưa đủ chính xác.
 - **Săn Shundo** — chỉ dừng khi gặp shiny hoặc Pokemon 100% IV theo cấu hình.
+- **Shundo từ Discord Coord** — nhận tọa độ từ extension Edge, teleport lần lượt và chỉ lấy coord tiếp theo sau khi chấm xong.
 - **Tự né popup** — đóng cảnh báo thời tiết, tốc độ, level-up và màn hình PokeStop.
 - **Tự xử lý khi hết bóng** — tạm ngừng bắt, vẫn cho AutoWalk tìm vật phẩm rồi tự bắt lại.
 - **Cảnh báo Discord** — báo spawn lâu, báo cáo định kỳ, pin yếu, hết bóng, gặp shiny và nhiều trạng thái khác.

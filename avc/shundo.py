@@ -32,13 +32,17 @@ from .layout import (
     bracket_scales, scales_around,
 )
 from .vision import (
-    best_matching_scale, find, find_berry_button, find_fast, find_popup_close, load_template,
-    slot_has_pokemon,
+    best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
+    load_template, slot_has_pokemon,
 )
 
 
 @dataclass
 class ShundoConfig:
+    # Feed mode checks a spawn already present at startup before consuming its first feed item.
+    # Alternative coordinate sources disable this so every answer belongs to an explicit item.
+    check_initial_nearby: bool = True
+
     # Feed sidebar (teleport source). The RSS icon at the bar's bottom is the unique
     # locator; the '≡' drag handle marks the bar's top and the first slot sits a fixed
     # distance below it. Both bars share the same handle art, so the handle is only
@@ -67,6 +71,8 @@ class ShundoConfig:
     bar_scan_bottom: int = 150     # ... up to ('@' y - this), excluding the '@' icon itself
     bar_scan_step: int = 55
     slot_busy_std: float = 40.0
+    slot_foreground_bright_fraction: float = 0.008
+    nearby_presence_frames: int = 2
     # A far teleport makes the game reload spawns, which clears the nearby bar first.
     # Waiting for that clear keeps a stale entry from the previous location from being
     # mistaken for the new spawn (the icons all look alike on event days).
@@ -89,6 +95,10 @@ class ShundoConfig:
     # confirmed double-tap with no encounter is therefore the final non-shiny answer;
     # never double-tap the same Pokemon a second time.
     encounter_no_answer_attempts: int = 1
+    # Strict source modes can require visible proof after every double-tap. In that mode a
+    # crisp post-tap frame must show either the encounter or PGSharp's blocked toast; an
+    # ambiguous map frame keeps the same Nearby entry pending and never advances the source.
+    require_confirmed_check: bool = False
 
     # A queued Nearby entry is confirmed on a crisp ADB capture before it is double-tapped,
     # and the two capture paths do disagree: the stream can show the bar occupied while the
@@ -270,6 +280,7 @@ class ShundoRoutine:
         self._anchor_cache: tuple[int, int] | None = None
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._nearby_presence_streak = 0
+        self._nearby_last_y: int | None = None
         self._feed_presence_streak = 0
         self._enc_berry_at: tuple[int, int] | None = None
         # A teleported Nearby entry stays pending until PGSharp gives a real answer, or
@@ -390,7 +401,10 @@ class ShundoRoutine:
         y = top
         while y <= bottom:
             if slot_has_pokemon(frame, (x, y), half_width=cfg.bar_half_w,
-                                height=cfg.slot_patch):
+                                height=cfg.slot_patch,
+                                min_foreground_bright_fraction=getattr(
+                                    cfg, "slot_foreground_bright_fraction", 0.0
+                                )):
                 return y
             y += step
         return None
@@ -402,16 +416,27 @@ class ShundoRoutine:
         if anchor is None:
             return None
         slot = self._nearby_slot(frame, anchor)
-        y = self._occupied_in_column(frame, slot[0], slot[1], anchor[1] - cfg.s(80))
-        return (slot[0], y) if y else None
+        evidence_y = self._occupied_in_column(frame, slot[0], slot[1], anchor[1] - cfg.s(80))
+        # Nearby fills from the top with no gaps. A lower match is evidence that slot 1 is
+        # occupied, not a reason to tap between rows at the scanner's sampling coordinate.
+        return slot if evidence_y is not None else None
 
     def _target_in_bar(self, frame):
         """The nearby slot to engage, or None. Needs two fresh frames in a row so a single
         noisy read cannot trigger a tap."""
+        cfg = self.config
         target = self._raw_target_in_bar(frame)
         y = target[1] if target else None
-        self._nearby_presence_streak = self._nearby_presence_streak + 1 if y else 0
-        return target if target is not None and self._nearby_presence_streak >= 2 else None
+        # The column scanner samples in ~40 px rows; the same sprite can legitimately be
+        # attributed to either neighbouring row on consecutive compressed frames.
+        tolerance = max(12, cfg.s(65))
+        stable = y is not None and (
+            self._nearby_last_y is None or abs(y - self._nearby_last_y) <= tolerance
+        )
+        self._nearby_presence_streak = self._nearby_presence_streak + 1 if stable else (1 if y else 0)
+        self._nearby_last_y = y
+        required = max(2, int(getattr(cfg, "nearby_presence_frames", 2)))
+        return target if target is not None and self._nearby_presence_streak >= required else None
 
     def _feed_slot_in(self, frame) -> tuple[int, int] | None:
         """The feed entry to teleport to, or None when the feed really is empty.
@@ -460,9 +485,11 @@ class ShundoRoutine:
     def _encounter_visible(self, frame) -> bool:
         """True when an encounter is open, which for Shundo means the Pokémon is shiny.
 
-        Only the fixed bottom-left Berry button is trusted. Camera/AR and Poke Ball detection
-        are intentionally absent, so animated red objects and stale stream overlays cannot
-        turn a map frame into a shiny.
+        Require both independent corner controls from the same frame: the bottom-left Berry
+        button and the bottom-right ball selector. A live false alert proved that the map's
+        trainer/buddy circle can occasionally satisfy the Berry geometry by itself. The ball
+        selector is absent on the map, so the pair rejects that look-alike without relying on
+        the bright camera/AR icon, which disappears against a white encounter sky.
         """
         cfg = self.config
         self._enc_berry_at = find_berry_button(
@@ -471,7 +498,9 @@ class ShundoRoutine:
             radius=cfg.enc_berry_radius,
             min_berry_fill=cfg.enc_berry_min_fill,
         )
-        return self._enc_berry_at is not None
+        if self._enc_berry_at is None:
+            return False
+        return find_enc_ball(frame, scale=cfg.layout.s) is not None
 
     def _blocked_toast_in(self, frame) -> bool:
         """A light rounded toast pill sits in the bottom-centre region. Shape only — see
@@ -652,6 +681,10 @@ class ShundoRoutine:
             # rather than spending the next QuickSniper item. Bounded, because an entry that
             # despawned never comes back and the run has to move on. See nearby_recheck_*.
             self._pending_no_target += 1
+            if getattr(cfg, "require_confirmed_check", False):
+                self._interruptible_sleep(cfg.nearby_recheck_gap)
+                self.stats.last_event = "recheck"
+                return "recheck"
             if self._pending_no_target >= max(1, cfg.nearby_recheck_attempts):
                 self.stats.last_event = "lost"
                 return "lost"
@@ -671,20 +704,42 @@ class ShundoRoutine:
             return None
 
         answer = self._poll(encounter_answer, cfg.encounter_open_wait)
-        if answer is None:
+        confirmed_answer_frame = None
+        if getattr(cfg, "require_confirmed_check", False):
+            if self.stop_event.is_set():
+                self.stats.last_event = "miss"
+                return "miss"
+            # A stream answer is only a hint: stale frames after teleport/popups can resemble
+            # a blocked toast. Strict modes always take a new ADB image and decide from it.
+            confirmed_answer_frame = self.device.screenshot(fresh=True)
+            answer = encounter_answer(confirmed_answer_frame)
+            if answer is None:
+                self._pending_no_answers += 1
+                if self._pending_no_answers >= max(1, cfg.encounter_no_answer_attempts):
+                    # Some PGSharp builds silently reject a non-shiny without drawing the
+                    # blocked toast. We still have strong proof of a real check: stable spawn,
+                    # crisp pre-tap slot, physical double-tap, then a fresh map image with no
+                    # encounter. After the bounded retry, accept that as non-shiny.
+                    self.stats.checked += 1
+                    self.stats.last_event = "blocked"
+                    return "blocked"
+                self.stats.last_event = "miss"
+                return "miss"
+        elif answer is None:
             if self.stop_event.is_set():
                 self.stats.last_event = "miss"
                 return "miss"
             self._pending_no_answers += 1
-            if self._pending_no_answers >= max(1, cfg.encounter_no_answer_attempts):
+            if answer is None and self._pending_no_answers >= max(1, cfg.encounter_no_answer_attempts):
                 # The slot and map were freshly confirmed before every double-tap. PGSharp
                 # builds that suppress the blocked toast answer only by keeping us on the
                 # map; after the bounded retry that is a valid non-shiny result.
                 self.stats.checked += 1
                 self.stats.last_event = "blocked"
                 return "blocked"
-            self.stats.last_event = "miss"
-            return "miss"
+            if answer is None:
+                self.stats.last_event = "miss"
+                return "miss"
 
         self._pending_no_answers = 0
         if answer == "blocked":
@@ -695,7 +750,28 @@ class ShundoRoutine:
         # decoder frame can briefly resemble the Berry button while the live screen is
         # already back on the map. _grade_encounter takes a crisp one-shot frame and
         # refuses to count/report the shiny unless that independent frame confirms it.
-        return self._grade_encounter()
+        return self._grade_encounter(confirmed_frame=confirmed_answer_frame)
+
+    def _teleport_next(self, frame) -> str | None:
+        """Consume the next Feed entry and teleport.
+
+        ``None`` means a teleport was dispatched and the common clear/load/encounter phases may
+        continue. A string is a completed cycle outcome. Coordinate-backed Shundo overrides only
+        this source step; shiny detection and safety handling remain shared.
+        """
+        cfg = self.config
+        slot = self._feed_slot_in(frame)
+        if slot is None:
+            slot = self._feed_slot_in(self.device.screenshot(fresh=True))
+        if slot is None:
+            self._interruptible_sleep(cfg.idle_poll)
+            self.stats.last_event = "idle"
+            return "idle"
+        self.device.tap(*slot)
+        self._interruptible_sleep(min(0.75, cfg.teleport_wait))
+        if self.stop_event.is_set():
+            return "idle"
+        return None
 
     def _flee_to_map(self) -> bool | None:
         """Leave a skipped shiny and prove that the encounter UI is gone.
@@ -848,7 +924,7 @@ class ShundoRoutine:
         # spawn at the current location. Confirm it on two frames, matching _target_in_bar's
         # anti-noise rule; later cycles keep using the feed so the last checked spawn is not
         # opened repeatedly.
-        if self.stats.checked == 0:
+        if getattr(cfg, "check_initial_nearby", True) and self.stats.checked == 0:
             self._target_in_bar(frame)
             fresh = self.device.screenshot(fresh=True)
             initial_target = self._target_in_bar(fresh)
@@ -871,19 +947,9 @@ class ShundoRoutine:
         # Step 1: teleport to the next feed candidate. A miss on the stream frame is
         # retried on a crisp one-shot capture first — H.264 smear between keyframes
         # periodically drops the small RSS/handle templates below threshold.
-        slot = self._feed_slot_in(frame)
-        if slot is None:
-            slot = self._feed_slot_in(self.device.screenshot(fresh=True))
-        if slot is None:
-            self._interruptible_sleep(cfg.idle_poll)
-            self.stats.last_event = "idle"
-            return "idle"
-        self.device.tap(*slot)
-        # The clear/load loops below already wait on real screen state. Only allow a
-        # short transition head-start instead of always burning the full 4 seconds.
-        self._interruptible_sleep(min(0.75, cfg.teleport_wait))
-        if self.stop_event.is_set():
-            return "idle"
+        source_outcome = self._teleport_next(frame)
+        if source_outcome is not None:
+            return source_outcome
 
         # Teleporting far reliably raises the speed warning — clear it before tapping on.
         self._drain_popups()
@@ -913,6 +979,10 @@ class ShundoRoutine:
                 # clear detector a fresh full window after dismissing it.
                 clear_deadline = time.monotonic() + max(0.5, cfg.bar_clear_timeout)
                 continue
+            # A fast/short teleport can replace the old occupied slot directly with the
+            # new one, without ever rendering an empty Nearby frame. Do not wait forever;
+            # the following phase still requires a stable multi-frame Pokémon presence,
+            # and strict modes require a fresh-image answer before advancing the coord.
             if time.monotonic() >= clear_deadline:
                 break
         if self.stop_event.is_set():
@@ -921,6 +991,7 @@ class ShundoRoutine:
         # the clear phase timed out on a continuously occupied bar, no presence evidence
         # from the previous location may leak into the "new spawn loaded" decision.
         self._nearby_presence_streak = 0
+        self._nearby_last_y = None
 
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
         # in the bar's first slot. Stays put and waits (spawns can load slowly); it does

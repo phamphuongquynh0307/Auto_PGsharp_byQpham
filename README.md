@@ -6,6 +6,13 @@ A Windows automation tool for catching Pokemon in Pokemon GO with PGSharp. It co
 
 > **Personal project.** This repository is public for reference only and does not accept external code contributions.
 
+## Latest downloads
+
+- [Download AutoCatchPokemonPGSharp.exe](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/AutoCatchPokemonPGSharp.exe)
+- [Download Discord Coord Collector for Edge](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/discord-coord-collector-v0.3.0.zip)
+
+The extension feeds the **Shundo from Discord coords** mode. Extract the ZIP, open `edge://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted folder.
+
 ## Features
 
 - **Automatic catching** — catches Pokemon shown in PGSharp's nearby feed.
@@ -13,6 +20,7 @@ A Windows automation tool for catching Pokemon in Pokemon GO with PGSharp. It co
 - **Editable throws** — adjust throw power and flick duration for different phones.
 - **Manual calibration** — fine-tune touch coordinates when automatic scaling is not accurate enough.
 - **Shundo hunting** — stop only for shiny or 100% IV Pokemon, depending on your settings.
+- **Shundo from Discord coords** — receives coordinates from the Edge extension, teleports in order, and requests the next coordinate only after a check completes.
 - **Popup handling** — closes weather, speed, level-up, and PokeStop screens automatically.
 - **Out-of-ball recovery** — pauses catching while AutoWalk continues searching for more items, then resumes automatically.
 - **Discord alerts** — notifications for long spawn gaps, periodic reports, low battery, no balls, shiny encounters, and more.

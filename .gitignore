@@ -26,3 +26,7 @@ baocao-*.zip
 /build-tcl-runtime
 /build-dist
 /build-fixed
+/build-adist
+/build-coord
+/dist-coord
+/dist-review

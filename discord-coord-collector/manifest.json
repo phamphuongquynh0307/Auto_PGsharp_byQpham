@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Discord Coord Collector",
+  "version": "0.3.0",
+  "description": "Queues Pokedex100 coordinate links from Discord Web and saves each coordinate locally.",
+  "permissions": [
+    "alarms",
+    "clipboardRead",
+    "downloads",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://discord.com/*",
+    "https://ptb.discord.com/*",
+    "https://canary.discord.com/*",
+    "https://coord.pokedex100.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Discord Coord Collector",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://discord.com/*",
+        "https://ptb.discord.com/*",
+        "https://canary.discord.com/*"
+      ],
+      "js": ["discord-content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://coord.pokedex100.com/*"],
+      "js": ["coord-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

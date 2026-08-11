@@ -1,49 +1,49 @@
-# v1.3.1
+# v1.4.0
 
 ## Tiếng Việt
 
-### Tối ưu bắt Pokémon liên tục
+### Shundo từ Discord Coord
 
-- Bỏ UI dump nặng khỏi đường mở encounter. Tool giờ chỉ đọc stream hình ảnh và ném ngay ở frame đầu tiên thấy nút Berry, không chờ hết timeout.
-- Luôn gửi một tap mở đầu rất ngắn trước double-tap Nearby. Ngay cả khi thiết lập là `0`, tool giữ sàn 0,12 giây để PGSharp không bỏ mất lần mở encounter đầu tiên.
-- Timeout mở encounter trở thành trần an toàn cho màn chuyển trắng chậm; trường hợp bình thường vẫn đi tiếp ngay khi game sẵn sàng.
-- Sau khi bắt xong, thời gian **chờ Nearby cập nhật** giờ là thời gian refresh thật. Tool xóa bằng chứng slot cũ, chỉ dùng frame chụp sau thời gian chờ để xác nhận con tiếp theo, tránh bấm lại dòng Pokémon vừa bị xóa rồi mất thêm 4 giây timeout.
-- Mỗi Pokémon mới bắt đầu trên một phiên cảm ứng sạch. Tránh trạng thái pointer còn sót sau cú vuốt ném bóng qua Wi-Fi làm cú tap Nearby kế tiếp bị gửi nhưng PGSharp không nhận.
-- Kết quả thực tế: loại bỏ nhịp xen kẽ “bắt thành công → tap hỏng → chờ 4 giây → thử lại”; khoảng con 1 đến con 2 giờ chủ yếu còn thời gian refresh 1 giây và animation thật của game.
+- Thêm chế độ **Shundo từ Discord Coord**: app nhận tọa độ tại `127.0.0.1:8765`, nhập coord vào PGSharp bằng Android key event an toàn và teleport tuần tự.
+- Mỗi coord được giữ cho tới khi Pokémon hiện tại có kết quả xác nhận. App chỉ báo extension lấy thêm đúng một coord sau khi chấm xong, tránh bỏ spawn chậm hoặc tiêu tốn nhầm coord tiếp theo.
+- Thêm nhóm căn chỉnh riêng cho dòng Teleport, ô Coordinates và nút OK; hỗ trợ tự co giãn theo màn hình như các chế độ khác.
+- Tăng độ chắc chắn khi nhận diện Pokémon trong sidebar: loại map/gyms tối phía sau thanh trong suốt nhưng vẫn giữ sprite Pokémon sáng phía trước.
 
-### Sửa Shundo bị kẹt ở một Pokémon đã mất
+### Discord Coord Collector v0.3.0
 
-- Khi stream thấy entry nhưng ảnh ADB nét tạm thời không thấy, tool giữ nguyên entry và nhìn lại thay vì tiêu tốn mục QuickSniper tiếp theo.
-- Giới hạn việc nhìn lại: tối đa 15 lần, cách nhau 0,5 giây. Entry đã despawn được bỏ qua để thanh feed tiếp tục chạy, thay vì chụp ADB vô hạn.
-- Nhật ký phân biệt rõ **đang nhìn lại** và **entry đã mất**; thời gian nhìn lại không còn bị tính nhầm là hoạt động, nên cảnh báo idle vẫn hoạt động đúng.
+- Extension Edge theo dõi đúng tab Discord Web đang active, lấy link **Click for Coords** từ Pokedex100 và tự đóng tab tạm sau khi đọc xong.
+- Bộ đệm ban đầu lấy tối đa ba coord; sau đó app desktop hoàn tất một Pokémon thì extension mới cấp thêm một coord.
+- Cho phép dán tối đa 2.000 `latitude,longitude` từ clipboard, tự bỏ coord sai/trùng và gắn chú thích **Từ Discord Pokedex100**.
+- Thêm nút **Xóa dữ liệu cũ**, dọn lịch sử extension, hàng chờ và hàng coord trong app desktop.
+- Extension được đính kèm trực tiếp trong GitHub Release dưới dạng `discord-coord-collector-v0.3.0.zip`.
 
 ### Kiểm chứng
 
-- 140 bài test đạt, không bài nào lỗi; 17 bài phụ thuộc môi trường được bỏ qua đúng điều kiện.
-- Đã kiểm tra trực tiếp trên thiết bị 1220×2712 qua ADB Wi-Fi và đối chiếu timestamp tap → encounter → ném trong log.
-- EXE Windows build thành công.
+- Kiểm tra cú pháp toàn bộ JavaScript của extension và mô phỏng luồng nhập hàng loạt → gửi tool → xóa dữ liệu.
+- **164 test đạt**, không có lỗi; 17 test phụ thuộc môi trường được bỏ qua đúng điều kiện. Bộ test bao phủ bridge, hàng coord, nhập phím Android, luồng Shundo và nhận diện sidebar.
+- EXE Windows build thành công; xác nhận `avc.coord_source` và `avc.coord_shundo` có trong gói PyInstaller.
 
 ---
 
 ## English
 
-### Smoother consecutive catches
+### Shundo from Discord coords
 
-- Removed the expensive UI hierarchy dump from the encounter-opening path. The routine now reads only the video stream and throws on the first frame where the Berry button is ready.
-- A very short priming tap always precedes the Nearby double-tap. Even a configured value of `0` keeps a 120 ms floor so PGSharp does not drop the first encounter gesture.
-- The encounter timeout is now only a safety ceiling for slow white transitions; normal openings continue immediately.
-- **Wait for Nearby refresh** is now a real post-catch refresh period. Old slot evidence is discarded, and only a frame captured after that period may prime the next cycle. This prevents tapping the consumed row and then paying a four-second failed-open timeout.
-- Every next Pokémon starts on a clean touch-control session, preventing a lost pointer-up after a Wi-Fi throw from silently swallowing the following Nearby tap.
-- In practice this removes the alternating rhythm of “successful catch → dead tap → four-second timeout → retry”; the remaining gap is the configured one-second refresh plus the game's real animation time.
+- Added **Shundo from Discord coords** mode. The app receives coordinates on `127.0.0.1:8765`, enters them into PGSharp using safe Android key events, and teleports sequentially.
+- A coordinate remains active until the current Pokémon has a confirmed result. The app grants exactly one new-coordinate credit after a completed check, preventing slow spawns from consuming the next coordinate.
+- Added dedicated calibration points for the Teleport row, Coordinates input, and OK button, with the same screen scaling support as other modes.
+- Strengthened sidebar Pokémon detection by rejecting dark map/gym detail behind the translucent bar while retaining bright foreground sprites.
 
-### Fixed Shundo getting stuck on a lost entry
+### Discord Coord Collector v0.3.0
 
-- When the stream sees an entry but a crisp ADB capture temporarily does not, the same entry is rechecked instead of consuming the next QuickSniper item.
-- Rechecks are bounded to 15 attempts at 0.5-second intervals. A genuinely despawned entry is released so the feed can advance instead of taking ADB captures forever.
-- The log now distinguishes **rechecking** from a **lost entry**, and rechecking no longer counts as activity, so idle alerts remain accurate.
+- The Edge extension follows only the active Discord Web tab, extracts Pokedex100 **Click for Coords** links, and closes temporary tabs after processing.
+- It prefetches up to three coordinates, then requests one more only after the desktop app completes a Pokémon check.
+- It can paste up to 2,000 `latitude,longitude` entries from the clipboard, skips invalid/duplicate values, and labels them **From Discord Pokedex100**.
+- Added **Clear old data** to remove extension history, pending work, and the desktop app's coordinate queue.
+- The extension is attached directly to the GitHub Release as `discord-coord-collector-v0.3.0.zip`.
 
 ### Verification
 
-- 140 tests pass with no failures; 17 environment-dependent tests are skipped under their expected conditions.
-- Verified live on a 1220×2712 device over Wi-Fi ADB by comparing tap → encounter → throw timestamps in the diagnostic log.
-- The Windows executable builds successfully.
+- Checked all extension JavaScript and simulated the bulk import → tool delivery → clear-data flow.
+- **164 tests pass** with no failures; 17 environment-dependent tests are skipped as expected. Coverage includes the HTTP bridge, coordinate queue, Android text input, Shundo flow, and sidebar detection.
+- The Windows EXE builds successfully, with `avc.coord_source` and `avc.coord_shundo` verified inside the PyInstaller archive.
