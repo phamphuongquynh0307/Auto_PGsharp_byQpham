@@ -15,7 +15,7 @@
 - Bộ đệm ban đầu lấy tối đa ba coord; sau đó app desktop hoàn tất một Pokémon thì extension mới cấp thêm một coord.
 - Cho phép dán tối đa 2.000 `latitude,longitude` từ clipboard, tự bỏ coord sai/trùng và gắn chú thích **Từ Discord Pokedex100**.
 - Thêm nút **Xóa dữ liệu cũ**, dọn lịch sử extension, hàng chờ và hàng coord trong app desktop.
-- Extension được đính kèm trực tiếp trong GitHub Release dưới dạng `discord-coord-collector-v0.3.0.zip`.
+- Extension được đặt trực tiếp trong repository tại `downloads/discord-coord-collector-v0.3.0.zip`, kèm link tải nhanh trong README.
 
 ### Kiểm chứng
 
@@ -40,7 +40,7 @@
 - It prefetches up to three coordinates, then requests one more only after the desktop app completes a Pokémon check.
 - It can paste up to 2,000 `latitude,longitude` entries from the clipboard, skips invalid/duplicate values, and labels them **From Discord Pokedex100**.
 - Added **Clear old data** to remove extension history, pending work, and the desktop app's coordinate queue.
-- The extension is attached directly to the GitHub Release as `discord-coord-collector-v0.3.0.zip`.
+- The extension archive is stored directly in the repository at `downloads/discord-coord-collector-v0.3.0.zip`, with a direct download link in the README.
 
 ### Verification
 

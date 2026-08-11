@@ -1,6 +1,6 @@
 # Discord Coord Collector (Edge)
 
-[Tải extension v0.3.0](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/discord-coord-collector-v0.3.0.zip)
+[Tải extension v0.3.0](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.0.zip)
 
 Tiện ích Edge chạy tuần tự:
 
