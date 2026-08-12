@@ -1,6 +1,11 @@
-# v1.4.0
+# v1.4.1
 
 ## Tiếng Việt
+
+### Discord Coord Collector v0.3.1
+
+- Chỉ lấy trước một coord mới nhất thay vì giữ bộ đệm ba coord, tránh coord nằm chờ quá lâu khiến Pokémon chạy mất.
+- Sau khi app chấm xong Pokémon hiện tại, extension mới lấy coord mới nhất tiếp theo từ Discord.
 
 ### Shundo từ Discord Coord
 
@@ -26,6 +31,11 @@
 ---
 
 ## English
+
+### Discord Coord Collector v0.3.1
+
+- Prefetches only the first/newest coordinate instead of holding a three-coordinate buffer, reducing stale spawns.
+- After the app finishes checking the current Pokémon, the extension fetches the next newest coordinate from Discord.
 
 ### Shundo from Discord coords
 

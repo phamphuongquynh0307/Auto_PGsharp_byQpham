@@ -1,7 +1,9 @@
 const STORAGE_KEY = "coordCollectorState";
-const STATE_VERSION = 3;
+const STATE_VERSION = 4;
 const TOOL_RETRY_ALARM = "coordCollectorToolRetry";
-const INITIAL_PREFETCH = 3;
+// Keep only the first/newest coordinate ready. Extra prefetched coordinates can
+// expire while the desktop app is still checking the current Pokemon.
+const INITIAL_PREFETCH = 1;
 const MAX_BULK_IMPORT = 2000;
 const DEFAULT_IMPORT_NOTE = "Từ Discord Pokedex100";
 

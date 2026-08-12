@@ -9,7 +9,7 @@ Công cụ Windows tự động bắt Pokemon trong Pokemon GO dùng với PGSha
 ## Tải bản mới nhất
 
 - [Tải AutoCatchPokemonPGSharp.exe](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/AutoCatchPokemonPGSharp.exe)
-- [Tải Discord Coord Collector v0.3.0 cho Edge](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.0.zip)
+- [Tải Discord Coord Collector v0.3.1 cho Edge](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.1.zip)
 
 Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải nén ZIP, mở `edge://extensions`, bật **Developer mode**, chọn **Load unpacked** rồi trỏ tới thư mục vừa giải nén.
 

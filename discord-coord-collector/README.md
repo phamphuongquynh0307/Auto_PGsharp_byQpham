@@ -1,6 +1,6 @@
 # Discord Coord Collector (Edge)
 
-[Tải extension v0.3.0](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.0.zip)
+[Tải extension v0.3.1](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.1.zip)
 
 Tiện ích Edge chạy tuần tự:
 
@@ -10,7 +10,7 @@ Tiện ích Edge chạy tuần tự:
 4. Lưu cục bộ trong bộ nhớ của tiện ích, đóng tab và xử lý link kế tiếp.
 5. Tự gửi coord sang app desktop.
 
-Phiên bản hiện tại: **0.3.0**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
+Phiên bản hiện tại: **0.3.1**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
 không đọc được coord. Các trang yêu cầu Bronze/donor role mà tài khoản không có sẽ được nhận diện,
 đóng ngay và bỏ qua vĩnh viễn trong lượt thu hiện tại.
 
@@ -43,9 +43,9 @@ bấm **Bắt đầu**, hàng chờ và trạng thái phiên cũ được tự l
 6. Mở kênh Discord cần theo dõi tại `https://discord.com/channels/...`.
 7. Bấm biểu tượng **Discord Coord Collector** rồi chọn **Bắt đầu**.
 
-Khi bấm **Bắt đầu**, Collector lấy trước ba coord mới nhất đang thấy để làm bộ đệm. Sau đó nó
-dừng lấy thêm. Mỗi khi app desktop xác nhận chấm xong một Pokémon, Collector mới lấy thêm đúng
-một coord. Các bài xuất hiện trong lúc chưa có lượt được giữ trên Discord và chọn khi app cần.
+Khi bấm **Bắt đầu**, Collector chỉ lấy ngay coord mới nhất/đầu tiên, không giữ thêm coord trong
+bộ đệm để tránh Pokémon chạy mất trong lúc chờ. Mỗi khi app desktop xác nhận chấm xong một Pokémon,
+Collector mới lấy coord mới nhất tiếp theo từ Discord.
 
 ## Dữ liệu
 

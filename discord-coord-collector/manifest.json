@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Discord Coord Collector",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Queues Pokedex100 coordinate links from Discord Web and saves each coordinate locally.",
   "permissions": [
     "alarms",
