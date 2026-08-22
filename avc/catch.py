@@ -152,7 +152,14 @@ class CatchConfig:
     feed_threshold: float = 0.7
     feed_slot_dy: int = 100         # '≡' handle center -> first feed slot center
     handle_column_tol: int = 60     # max |x_handle - x_rss| to count as the same bar
-    feed_teleport_wait: float = 4.0  # max wait for the teleported-to spawn to reach Nearby
+    feed_teleport_wait: float = 4.0  # fast-path wait right after the tap, before polling
+    # Ceiling on the poll that follows. The lock exists so a slow teleport cannot consume a
+    # second Feed item, and it used to have no ceiling at all — so a tap PGSharp silently
+    # dropped, or a spawn that despawned before it loaded, parked the whole routine here for
+    # as long as the user let it run (observed: 11 minutes standing still). Giving up hands the
+    # cycle back to Nearby + AutoWalk; the next Feed tap still has to earn its idle streak
+    # again. 0 restores the old behaviour of waiting indefinitely.
+    feed_nearby_timeout: float = 45.0
     # Consecutive empty cycles required before the feed may teleport. The sprite test is
     # marginal against a busy translucent sidebar (event scenery, gyms) and loses the odd
     # frame on a bar that is actually full; teleporting on one such read jumps away from
@@ -1387,7 +1394,10 @@ class CatchRoutine:
             return False
 
         loaded = None
+        timed_out = False
         heartbeat_at = time.monotonic()
+        deadline = (self._feed_pending_at + cfg.feed_nearby_timeout
+                    if cfg.feed_nearby_timeout > 0 else None)
         while not self.stop_event.is_set():
             self._wait_if_paused()
             if self.stop_event.is_set():
@@ -1425,6 +1435,9 @@ class CatchRoutine:
                         0.0,
                     )
                     heartbeat_at = now
+            if loaded is None and deadline is not None and now >= deadline:
+                timed_out = True
+                break
             if loaded is not None:
                 waited = max(0.0, time.monotonic() - self._feed_pending_at)
                 self._trace(
@@ -1436,6 +1449,18 @@ class CatchRoutine:
                 break
             self._interruptible_sleep(max(0.06, cfg.idle_poll))
 
+        if timed_out:
+            waited = max(0.0, time.monotonic() - self._feed_pending_at)
+            self._feed_pending = False
+            self._feed_pending_at = 0.0
+            self._trace(
+                "feed_timeout",
+                f"Đã tap Feed nhưng Pokémon không hiện trên Nearby sau {waited:.0f}s "
+                "(có thể cú tap bị bỏ qua hoặc Pokémon đã biến mất); "
+                "bỏ qua con này, quay lại Nearby + AutoWalk.",
+                0.0,
+            )
+            return False
         if loaded is None:
             # User pressed Stop. Keep the pending bit truthful until this routine is discarded;
             # most importantly, never turn a stop into permission for one more Feed tap.

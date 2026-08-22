@@ -306,6 +306,8 @@ LANG = {
     "target_iv_sta": {"vi": "IV HP mục tiêu (0–15):", "en": "Target HP IV (0–15):"},
     "tp_wait":       {"vi": "Chờ Pokémon xuất hiện trên Nearby (giây, 0 = mãi):",
                       "en": "Wait for Pokémon on Nearby (s, 0 = forever):"},
+    "feed_wait":     {"vi": "Chờ Pokémon từ Feed hiện trên Nearby (giây, 0 = chờ mãi):",
+                      "en": "Wait for the Feed's Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
     "alert_shiny":   {"vi": "Báo Discord khi shiny khác IV mục tiêu", "en": "Discord alert on shiny with another IV"},
     "shundo_action": {"vi": "Khi đúng IV mục tiêu:", "en": "On target IV match:"},
@@ -940,16 +942,22 @@ class App:
             catch_grp,
             text=self.tr("catch_feed"),
             variable=self.catch_use_feed,
+            command=self._sync_settings_visibility,
         )
         feed_chk.grid(row=14, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((feed_chk, "catch_feed"))
+        # How long to keep waiting for the tapped Feed spawn to reach Nearby. The wait used to
+        # have no ceiling, so a tap PGSharp dropped left the routine standing still for as long
+        # as the run lasted. Only means anything once the box above is ticked.
+        self.feed_wait = self._spin(catch_grp, "feed_wait", 15, 0, 600, 45, is_float=True,
+                                    increment=5)
         self.no_balls_goplus = tk.BooleanVar(value=True)
         goplus_chk = ttk.Checkbutton(
             catch_grp,
             text=self.tr("no_balls_goplus"),
             variable=self.no_balls_goplus,
         )
-        goplus_chk.grid(row=15, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        goplus_chk.grid(row=16, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((goplus_chk, "no_balls_goplus"))
         self._register_row("no_balls_goplus", goplus_chk)
         # The bag refills from PokéStops, so spinning them is the one thing that actually
@@ -962,12 +970,12 @@ class App:
             variable=self.no_balls_spin,
             command=self._sync_settings_visibility,
         )
-        spin_chk.grid(row=16, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        spin_chk.grid(row=17, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((spin_chk, "no_balls_spin"))
         self._register_row("no_balls_spin", spin_chk)
         # How long the hold lasts. It was a fixed ten minutes in avc/catch.py; the spinning walk
         # makes the right length a judgement call (how dense the stops are), so it is a setting.
-        self.no_balls_min = self._spin(catch_grp, "no_balls_min", 17, 1, 120, 10, is_float=True,
+        self.no_balls_min = self._spin(catch_grp, "no_balls_min", 18, 1, 120, 10, is_float=True,
                                        increment=1)
 
         # Settings both modes read. They used to sit in the Catching group, which made the flee
@@ -1320,6 +1328,8 @@ class App:
         # length only means anything once the box is ticked.
         self._set_row_visible("no_balls_spin", catching)
         self._set_row_visible("no_balls_min", catching and bool(self.no_balls_spin.get()))
+        # Same shape as the pair above: the Feed wait is dead weight until the Feed is on.
+        self._set_row_visible("feed_wait", catching and bool(self.catch_use_feed.get()))
         # The flee taps are spent by Quick Catch, by Shundo and by the spin mode leaving an
         # encounter Go Plus opened; normal catching taps flee once.
         for key in ("flee_taps", "flee_gap"):
@@ -1436,6 +1446,7 @@ class App:
         self.max_throws.set(max(1, int(data.get("max_throws", int(self.max_throws.get())))))
         self.dim_screen.set(data.get("dim_screen", False))
         self.catch_use_feed.set(data.get("catch_use_feed", False))
+        self.feed_wait.set(max(0.0, float(data.get("feed_wait", self.feed_wait.get()))))
         self.no_balls_goplus.set(data.get("no_balls_goplus", True))
         self.no_balls_spin.set(data.get("no_balls_spin", False))
         self.no_balls_min.set(max(1.0, float(data.get("no_balls_min", self.no_balls_min.get()))))
@@ -1492,6 +1503,7 @@ class App:
             "max_throws": int(self.max_throws.get()),
             "dim_screen": bool(self.dim_screen.get()),
             "catch_use_feed": bool(self.catch_use_feed.get()),
+            "feed_wait": float(self.feed_wait.get()),
             "no_balls_goplus": bool(self.no_balls_goplus.get()),
             "no_balls_spin": bool(self.no_balls_spin.get()),
             "no_balls_min": float(self.no_balls_min.get()),
@@ -2650,6 +2662,7 @@ class App:
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
                     use_feed_bar=bool(self.catch_use_feed.get()),
+                    feed_nearby_timeout=max(0.0, float(self.feed_wait.get())),
                     start_goplus_on_no_balls=(
                         self.catch_style == "normal" and bool(self.no_balls_goplus.get())
                     ),

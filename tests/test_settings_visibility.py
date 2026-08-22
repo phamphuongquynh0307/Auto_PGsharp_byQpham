@@ -100,6 +100,21 @@ class VisibilityTests(unittest.TestCase):
         self.assertTrue(self._group_shown(self.app._grp_spin))
         self.assertTrue(self._shown("no_balls_min"))
 
+    def test_the_feed_wait_stays_hidden_until_the_feed_box_is_ticked(self):
+        self._configure("catch", "normal")
+        self.app.catch_use_feed.set(False)
+        self.app._sync_settings_visibility()
+
+        self.assertFalse(self._shown("feed_wait"))
+
+    def test_ticking_the_feed_box_reveals_its_wait(self):
+        self._configure("catch", "normal")
+        self.app.catch_use_feed.set(True)
+        self.app._sync_settings_visibility()
+        self.root.update_idletasks()
+
+        self.assertTrue(self._shown("feed_wait"))
+
     def test_spinning_to_refill_is_offered_without_a_key(self):
         """Go Plus needs the paid key, so Quick Catch hides it — the screen spinner does not,
         and hiding it there would leave that user no refill path at all."""

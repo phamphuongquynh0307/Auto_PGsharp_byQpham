@@ -24,6 +24,7 @@ def bare_feed_routine():
     routine.config = SimpleNamespace(
         use_feed_bar=True,
         feed_teleport_wait=0.0,
+        feed_nearby_timeout=0.0,     # 0 = wait indefinitely, as these cases assume
         respect_cooldown=False,
         idle_poll=0.0,
     )
@@ -94,6 +95,47 @@ class CatchFeedQueueTests(unittest.TestCase):
         threw = routine._finish_encounter((610, 2380))
 
         self.assertFalse(threw)
+        self.assertTrue(routine._feed_pending)
+
+
+class FeedWaitTimeoutTests(unittest.TestCase):
+    """The wait for the tapped spawn had no ceiling: a tap PGSharp silently dropped parked the
+    routine in this loop for the rest of the run — observed standing still for 11 minutes."""
+
+    def _never_arrives(self, timeout):
+        routine = bare_feed_routine()
+        routine.config.feed_nearby_timeout = timeout
+        routine._occupied_slot_in = lambda _frame: None
+        return routine
+
+    def test_wait_gives_up_once_the_timeout_is_spent(self):
+        routine = self._never_arrives(0.05)
+
+        jumped = routine._tap_feed_spawn()
+
+        self.assertFalse(jumped)
+        self.assertFalse(routine._feed_pending)
+        # Giving up must not have cost a second Feed item on the way out.
+        self.assertEqual([(580, 364)], routine.device.taps)
+
+    def test_giving_up_leaves_the_feed_usable_next_time(self):
+        routine = self._never_arrives(0.05)
+        routine._tap_feed_spawn()
+
+        # Not the Go Plus path: that one disables the source outright. A timeout is one lost
+        # spawn, so the next dry spell may try the Feed again — and does, once one arrives.
+        self.assertFalse(routine._teleport_blocked)
+        routine._occupied_slot_in = lambda _frame: (900, 500)
+
+        self.assertTrue(routine._tap_feed_spawn())
+        self.assertEqual(2, len(routine.device.taps))
+
+    def test_zero_means_wait_as_long_as_it_takes(self):
+        routine = self._never_arrives(0.0)
+        states = iter((None, None, (900, 500)))
+        routine._occupied_slot_in = lambda _frame: next(states)
+
+        self.assertTrue(routine._tap_feed_spawn())
         self.assertTrue(routine._feed_pending)
 
 
