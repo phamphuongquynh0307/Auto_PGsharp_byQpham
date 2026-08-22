@@ -13,13 +13,15 @@ Công cụ Windows tự động bắt Pokemon trong Pokemon GO dùng với PGSha
 
 Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải nén ZIP, mở `edge://extensions`, bật **Developer mode**, chọn **Load unpacked** rồi trỏ tới thư mục vừa giải nén.
 
+> **Mới dùng lần đầu?** Xem [hướng dẫn thiết lập chi tiết cho từng chế độ](HUONG_DAN.md): Auto bắt, Chấm shiny từ Feed, Chấm shiny từ Discord Coord và Quay PokéStop.
+
 ## Tính năng
 
 - **Tự động bắt Pokemon** — bắt các Pokemon xuất hiện trong danh sách gần đây của PGSharp.
 - **Bắt nhanh không cần key PGSharp** — điều khiển cảm ứng Android để ném bóng và thoát encounter nhanh.
 - **Tùy chỉnh cú ném** — chỉnh lực ném và thời gian flick cho từng điện thoại.
 - **Căn chỉnh thủ công** — tinh chỉnh tọa độ chạm khi tự co giãn chưa đủ chính xác.
-- **Săn Shundo** — chỉ dừng khi gặp shiny hoặc Pokemon 100% IV theo cấu hình.
+- **Chấm shiny theo IV** — nhập riêng IV Công/Thủ/HP từ 0–15; cả nguồn feed và Discord Coord chỉ dừng khi shiny khớp đúng cả ba cột.
 - **Shundo từ Discord Coord** — nhận tọa độ từ extension Edge, teleport lần lượt và chỉ lấy coord tiếp theo sau khi chấm xong.
 - **Tự né popup** — đóng cảnh báo thời tiết, tốc độ, level-up và màn hình PokeStop.
 - **Tự xử lý khi hết bóng** — tạm ngừng bắt, vẫn cho AutoWalk tìm vật phẩm rồi tự bắt lại.
@@ -58,7 +60,9 @@ Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải
 ### 3. Chọn chế độ
 
 - **Bắt Pokemon** — tự động bắt Pokemon trong danh sách gần đây.
-- **Shundo** — chỉ săn shiny hoặc Pokemon 100% IV theo cấu hình.
+- **Chấm shiny theo IV** — lấy Pokémon từ Feed PGSharp và chỉ giữ shiny có đúng bộ IV Công/Thủ/HP mục tiêu.
+- **Chấm shiny IV từ Discord Coord** — nhận coord từ extension Edge, teleport và chấm tuần tự từng Pokémon.
+- **Quay PokéStop khi đi đường** — giữ AutoWalk và bấm các PokéStop xanh trong vòng quét quanh nhân vật.
 
 Sau đó chọn kiểu bắt:
 
@@ -68,6 +72,8 @@ Sau đó chọn kiểu bắt:
 ### 4. Chạy
 
 Bấm **Chạy** để bắt đầu, **Tạm dừng** để nghỉ hoặc **Dừng** để kết thúc. Theo dõi hoạt động trong khung nhật ký.
+
+Mỗi chế độ cần một bố cục PGSharp khác nhau. Trước khi chạy, làm đúng checklist của chế độ trong [hướng dẫn chi tiết](HUONG_DAN.md).
 
 ### 5. Cài đặt
 

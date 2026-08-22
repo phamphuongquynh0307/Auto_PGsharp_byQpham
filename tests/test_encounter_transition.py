@@ -15,6 +15,8 @@ class EncounterTransitionWaitTests(unittest.TestCase):
         routine.config = SimpleNamespace(
             encounter_timeout=2.0,
             encounter_transition_grace=2.0,
+            engage_miss_grace=0.0,
+            engage_miss_frames=2,
             pre_tap_delay=configured_delay,
             pre_tap_min_delay=0.12,
             settle_after_catch=1.0,
@@ -47,17 +49,54 @@ class EncounterTransitionWaitTests(unittest.TestCase):
 
         self.assertEqual([0.4], routine.sleeps)
 
-    def test_wait_uses_stream_only_and_returns_as_soon_as_ball_appears(self):
+    def test_wait_uses_fresh_stream_frames_and_returns_as_soon_as_ball_appears(self):
         routine = self._routine()
+        frames = iter(("map", "encounter"))
         calls = []
-        routine._poll = lambda predicate, timeout: calls.append((predicate, timeout)) or self.BALL
+        routine.device.screenshot = lambda **kwargs: calls.append(kwargs) or next(frames)
+        routine._ball_in = lambda frame: self.BALL if frame == "encounter" else None
+        routine._bar_visible = lambda _frame: False
+        routine._scan_slots = lambda _frame: None
+        routine._wait_if_paused = lambda: None
 
         found = routine._wait_for_engaged_encounter()
 
         self.assertEqual(self.BALL, found)
-        self.assertEqual(1, len(calls))
-        self.assertIs(routine._ball_in, calls[0][0])
-        self.assertEqual(4.0, calls[0][1])
+        self.assertEqual([{"next_frame": True}, {"next_frame": True}], calls)
+        self.assertFalse(routine._engage_still_nearby)
+
+    def test_occupied_nearby_after_rejected_tap_retries_without_full_timeout(self):
+        routine = self._routine()
+        calls = []
+        routine.device.screenshot = lambda **kwargs: calls.append(kwargs) or "map"
+        routine._ball_in = lambda _frame: None
+        routine._bar_visible = lambda _frame: True
+        routine._scan_slots = lambda _frame: self.SLOT
+        routine._wait_if_paused = lambda: None
+
+        found = routine._wait_for_engaged_encounter()
+
+        self.assertIsNone(found)
+        self.assertTrue(routine._engage_still_nearby)
+        self.assertEqual(2, len(calls))
+
+    def test_pgsharp_slot_overrides_stale_manual_coordinate_for_the_run(self):
+        routine = self._routine()
+        routine.config.force_slot = True
+        routine.config.nearby_slot = (922, 462)
+        routine._ui_nearby_slot = None
+        routine._nearby_last_seen_at = None
+        routine._force_bottom_cache = (1, 2)
+        routine._force_bottom_value = 999
+        traces = []
+        routine._trace = lambda *args, **_kwargs: traces.append(args)
+
+        routine._remember_ui_nearby_slot((927, 312))
+
+        self.assertEqual((927, 312), routine._effective_nearby_slot())
+        self.assertIsNone(routine._force_bottom_cache)
+        self.assertIsNone(routine._force_bottom_value)
+        self.assertTrue(any(item[0] == "nearby_ui_realign" for item in traces))
 
     def test_post_catch_settle_drops_old_evidence_before_waiting(self):
         routine = self._routine()

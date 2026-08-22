@@ -139,6 +139,9 @@ class HiddenPersistenceTests(unittest.TestCase):
             app = gui.App(root)
             app.throw_power.set(1234)
             app.no_balls_goplus.set(False)
+            app.target_iv_atk.set(15)
+            app.target_iv_def.set(14)
+            app.target_iv_sta.set(13)
             app.mode = "shundo"          # hides the whole catching group
             app._sync_settings_visibility()
             app.save_settings()
@@ -148,11 +151,16 @@ class HiddenPersistenceTests(unittest.TestCase):
                 saved = json.load(fh)
             self.assertEqual(1234, saved["throw_power"])
             self.assertFalse(saved["no_balls_goplus"])
+            self.assertEqual((15, 14, 13), (
+                saved["target_iv_atk"], saved["target_iv_def"], saved["target_iv_sta"]))
 
             root = tk.Tk()
             reloaded = gui.App(root)
             self.assertEqual(1234, reloaded.throw_power.get())
             self.assertFalse(reloaded.no_balls_goplus.get())
+            self.assertEqual((15, 14, 13), (
+                reloaded.target_iv_atk.get(), reloaded.target_iv_def.get(),
+                reloaded.target_iv_sta.get()))
             root.destroy()
         finally:
             gui._settings_path = real_path

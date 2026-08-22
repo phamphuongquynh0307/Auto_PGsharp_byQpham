@@ -1,4 +1,4 @@
-"""Shundo-checking routine (shiny + 100% IV).
+"""Shiny checking routine with user-selected attack / defence / stamina IV targets.
 
 Separate from the catch routine. Relies on PGSharp's own shiny check being enabled:
 attempting to encounter a non-shiny is blocked by PGSharp (a 1-second
@@ -12,7 +12,7 @@ Per cycle:
   3. If PGSharp's "blocked(non-shiny)" toast answers (or nothing opens), move on.
   4. If an encounter opens, the Pokémon is shiny — report it over Discord and pause for
      the user either way. Reading PGSharp's info pill ("▼ L3 IV40 0/6/12 ✨ ⚡") for the
-     sub-IV string 15/15/15 decides whether it is announced as a full SHUNDO.
+     IV value decides whether it matches the user's configured target.
 
 The sub-IVs are read by template-matching the glyphs '1', '5' and '/' inside the pill
 region and checking for the exact ordered sequence 1 5 / 1 5 / 1 5 with sane gaps.
@@ -27,18 +27,22 @@ from dataclasses import dataclass, field, replace
 
 from .catch import _load_optional, _resolve
 from .device import Device
+from . import uidump
 from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_MIN_SCORE, CALIBRATION_SWEEP, Layout,
     bracket_scales, scales_around,
 )
 from .vision import (
     best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
-    load_template, slot_has_pokemon,
+    find_dialog_buttons, load_template, slot_has_pokemon,
 )
 
 
 @dataclass
 class ShundoConfig:
+    # Exact attack / defence / stamina columns to keep. Shared by both source modes.
+    target_ivs: tuple[int, int, int] = (15, 15, 15)
+
     # Feed mode checks a spawn already present at startup before consuming its first feed item.
     # Alternative coordinate sources disable this so every answer belongs to an explicit item.
     check_initial_nearby: bool = True
@@ -120,7 +124,7 @@ class ShundoConfig:
     enc_berry_radius: int = 95
     enc_berry_min_fill: float = 0.06
 
-    # PGSharp info pill glyphs for the 15/15/15 check.
+    # PGSharp info pill glyphs retained as a fast 100-IV fallback when UI dump fails.
     glyph_1_template: str = "templates/glyph_1.png"
     glyph_5_template: str = "templates/glyph_5.png"
     glyph_slash_template: str = "templates/glyph_slash.png"
@@ -146,6 +150,7 @@ class ShundoConfig:
     # whether the mode can run at all. Same tight box as the catch routine's: it stops short
     # of the OK button so a stray match can never confirm the teleport.
     cancel_btn_template: str = "templates/cancel_btn.png"
+    dialog_region: tuple[int, int, int, int] = (150, 1150, 950, 500)
     cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
 
     # Popups. Teleporting long distances reliably triggers the speed warning.
@@ -165,7 +170,7 @@ class ShundoConfig:
 
     # What to do when a shundo is found: "pause" (default) or "stop".
     shundo_action: str = "pause"
-    # What to do on a plain shiny (opened encounter but NOT 15/15/15):
+    # What to do on a shiny whose three IV columns do not equal target_ivs:
     #   "skip"  -> flee the encounter and keep hunting the next spawn (default)
     #   "pause" -> stop on it like a shundo (obeys shundo_action's pause/stop)
     shiny_action: str = "skip"
@@ -232,6 +237,7 @@ class ShundoConfig:
             # anchored regions/positions
             pill_region=L.region(self.pill_region, "TC"),       # PGSharp IV pill, upper-centre
             toast_region=L.region(self.toast_region, "BC"),     # blocked toast, bottom-centre
+            dialog_region=L.region(self.dialog_region, "MC"),  # centred Android AlertDialog
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
             flee_xy=G.point(self.flee_xy, "TL"),   # game-drawn flee button, top-left
             # pure distances/sizes/offsets
@@ -257,7 +263,8 @@ class ShundoStats:
     checked: int = 0    # encounter attempts (double-taps that got an answer)
     shinies: int = 0    # encounters that actually opened
     shundos: int = 0
-    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "miss" | "recheck" | "lost"
+    last_ivs: tuple[int, int, int] | None = None
+    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "iv_unknown" | "miss" | "recheck" | "lost"
                           # | "nospawn" | "idle" | "popup"
 
 
@@ -276,6 +283,11 @@ class ShundoRoutine:
         # The IV-pill glyph matcher below keeps its own finely-tuned per-glyph scales.
         self._tpl_s = self.config.layout.s
         self._scales = bracket_scales(self._tpl_s)
+        # Popup buttons belong to Pokemon GO's game layer, which follows screen size rather than
+        # PGSharp's density-scaled overlay. MuMu measures ~0.66 for the game and ~0.57 for the
+        # overlay, enough for a tight template sweep to miss every warning button.
+        game_s = Layout(*self.config.screen).s
+        self._popup_scales = bracket_scales(game_s)
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
@@ -543,6 +555,18 @@ class ShundoRoutine:
                 self._teleport_blocked = True
                 self.stats.last_event = "popup"
                 return True
+        # Some Android skins alter the CANCEL font/background enough that the template misses.
+        # The warning is still a stock two-button AlertDialog, so recognise its two aligned
+        # buttons and choose the left one. In Shundo this is the only native two-button modal
+        # raised by the teleport path, therefore it has the same terminal meaning as the
+        # template-backed Go Plus warning above.
+        buttons = find_dialog_buttons(frame, self.config.dialog_region)
+        if len(buttons) >= 2:
+            target = min(buttons, key=lambda b: b[0])
+            self.device.tap(*target)
+            self._teleport_blocked = True
+            self.stats.last_event = "popup"
+            return True
         # NOTE: there used to be a "PGSharp menu accidentally left open -> tap the star to close
         # it" handler here. The menu's expanded row list is the normal, permanent state of this
         # UI, so its Settings gear matches on every ordinary map frame — the handler fired every
@@ -555,7 +579,7 @@ class ShundoRoutine:
                 frame,
                 self._close_btns,
                 threshold=max(0.82, self.config.popup_threshold),
-                scales=self._scales,
+                scales=self._popup_scales,
                 fallback_scales=CALIBRATION_SWEEP,
                 cache=fast_cache,
             )
@@ -568,14 +592,14 @@ class ShundoRoutine:
         if self._popup_weather is not None:
             m = find_fast(frame, self._popup_weather,
                           threshold=max(0.82, self.config.popup_threshold),
-                          scales=self._scales, cache=fast_cache)
+                          scales=self._popup_scales, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
         if self._popup_speed is not None:
             m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold,
-                          scales=self._scales, cache=fast_cache)
+                          scales=self._popup_scales, cache=fast_cache)
             if m:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
@@ -647,6 +671,19 @@ class ShundoRoutine:
                 if all(5 < g < cfg.glyph_max_gap for g in gaps):
                     return True
         return False
+
+    def _read_iv_stats(self, frame) -> tuple[int, int, int] | None:
+        """Read PGSharp's exact three IV columns, with the old hundo vision fallback.
+
+        A UI dump is paid for only after a shiny encounter is already open. It is slower
+        than vision but exposes the exact number needed for arbitrary user targets.
+        """
+        state = uidump.parse(self.device.ui_dump() or "")
+        if state is not None and state.iv_stats is not None:
+            return state.iv_stats
+        if tuple(self.config.target_ivs) == (15, 15, 15) and self._is_hundo(frame):
+            return 15, 15, 15
+        return None
 
     # -- pending Nearby entry ---------------------------------------------------------
     def _queue_pending(self, target: tuple[int, int]) -> None:
@@ -776,18 +813,21 @@ class ShundoRoutine:
     def _flee_to_map(self) -> bool | None:
         """Leave a skipped shiny and prove that the encounter UI is gone.
 
-        Returns ``None`` only when the user stopped the run. MuMu sometimes drops a standalone
-        tap even after the scrcpy control socket is closed, so every fresh frame drives the next
-        action: configured Flee tap, Android Back fallback, repeat. Two fresh frames without the
-        dynamically located Berry button confirm the exit.
+        Returns ``None`` only when the user stopped the run. The encounter was freshly confirmed
+        immediately before this call, so send the low-latency scrcpy Flee tap first instead of
+        spending a ~1s ADB screenshot proving the same state again. A fresh frame showing the
+        Nearby anchor confirms the map in one look; two encounter-free frames remain the fallback
+        when that translucent anchor is temporarily hard to match.
         """
         cfg = self.config
-        self.device.close_control()
         max_actions = max(6, max(1, int(cfg.flee_taps)) * 3)
         max_checks = max_actions + 4
-        deadline = time.monotonic() + max(30.0, cfg.flee_map_wait)
+        deadline = time.monotonic() + max(10.0, cfg.flee_map_wait)
         outside_streak = 0
-        actions = 0
+        # The persistent control socket is already warm from opening the encounter. This tap is
+        # tens of milliseconds; the old close-control + standalone ADB tap cost about a second.
+        self.device.tap(*cfg.flee_xy)
+        actions = 1
         checks = 0
         while checks < max_checks and time.monotonic() < deadline:
             if self.stop_event.is_set():
@@ -801,7 +841,7 @@ class ShundoRoutine:
             in_encounter = self._encounter_visible(frame)
             if not in_encounter:
                 outside_streak += 1
-                if outside_streak >= 2:
+                if self._anchor_in(frame) is not None or outside_streak >= 2:
                     return True
                 # Do not send another exit command between the two confirmation frames.
                 self._interruptible_sleep(max(0.06, cfg.poll_interval))
@@ -810,16 +850,18 @@ class ShundoRoutine:
             outside_streak = 0
             if actions >= max_actions:
                 continue
-            if actions % 2 == 0:
-                # First choice: the visible running-man Flee button, via an independent ADB tap.
-                self.device.adb_tap(*cfg.flee_xy)
-            else:
+            if actions % 2 == 1:
                 # Fallback: Android Back exits a Pokemon encounter without depending on any
                 # screen coordinate. This handles shifted layouts and taps silently dropped by
                 # MuMu while keeping the next action state-gated by a fresh Berry detection.
                 self.device.back()
+            else:
+                # Retry the visible button through the still-warm low-latency control socket.
+                self.device.tap(*cfg.flee_xy)
             actions += 1
-            self._interruptible_sleep(max(0.45, cfg.flee_gap_ms / 1000.0))
+            # A fresh screencap itself costs long enough for the transition to advance. Keep only
+            # a tiny yield here instead of the old forced 450ms after every action.
+            self._interruptible_sleep(max(0.06, min(0.15, cfg.flee_gap_ms / 1000.0)))
         return False
 
     def _ensure_calibrated(self) -> None:
@@ -1028,7 +1070,7 @@ class ShundoRoutine:
         return outcome
 
     def _grade_encounter(self, confirmed_frame=None) -> str:
-        """We're inside an open encounter — a shiny. Read the pill; shundo = 15/15/15."""
+        """We're inside a shiny encounter; compare its exact IV with the configured target."""
         cfg = self.config
         frame = confirmed_frame
         if frame is None:
@@ -1041,20 +1083,28 @@ class ShundoRoutine:
 
         self.stats.checked += 1
         self.stats.shinies += 1
+        self.stats.last_ivs = None
         for attempt in range(cfg.iv_read_tries):
             if self.stop_event.is_set():
                 return "shiny"
             # The normal stream is intentionally half-resolution for smooth MuMu
             # operation. A rare shiny gets a crisp one-shot frame for tiny IV glyphs.
-            if self._is_hundo(frame):
+            iv_stats = self._read_iv_stats(frame)
+            if iv_stats is not None:
+                self.stats.last_ivs = iv_stats
+            if iv_stats == tuple(cfg.target_ivs):
                 self.stats.shundos += 1
                 self.stats.last_event = "shundo"
                 return "shundo"
+            if iv_stats is not None:
+                self.stats.last_event = "shiny"
+                return "shiny"
             if attempt + 1 < cfg.iv_read_tries:
                 self._interruptible_sleep(0.4)
                 frame = self.device.screenshot(fresh=True)
-        self.stats.last_event = "shiny"
-        return "shiny"
+        # Never flee a shiny whose IV could not be read: it might be the requested target.
+        self.stats.last_event = "iv_unknown"
+        return "iv_unknown"
 
     def run(self, on_event=None) -> None:
         """Blocking loop. on_event(stats, outcome) fires after every cycle."""
@@ -1079,7 +1129,7 @@ class ShundoRoutine:
                 self.pause_event.set()
             elif outcome == "shiny":
                 if cfg.shiny_action == "skip":
-                    # Not a full shundo — leave this shiny (flee the encounter) and keep hunting.
+                    # Different IV — leave this shiny (flee the encounter) and keep hunting.
                     # on_event has already fired, so the Discord screenshot alert still goes out.
                     # Do not advance QuickSniper until the map return is visually confirmed.
                     fled = self._flee_to_map()
@@ -1097,6 +1147,8 @@ class ShundoRoutine:
                     break
                 else:
                     self.pause_event.set()
+            elif outcome == "iv_unknown":
+                self.pause_event.set()
 
     def stop(self) -> None:
         self.stop_event.set()

@@ -97,9 +97,10 @@ class UiVersusGameLayerTests(unittest.TestCase):
 
     def test_the_system_dialog_counts_as_a_native_view(self):
         guessed = CatchConfig().scale_to(1080, 2400, 480)
+        measured = guessed.rescale(0.885)
 
-        self.assertNotEqual(guessed.cancel_btn_region,
-                            guessed.rescale(0.885).cancel_btn_region)
+        self.assertNotEqual(guessed.cancel_btn_region, measured.cancel_btn_region)
+        self.assertNotEqual(guessed.dialog_region, measured.dialog_region)
 
     def test_shundo_splits_the_layers_the_same_way(self):
         from avc.shundo import ShundoConfig
@@ -108,6 +109,7 @@ class UiVersusGameLayerTests(unittest.TestCase):
         measured = guessed.rescale(0.885)
 
         self.assertNotEqual(guessed.pill_region, measured.pill_region)
+        self.assertNotEqual(guessed.dialog_region, measured.dialog_region)
         self.assertEqual(guessed.flee_xy, measured.flee_xy)
 
 

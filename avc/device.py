@@ -352,9 +352,26 @@ class Device:
             self._touch(0, 0, int(x1), int(y1))
             self._touch_line(0, (int(x1), int(y1)), (int(x2), int(y2)), duration_ms)
             self._touch(1, 0, int(x2), int(y2))
+            # A duplicate UP is harmless and covers a lossy Wi-Fi control packet without
+            # forcing the next catch to rebuild the entire scrcpy control server.
+            self._touch(1, 0, int(x2), int(y2))
         except Exception:
             self.close_control()
             self.swipe(x1, y1, x2, y2, duration_ms)
+
+    def release_control_pointers(self) -> None:
+        """Release stale scrcpy contacts while keeping the control channel connected."""
+        if self._control_socket is None:
+            return
+        try:
+            # Both pointer ids are used by Quick Catch. Extra UP packets on an already-released
+            # contact do not create a tap, but recover a final UP lost on a Wi-Fi connection.
+            for _ in range(2):
+                self._touch(1, 1, 0, 0)
+                self._touch(1, 0, 0, 0)
+        except Exception:
+            # A genuinely dead socket is rebuilt lazily by the next gesture.
+            self.close_control()
 
     # -- interactive pointer (live view) --------------------------------------
     # A real press/move/release trio, so dragging a finger across the mirrored screen

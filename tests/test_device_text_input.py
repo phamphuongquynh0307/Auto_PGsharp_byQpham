@@ -42,5 +42,34 @@ class DeviceTextInputTests(unittest.TestCase):
         )
 
 
+class ControlReuseTests(unittest.TestCase):
+    def test_release_sends_duplicate_ups_without_closing_a_live_socket(self):
+        device = object.__new__(Device)
+        device._control_socket = object()
+        touches = []
+        closed = []
+        device._touch = lambda *args: touches.append(args)
+        device.close_control = lambda: closed.append(True)
+
+        device.release_control_pointers()
+
+        self.assertEqual(
+            [(1, 1, 0, 0), (1, 0, 0, 0), (1, 1, 0, 0), (1, 0, 0, 0)],
+            touches,
+        )
+        self.assertEqual([], closed)
+
+    def test_release_closes_only_when_the_live_socket_is_broken(self):
+        device = object.__new__(Device)
+        device._control_socket = object()
+        closed = []
+        device._touch = lambda *_args: (_ for _ in ()).throw(OSError("broken"))
+        device.close_control = lambda: closed.append(True)
+
+        device.release_control_pointers()
+
+        self.assertEqual([True], closed)
+
+
 if __name__ == "__main__":
     unittest.main()

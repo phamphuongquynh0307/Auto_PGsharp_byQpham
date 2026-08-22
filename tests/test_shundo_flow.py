@@ -57,6 +57,7 @@ def bare_routine():
         enc_berry_radius=95,
         enc_berry_min_fill=0.06,
         iv_read_tries=1,
+        target_ivs=(15, 15, 15),
         layout=SimpleNamespace(s=1.0),
     )
     routine.stats = ShundoStats()
@@ -65,6 +66,7 @@ def bare_routine():
     routine.stop_event = threading.Event()
     routine.pause_event = threading.Event()
     routine._encounter_visible = lambda _frame: False
+    routine._anchor_in = lambda _frame: (1100, 1166)
     routine._raw_target_in_bar = lambda _frame: (900, 500)
     routine._interruptible_sleep = lambda _seconds: None
     return routine
@@ -281,13 +283,57 @@ class ShundoAnswerTests(unittest.TestCase):
         states = iter((False, True))
         routine._encounter_visible = lambda _frame: next(states)
         routine._poll = lambda _predicate, _timeout: "shiny"
-        routine._is_hundo = lambda _frame: False
+        routine._read_iv_stats = lambda _frame: (15, 15, 14)
 
         outcome = routine._attempt_nearby((900, 500))
 
         self.assertEqual("shiny", outcome)
         self.assertEqual(1, routine.stats.checked)
         self.assertEqual(1, routine.stats.shinies)
+
+    def test_exact_configured_iv_is_the_target_result(self):
+        routine = bare_routine()
+        routine.config.target_ivs = (15, 14, 15)
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: (15, 14, 15)
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("shundo", outcome)
+        self.assertEqual((15, 14, 15), routine.stats.last_ivs)
+        self.assertEqual(1, routine.stats.shundos)
+
+    def test_exact_iv_reader_uses_pgsharp_view_text(self):
+        routine = bare_routine()
+        routine.config.target_ivs = (15, 15, 14)
+        routine.device.ui_dump = lambda: (
+            '<hierarchy><node resource-id="x:id/hl_ec_sum_stats" text="15/15/14" '
+            'bounds="[0,0][100,50]" /></hierarchy>'
+        )
+
+        self.assertEqual((15, 15, 14), routine._read_iv_stats(object()))
+
+    def test_different_iv_is_a_plain_shiny(self):
+        routine = bare_routine()
+        routine.config.target_ivs = (15, 15, 14)
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: (14, 15, 15)
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("shiny", outcome)
+        self.assertEqual((14, 15, 15), routine.stats.last_ivs)
+
+    def test_unreadable_iv_is_not_fled_as_a_mismatch(self):
+        routine = bare_routine()
+        routine.config.target_ivs = (15, 15, 14)
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: None
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("iv_unknown", outcome)
+        self.assertIsNone(routine.stats.last_ivs)
 
     def test_pending_miss_returns_before_the_next_feed_can_be_tapped(self):
         routine = bare_routine()
@@ -348,38 +394,40 @@ class ShundoAnswerTests(unittest.TestCase):
 
 
 class ShundoFleeTests(unittest.TestCase):
-    def test_flee_taps_then_waits_for_two_fresh_frames_without_berry(self):
+    def test_flee_uses_low_latency_tap_then_one_fresh_map_confirmation(self):
         routine = bare_routine()
-        states = iter((True, False, False))
+        states = iter((False,))
         routine._encounter_visible = lambda _frame: next(states)
 
         fled = routine._flee_to_map()
 
         self.assertTrue(fled)
-        self.assertTrue(routine.device.control_closed)
-        self.assertEqual([(120, 170)], routine.device.adb_taps)
+        self.assertFalse(routine.device.control_closed)
+        self.assertEqual([(120, 170)], routine.device.regular_taps)
+        self.assertEqual(1, len(routine.device.screenshot_calls))
         self.assertEqual(0, routine.device.back_presses)
 
-    def test_flee_accepts_already_stable_exit_without_sending_any_action(self):
+    def test_flee_falls_back_to_two_outside_frames_when_anchor_is_not_visible(self):
         routine = bare_routine()
+        routine._anchor_in = lambda _frame: None
 
         fled = routine._flee_to_map()
 
         self.assertTrue(fled)
-        self.assertEqual([], routine.device.adb_taps)
+        self.assertEqual([(120, 170)], routine.device.regular_taps)
         self.assertEqual(0, routine.device.back_presses)
-        self.assertTrue(routine.device.screenshot_calls)
+        self.assertEqual(2, len(routine.device.screenshot_calls))
         self.assertTrue(all(call.get("fresh") is True for call in routine.device.screenshot_calls))
 
     def test_flee_falls_back_to_android_back_when_tap_is_ignored(self):
         routine = bare_routine()
-        states = iter((True, True, False, False))
+        states = iter((True, False))
         routine._encounter_visible = lambda _frame: next(states)
 
         fled = routine._flee_to_map()
 
         self.assertTrue(fled)
-        self.assertEqual([(120, 170)], routine.device.adb_taps)
+        self.assertEqual([(120, 170)], routine.device.regular_taps)
         self.assertEqual(1, routine.device.back_presses)
 
 

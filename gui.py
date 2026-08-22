@@ -32,6 +32,7 @@ from avc.catch import CatchConfig, CatchRoutine
 from avc.coord_shundo import CoordShundoConfig, CoordShundoRoutine
 from avc.coord_source import CoordBridge, CoordQueue
 from avc.device import Device
+from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 from avc.spin import SpinRoutine
 
@@ -75,75 +76,66 @@ LANG = {
     "tab_settings":  {"vi": "Cài đặt", "en": "Settings"},
     "tab_donate":    {"vi": "Ủng hộ ❤", "en": "Donate ❤"},
     "tab_guide":     {"vi": "Hướng dẫn", "en": "Guide"},
+    "guide_section": {"vi": "Mục hướng dẫn:", "en": "Guide section:"},
     "guide_text":    {"vi": (
-        "📖 HƯỚNG DẪN SỬ DỤNG\n"
-        "\n"
-        "① CHUẨN BỊ ĐIỆN THOẠI\n"
-        "• Bật \"Tùy chọn nhà phát triển\" → bật \"Gỡ lỗi USB (USB debugging)\".\n"
-        "• Mở Pokémon GO (PGSharp), vào tới màn hình bản đồ.\n"
-        "• Điện thoại và máy tính phải chung một mạng Wi-Fi.\n"
-        "\n"
-        "② KẾT NỐI (nút \"Kết nối\")\n"
-        "• Lần đầu: CẮM CÁP USB → bấm \"Kết nối\". App tự bật adb qua Wi-Fi và nhớ máy. "
-        "Khi thấy báo \"có thể rút cáp USB\" là rút cáp ra được.\n"
-        "• Lần sau: KHÔNG cần cáp. Mở app → chọn máy trong danh sách (hoặc bấm \"Kết nối\") "
-        "là tự nối lại qua Wi-Fi.\n"
-        "\n"
-        "③ CHỌN CHẾ ĐỘ\n"
-        "• \"Bắt Pokémon\": tự bắt các Pokémon ở thanh bên phải màn hình.\n"
-        "• \"Shundo\": chỉ săn shiny / 100% IV theo cấu hình.\n"
-        "\n"
-        "④ CHẠY\n"
-        "• Bấm ▶ Chạy để bắt đầu, ⏸ Tạm dừng, ⏹ Dừng.\n"
-        "• Theo dõi hoạt động ở khung \"Nhật ký\" phía dưới.\n"
-        "\n"
-        "⑤ HẾT POKÉ BALL\n"
-        "• Khi hết bóng, app tự thoát màn bắt và bật AutoWalk trong 10 phút. Ở chế độ bắt có "
-        "key, có thể bật thêm tùy chọn khởi động Go Plus để quay PokéStop.\n"
-        "\n"
-        "⑥ THÔNG BÁO DISCORD (tab Cài đặt)\n"
-        "• Dán \"Webhook URL\" của kênh Discord để nhận cảnh báo: trống spawn lâu, báo cáo "
-        "định kỳ, pin yếu, hết bóng, gặp shiny…\n"
-        "\n"
-        "⑦ MẸO\n"
-        "• Cắm sạc khi chạy lâu; app có thể tự làm tối màn hình cho đỡ nóng (game vẫn chạy nền).\n"
-        "• Nếu ném lệch: chỉnh \"Lực ném\" trong tab Cài đặt.\n"
-        "• Mất kết nối: bấm \"Làm mới\" hoặc chọn lại máy trong danh sách để nối lại Wi-Fi.\n"
+        "📖 HƯỚNG DẪN NHANH THEO TỪNG CHẾ ĐỘ\n\n"
+        "① KẾT NỐI VÀ KIỂM TRA\n"
+        "• Bật USB debugging; điện thoại và máy tính dùng chung Wi-Fi.\n"
+        "• Lần đầu cắm USB → Kết nối → Wi-Fi. Chỉ rút cáp sau khi app báo thành công.\n"
+        "• Chọn máy rồi bấm ‘Kiểm tra ADB/scrcpy’. Cần đủ ADB, stream và socket điều khiển.\n"
+        "• Dùng ‘👁 Xem bot nhìn’ trước; chỉ căn tay khi vùng nhận diện thật sự bị lệch.\n\n"
+        "② AUTO BẮT POKÉMON\n"
+        "• PGSharp ở màn hình map, thanh Nearby bên phải phải nhìn thấy Pokémon.\n"
+        "• Lần thử đầu: giới hạn 1 con, lực ném 700, chờ encounter 3 giây, tối đa 3 bóng.\n"
+        "• Giữ bật đọc overlay PGSharp và nghỉ theo cooldown. Feed mở rộng nên để tắt lúc thử đầu.\n"
+        "• Quick Catch chỉ cần chỉnh Flick/Chờ sau ném nếu Berry hoặc Flee chưa ăn.\n\n"
+        "③ CHẤM SHINY THEO IV TỪ FEED\n"
+        "• PGSharp phải bật chặn non-shiny; để Feed/RSS và thanh Nearby có dấu @ cùng hiển thị.\n"
+        "• Ngắt Go Plus trước khi chạy, nếu không PGSharp chặn teleport và app sẽ dừng an toàn.\n"
+        "• Nhập riêng IV Công/Thủ/HP. Để thời gian chờ spawn = 0 nếu không muốn bỏ spawn chậm.\n"
+        "• App chỉ lấy Feed item kế tiếp sau khi Pokémon hiện tại có kết quả rõ ràng.\n\n"
+        "④ CHẤM SHINY TỪ DISCORD COORD\n"
+        "• Edge: Load unpacked extension, đăng nhập Discord Web + Pokedex100 cùng profile.\n"
+        "• PGSharp: bật chặn non-shiny, ngắt Go Plus, mở sẵn menu và để hàng Teleport hiện rõ.\n"
+        "• Căn đúng ba điểm: hàng Teleport, ô Coordinates và nút OK.\n"
+        "• Mở app/bấm Chạy trước, sau đó mới bấm Bắt đầu trong Collector.\n"
+        "• ‘Đang chờ coord’ chỉ có nghĩa hàng đợi đang trống, không phải lỗi.\n\n"
+        "⑤ QUAY POKÉSTOP KHI ĐI ĐƯỜNG\n"
+        "• Đứng ở map; nên để menu PGSharp mở để app kiểm tra AutoWalk lúc bắt đầu.\n"
+        "• Mở Xem bot nhìn: vòng quét phải ôm quanh nhân vật. Mặc định 450 px, giãn 2 giây.\n"
+        "• App bấm stop xanh chưa quay, bỏ qua stop tím và luôn CANCEL hộp Stop AutoWalk.\n\n"
+        "⑥ KHI CÓ LỖI\n"
+        "• Bấm ‘🧾 Xuất báo cáo lỗi’ và gửi ZIP cùng tên chế độ đang chạy.\n"
+        "• Lỗi vị trí: gửi thêm ảnh Xem bot nhìn có bật ‘Vẽ vùng bot nhìn’.\n"
+        "• Hướng dẫn đầy đủ và vị trí ảnh minh họa nằm trong HUONG_DAN.md trên trang dự án.\n"
     ), "en": (
-        "📖 USER GUIDE\n"
-        "\n"
-        "① PREPARE THE PHONE\n"
-        "• Enable \"Developer options\" → turn on \"USB debugging\".\n"
-        "• Open Pokémon GO (PGSharp) and reach the map screen.\n"
-        "• The phone and PC must be on the same Wi-Fi network.\n"
-        "\n"
-        "② CONNECT (the \"Connect\" button)\n"
-        "• First time: PLUG IN THE USB CABLE → click \"Connect\". The app switches adb to "
-        "Wi-Fi and remembers the phone. When it says \"you can unplug the USB cable\", unplug it.\n"
-        "• Next times: NO cable needed. Open the app → pick the phone from the list (or click "
-        "\"Connect\") and it reconnects over Wi-Fi.\n"
-        "\n"
-        "③ PICK A MODE\n"
-        "• \"Catching\": auto-catches the Pokémon in the right-side sidebar.\n"
-        "• \"Shundo\": hunts only shiny / 100% IV per your settings.\n"
-        "\n"
-        "④ RUN\n"
-        "• Click ▶ Run to start, ⏸ Pause, ⏹ Stop.\n"
-        "• Watch activity in the \"Log\" box below.\n"
-        "\n"
-        "⑤ OUT OF POKÉ BALLS\n"
-        "• When balls run out, the app leaves the encounter and starts AutoWalk for 10 minutes. "
-        "In keyed catch mode, Go Plus can also be started through its dedicated setting.\n"
-        "\n"
-        "⑥ DISCORD ALERTS (Settings tab)\n"
-        "• Paste a Discord channel \"Webhook URL\" to receive alerts: long dry spells, periodic "
-        "reports, low battery, out of balls, shiny found…\n"
-        "\n"
-        "⑦ TIPS\n"
-        "• Keep it charging for long runs; the app can dim the screen to stay cool (the game "
-        "keeps running).\n"
-        "• Throws off target? Tune \"Throw power\" and \"Distance @ → first slot\" in Settings.\n"
-        "• Lost connection? Click \"Refresh\" or re-pick the phone from the list to reconnect Wi-Fi.\n"
+        "📖 QUICK GUIDE BY MODE\n\n"
+        "① CONNECT AND TEST\n"
+        "• Enable USB debugging; keep the phone and PC on the same Wi-Fi.\n"
+        "• First time: USB → Connect → Wi-Fi. Unplug only after the success message.\n"
+        "• Run ‘Test ADB/scrcpy’; ADB capture, realtime stream and control socket must all pass.\n"
+        "• Open Live view first. Use Manual align only when the overlay is visibly misplaced.\n\n"
+        "② AUTO CATCH\n"
+        "• Stay on the map with a Pokémon visible in PGSharp's right-side Nearby bar.\n"
+        "• First test: limit 1, throw power 700, encounter wait 3 s, maximum 3 balls.\n"
+        "• Keep PGSharp overlay reading and cooldown protection enabled. Leave optional Feed off first.\n"
+        "• For Quick Catch, tune Flick/After-throw wait only if Berry or Flee is missed.\n\n"
+        "③ SHINY IV CHECK FROM FEED\n"
+        "• Enable PGSharp non-shiny blocking; show the Feed/RSS bar and the Nearby @ bar.\n"
+        "• Disconnect Go Plus or PGSharp will block teleport and the app will stop safely.\n"
+        "• Enter Attack/Defence/HP separately. Spawn wait 0 keeps waiting for slow spawns.\n\n"
+        "④ SHINY IV CHECK FROM DISCORD COORDS\n"
+        "• Load the Edge extension; sign into Discord Web and Pokedex100 in the same profile.\n"
+        "• Keep PGSharp's expanded menu and Teleport row visible; disconnect Go Plus.\n"
+        "• Align Teleport row, Coordinates field and OK. Start the desktop app before Collector.\n"
+        "• ‘Waiting for a coordinate’ means the queue is empty; it is not an error.\n\n"
+        "⑤ SPIN POKÉSTOPS WHILE WALKING\n"
+        "• Stay on the map and keep the PGSharp menu visible for the initial AutoWalk check.\n"
+        "• In Live view, the scan circle should surround the avatar. Defaults: 450 px / 2 s.\n"
+        "• The app taps blue unspun stops, ignores violet stops and cancels Stop AutoWalk dialogs.\n\n"
+        "⑥ REPORTING A PROBLEM\n"
+        "• Export a bug report ZIP and include the running mode.\n"
+        "• For alignment issues, also send a Live view image with detection overlays enabled.\n"
     )},
     "donate_msg":    {"vi": "Nếu app giúp bạn bắt được kha khá Pokémon, mời mình ly cà phê nhé ☕ Cảm ơn bạn!",
                       "en": "If this app catches you a good few Pokémon, consider buying me a coffee ☕ Thank you!"},
@@ -248,9 +240,11 @@ LANG = {
     "cal_group_normal": {"vi": "Bắt thường (có key)", "en": "Normal catch (with key)"},
     "cal_group_quick":  {"vi": "Bắt nhanh (không key)", "en": "Quick catch (no key)"},
     "cal_hint":      {"vi": "Kéo dấu (+) tới đúng nút/pokémon; kéo góc khung để đổi kích thước. "
-                            "Lưu xong bot dùng đúng các điểm này (tắt dò '@').",
-                      "en": "Drag each (+) onto the right button/pokémon; drag a box corner to resize. "
-                            "After saving, the bot uses these exact spots (auto-detect off)."},
+                            "Bot dùng các điểm đã lưu; riêng Nearby vẫn ưu tiên tâm hàng đọc trực tiếp "
+                            "từ PGSharp khi đọc được.",
+                       "en": "Drag each (+) onto the right button/Pokémon; drag a box corner to resize. "
+                             "Saved points are used as configured; Nearby still prefers the live row "
+                             "centre reported by PGSharp when available."},
     "cal_center_tip": {"vi": "Đưa dấu này ra giữa màn hình (dùng khi nó lệch ra ngoài, không kéo được).",
                        "en": "Drop this marker in the middle of the screen (use when it sits off-screen and can't be dragged)."},
     "cal_center_all": {"vi": "⌖ Đưa tất cả ra giữa màn hình",
@@ -301,35 +295,42 @@ LANG = {
                       "en": "Drag on the image to swipe/control the phone like scrcpy. "
                             "Untick 'Control with mouse' to just watch."},
     "mode_catch":    {"vi": "Auto bắt Pokémon", "en": "Auto catch"},
-    "mode_shundo":   {"vi": "Chấm shundo (shiny 100 IV)", "en": "Shundo check (shiny 100 IV)"},
-    "mode_coord_shundo": {"vi": "Shundo từ Discord Coord", "en": "Shundo from Discord coords"},
+    "mode_shundo":   {"vi": "Chấm shiny theo IV", "en": "Check shiny by IV"},
+    "mode_coord_shundo": {"vi": "Chấm shiny IV từ Discord Coord", "en": "Shiny IV check from Discord coords"},
     "mode_spin":     {"vi": "Quay PokéStop khi đi đường", "en": "Spin PokéStops while walking"},
-    "grp_shundo":    {"vi": "Chấm shundo", "en": "Shundo check"},
+    "grp_shundo":    {"vi": "Chấm shiny theo IV", "en": "Check shiny by IV"},
     "shundo_note":   {"vi": "Cần bật chặn không-shiny trong PGSharp (encounter chỉ mở khi shiny).",
-                      "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
+                       "en": "Requires PGSharp's non-shiny block (encounters only open for shinies)."},
+    "target_iv_atk": {"vi": "IV Công mục tiêu (0–15):", "en": "Target Attack IV (0–15):"},
+    "target_iv_def": {"vi": "IV Thủ mục tiêu (0–15):", "en": "Target Defence IV (0–15):"},
+    "target_iv_sta": {"vi": "IV HP mục tiêu (0–15):", "en": "Target HP IV (0–15):"},
     "tp_wait":       {"vi": "Chờ Pokémon xuất hiện trên Nearby (giây, 0 = mãi):",
                       "en": "Wait for Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
-    "alert_shiny":   {"vi": "Báo Discord khi gặp shiny chưa đủ 100 IV", "en": "Discord alert on shiny below 100 IV"},
-    "shundo_action": {"vi": "Khi thấy shundo:", "en": "On shundo:"},
-    "shiny_action":  {"vi": "Khi shiny (chưa 100 IV):", "en": "On shiny (below 100 IV):"},
+    "alert_shiny":   {"vi": "Báo Discord khi shiny khác IV mục tiêu", "en": "Discord alert on shiny with another IV"},
+    "shundo_action": {"vi": "Khi đúng IV mục tiêu:", "en": "On target IV match:"},
+    "shiny_action":  {"vi": "Khi shiny khác IV mục tiêu:", "en": "On shiny with another IV:"},
     "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
     "act_stop":      {"vi": "Dừng hẳn bot", "en": "Stop the bot"},
     "act_skip":      {"vi": "Thoát, soi con khác", "en": "Flee and keep hunting"},
-    "msg_s_shiny_skip": {"vi": "✨ Phát hiện shiny (chưa đủ 100 IV) — đang bấm Flee.",
-                         "en": "✨ Shiny detected (below 100 IV) — attempting Flee."},
+    "msg_s_shiny_skip": {"vi": "✨ Shiny IV {} (mục tiêu IV {}) — đang bấm Flee.",
+                         "en": "✨ Shiny IV {} (target IV {}) — attempting Flee."},
     "msg_s_fled":      {"vi": "✓ Đã bấm Flee và xác nhận trở về map — tiếp tục soi.",
                          "en": "✓ Flee succeeded and the map is back — continuing."},
     "msg_s_flee_failed": {"vi": "⛔ Flee chưa đưa về map; đã dừng để không bấm nhầm Pokémon kế tiếp.",
                            "en": "⛔ Flee did not return to the map; stopped before tapping the next Pokémon."},
-    "dc_shiny_skip": {"vi": "✨ SHINY (chưa đủ 100 IV) — đã bỏ qua, soi tiếp. (đã soi {} con)",
-                      "en": "✨ SHINY (below 100 IV) — skipped, still hunting. ({} checked)"},
-    "s_counts":      {"vi": "Soi: {} | shiny: {} | shundo: {}", "en": "Checked: {} | shiny: {} | shundo: {}"},
-    "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | shundo {}",
-                      "en": "check {}: not shiny (blocked) | shiny {} | shundo {}"},
-    "msg_s_shiny":   {"vi": "✨ SHINY! Bot {} — vào máy xử lý!", "en": "✨ SHINY! Bot {} — go handle it!"},
+    "dc_shiny_skip": {"vi": "✨ SHINY IV {} (mục tiêu IV {}) — đã bỏ qua, soi tiếp. (đã soi {} con)",
+                       "en": "✨ SHINY IV {} (target IV {}) — skipped, still hunting. ({} checked)"},
+    "s_counts":      {"vi": "Soi: {} | shiny: {} | đúng IV: {}", "en": "Checked: {} | shiny: {} | target IV: {}"},
+    "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | đúng IV {}",
+                       "en": "check {}: not shiny (blocked) | shiny {} | target IV {}"},
+    "msg_s_shiny":   {"vi": "✨ SHINY IV {} (mục tiêu IV {})! Bot {} — vào máy xử lý!",
+                       "en": "✨ SHINY IV {} (target IV {})! Bot {} — go handle it!"},
     "st_shiny":      {"vi": "✨ SHINY — chờ bạn xử lý!", "en": "✨ SHINY — waiting for you!"},
-    "msg_s_shundo":  {"vi": "🌟💯 SHUNDO!!! Bot {} — vào máy bắt ngay!", "en": "🌟💯 SHUNDO!!! Bot {} — go catch it now!"},
+    "msg_s_shundo":  {"vi": "🌟 SHINY IV {} ĐÚNG MỤC TIÊU! Bot {} — vào máy bắt ngay!",
+                       "en": "🌟 SHINY IV {} MATCHED! Bot {} — go catch it now!"},
+    "msg_s_iv_unknown": {"vi": "⚠️ Không đọc được IV — đã giữ encounter và tạm dừng để không bỏ nhầm Pokémon.",
+                          "en": "⚠️ Could not read IV — kept the encounter open and paused to avoid skipping the target."},
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
     "msg_coord_idle": {"vi": "(đang chờ coord từ extension — hàng đợi hiện trống)",
                          "en": "(waiting for a coordinate from the extension — queue is empty)"},
@@ -353,13 +354,13 @@ LANG = {
                             "(đã bấm CANCEL để tránh softban). Hãy ngắt Go Plus rồi chạy lại.",
                       "en": "⛔ Shundo stopped: Go Plus is connected so PGSharp blocks every teleport "
                             "(answered CANCEL to avoid a softban). Disconnect Go Plus and run again."},
-    "st_shundo":     {"vi": "🌟 SHUNDO — chờ bạn xử lý!", "en": "🌟 SHUNDO — waiting for you!"},
-    "dc_shundo":     {"vi": "🌟💯 SHUNDO phát hiện! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
-                      "en": "🌟💯 SHUNDO found! Bot {} — go catch it! ({} checked, {} shiny)"},
+    "st_shundo":     {"vi": "🌟 ĐÚNG IV — chờ bạn xử lý!", "en": "🌟 TARGET IV — waiting for you!"},
+    "dc_shundo":     {"vi": "🌟 SHINY IV {} đúng mục tiêu! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
+                       "en": "🌟 SHINY IV {} matched! Bot {} — go catch it! ({} checked, {} shiny)"},
     "dc_shundo_pause": {"vi": "tạm dừng, encounter đang mở", "en": "paused with the encounter open"},
     "dc_shundo_stop":  {"vi": "đã dừng hẳn, encounter đang mở", "en": "stopped with the encounter open"},
-    "dc_shiny":      {"vi": "✨ SHINY phát hiện (chưa đủ 100 IV)! Bot {} — vào xử lý! (đã soi {} con)",
-                      "en": "✨ SHINY found (below 100 IV)! Bot {} — go handle it! ({} checked)"},
+    "dc_shiny":      {"vi": "✨ SHINY IV {} (mục tiêu IV {})! Bot {} — vào xử lý! (đã soi {} con)",
+                       "en": "✨ SHINY IV {} (target IV {})! Bot {} — go handle it! ({} checked)"},
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
@@ -414,6 +415,317 @@ LANG = {
 }
 
 LANG_NAMES = [("vi", "Tiếng Việt"), ("en", "English")]
+
+
+# Detailed in-app guide. Image markers are intentionally part of the content: until the owner
+# supplies a screenshot, the renderer shows a visible annotated placeholder. Dropping a PNG with
+# the documented filename into ``guide_images`` beside the EXE replaces that placeholder on the
+# next app start, so adding screenshots later does not require restructuring the guide.
+GUIDE_SECTIONS = (
+    ("install", {"vi": "1. Cài app & kết nối", "en": "1. Install & connect"}),
+    ("pgsharp", {"vi": "2. Cài đặt PGSharp chung", "en": "2. Shared PGSharp setup"}),
+    ("catch", {"vi": "3. Auto bắt Pokémon", "en": "3. Auto catch"}),
+    ("shundo", {"vi": "4. Chấm shiny từ Feed", "en": "4. Shiny check from Feed"}),
+    ("coord", {"vi": "5. Shiny từ Discord Coord", "en": "5. Shiny from Discord coords"}),
+    ("spin", {"vi": "6. Quay PokéStop", "en": "6. Spin PokéStops"}),
+    ("errors", {"vi": "7. Căn chỉnh & báo lỗi", "en": "7. Alignment & reports"}),
+)
+
+
+GUIDE_PAGES = {
+    "install": {"vi": """# 1. CÀI APP VÀ KẾT NỐI ĐIỆN THOẠI
+
+## A. Cài app trên Windows
+1. Tải AutoCatchPokemonPGSharp.exe từ trang Release chính thức của dự án.
+2. Tạo một thư mục riêng có quyền ghi, ví dụ D:\\AutoCatchPGSharp. Không để EXE trong file ZIP hoặc Program Files.
+3. Chép EXE vào thư mục đó rồi mở. App sẽ lưu settings.json, log và báo cáo lỗi ngay cạnh EXE.
+4. Nếu Windows SmartScreen cảnh báo app chưa ký, chỉ chọn More info → Run anyway khi file đúng từ Release chính thức.
+
+[[IMAGE:01-app-windows|Chụp trang tải Release, thư mục đặt EXE và cảnh báo SmartScreen nếu có. Che tên tài khoản Windows.]]
+
+## B. Chuẩn bị Android
+1. Mở Cài đặt Android → Giới thiệu điện thoại.
+2. Nhấn Số hiệu bản dựng 7 lần để bật Tùy chọn nhà phát triển.
+3. Vào Tùy chọn nhà phát triển và bật Gỡ lỗi USB.
+4. Điện thoại và máy tính phải dùng cùng một Wi-Fi. Tắt VPN/AP isolation nếu hai máy không nhìn thấy nhau.
+5. Mở Pokémon GO PGSharp và vào hẳn màn hình bản đồ trước khi chạy bot.
+
+[[IMAGE:02-usb-debug|Chụp vị trí Số hiệu bản dựng, Tùy chọn nhà phát triển và công tắc Gỡ lỗi USB.]]
+
+## C. Kết nối lần đầu
+1. Cắm cáp USB truyền dữ liệu; cáp chỉ sạc sẽ không dùng được.
+2. Khi Android hỏi cho phép gỡ lỗi, đánh dấu Luôn cho phép từ máy tính này rồi bấm Cho phép.
+3. Trong app bấm Kết nối → Wi-Fi (rút được cáp).
+4. Chờ nhật ký báo đã kết nối Wi-Fi và có thể rút cáp rồi mới rút.
+5. Những lần sau chỉ cần chọn thiết bị đã lưu. Nếu mất kết nối, bấm Làm mới; không được nữa thì cắm USB để bật lại ADB Wi-Fi.
+
+[[IMAGE:03-connect-wifi|Chụp hộp chọn USB/Wi-Fi, hộp cấp quyền trên Android và dòng báo có thể rút cáp.]]
+
+## D. Kiểm tra trước lần chạy đầu
+1. Chọn đúng máy trong ô Thiết bị.
+2. Bấm Kiểm tra ADB/scrcpy.
+3. Phải có đủ ba kết quả: ADB chụp màn hình được, stream realtime nhận frame và socket điều khiển scrcpy hoạt động.
+4. Bấm 👁 Xem bot nhìn. Ảnh phải đúng chiều, không đen và cập nhật liên tục.
+
+[[IMAGE:04-test-control|Chụp ba dòng kiểm tra thành công và cửa sổ Xem bot nhìn.]]
+
+⚠ Nếu đổi độ phân giải hoặc DPI Android sau khi căn tay, phải căn lại. Tọa độ của máy này không dùng chung cho máy khác.
+""", "en": """# 1. INSTALL AND CONNECT
+
+## Windows
+1. Download the EXE from the project's official Release page.
+2. Put it in a writable folder such as D:\\AutoCatchPGSharp, not inside a ZIP or Program Files.
+3. Run it. Settings, logs and reports are stored beside the EXE.
+[[IMAGE:01-app-windows|Release download, EXE folder and SmartScreen if shown.]]
+
+## Android and first connection
+1. Enable Developer options and USB debugging.
+2. Keep the phone and PC on the same Wi-Fi.
+3. Plug in a data-capable USB cable and approve the Android debugging prompt.
+4. In the app choose Connect → Wi-Fi. Unplug only after the success message.
+[[IMAGE:02-usb-debug|Developer options and USB debugging.]]
+[[IMAGE:03-connect-wifi|USB/Wi-Fi choice and successful connection log.]]
+
+## Test
+Select the device and run Test ADB/scrcpy. ADB capture, realtime stream and the control socket must all pass. Then open Live view.
+[[IMAGE:04-test-control|Three successful test lines and Live view.]]
+"""},
+
+    "pgsharp": {"vi": """# 2. CÀI ĐẶT PGSHARP DÙNG CHUNG
+
+Tên tính năng bên dưới theo tài liệu PGSharp hiện tại. Bố cục có thể đổi theo phiên bản; ảnh sẽ ghi đúng vị trí menu trên bản bạn đang dùng.
+
+## A. Cài PGSharp
+1. Cài đúng bản PGSharp phù hợp Android của bạn và đăng nhập Pokémon GO.
+2. Vào map, chờ nhân vật, PokéStop và Pokémon tải xong.
+3. Không bật Hide PGSharp khi bot chạy vì nó sẽ ẩn Nearby, Feed và các shortcut bot cần đọc.
+
+[[IMAGE:05-pgsharp-install|Chụp trang tải PGSharp đúng bản, màn đăng nhập và map sau khi tải xong. Không để lộ tài khoản.]]
+
+## B. Các tính năng nên đưa vào Custom Shortcuts
+• AutoWalk: app dùng khi trống spawn hoặc ở chế độ quay stop.
+• Teleport: bắt buộc cho Discord Coord; phải giữ menu mở sẵn.
+• Virtual Go Plus: chỉ cần khi bạn thật sự dùng tùy chọn Go Plus; Shundo phải ngắt nó.
+• Settings: để mở nhanh phần cấu hình khi cần đối chiếu.
+
+[[IMAGE:06-pgsharp-shortcuts|Chụp Custom Shortcuts và menu PGSharp đã mở, đánh dấu AutoWalk, Teleport, VGP và Settings.]]
+
+## C. Thiết lập chung khuyên dùng
+• Nearby Radar = bật; thanh Nearby bên phải phải hiện. Muốn bắt tất cả thì không lọc chỉ shiny.
+• Cooldown Timer = bật. Trong app cũng giữ bật Đọc overlay PGSharp và Nghỉ khi PGSharp báo cooldown.
+• Spawn Booster = có thể bật để tăng phạm vi spawn quanh nhân vật.
+• Quick Load Map = nên bật cho chế độ teleport nhiều.
+• Encounter IV = bật cho hai chế độ chấm shiny để app có dữ liệu IV rõ hơn.
+
+⚠ Block Non-Shiny phải đổi theo chế độ:
+• Auto bắt Pokémon: TẮT, nếu không PGSharp sẽ chặn Pokémon thường và bot không thể bắt.
+• Chấm shiny từ Feed/Discord Coord: BẬT, vì app dùng chính việc bị chặn để biết Pokémon không shiny.
+
+[[IMAGE:07-pgsharp-common|Chụp màn Settings có Nearby Radar, Cooldown Timer, Spawn Booster, Quick Load Map, Encounter IV và Block Non-Shiny. Đánh dấu rõ ON/OFF.]]
+""", "en": """# 2. SHARED PGSHARP SETUP
+
+## Shared settings
+• Keep PGSharp visible; Hide PGSharp must be off while the bot runs.
+• Add AutoWalk, Teleport, Virtual Go Plus and Settings to Custom Shortcuts as needed.
+• Enable Nearby Radar and Cooldown Timer. Quick Load Map is useful for teleport modes.
+• Enable Encounter IV for shiny-checking modes.
+[[IMAGE:05-pgsharp-install|PGSharp install and loaded map.]]
+[[IMAGE:06-pgsharp-shortcuts|Custom Shortcuts and expanded shortcut menu.]]
+[[IMAGE:07-pgsharp-common|Nearby Radar, Cooldown Timer, Encounter IV and Block Non-Shiny settings.]]
+
+⚠ Block Non-Shiny: OFF for Auto catch; ON for both shiny-checking modes.
+"""},
+
+    "catch": {"vi": """# 3. AUTO BẮT POKÉMON
+
+## A. PGSharp phải hiện như thế nào
+1. Ở màn hình map.
+2. Thanh Nearby Radar ở bên phải đang mở và nhìn thấy Pokémon; dấu @ ở đáy thanh không bị cửa sổ khác che.
+3. Block Non-Shiny = tắt.
+4. Nếu chỉ bắt Nearby, để Nearby hết Pokémon: lấy 1 con từ Feed = tắt.
+5. Nếu muốn lấy thêm từ Feed, mở Quick Sniper (Feed) có biểu tượng RSS và thử Nearby ổn trước rồi mới bật tùy chọn này.
+
+[[IMAGE:08-catch-layout|Chụp map đúng cho Auto bắt: thanh Nearby, Pokémon đầu, dấu @ và menu PGSharp không che mục tiêu.]]
+
+## B. Cài trong app lần đầu
+1. Chọn Chế độ → Auto bắt Pokémon.
+2. Chọn Auto bắt thường hoặc Auto bắt nhanh (không cần PGSharp key).
+3. Đặt Giới hạn số con = 1 để thử.
+4. Giữ Lực ném = 700, Chờ mở encounter = 3 giây, Số bóng tối đa mỗi con = 3.
+5. Giữ bật Đọc overlay PGSharp và Nghỉ khi PGSharp báo cooldown.
+6. Bấm Chạy và theo dõi đủ một lượt từ Nearby → encounter → ném → về map.
+
+## C. Quick Catch của app
+Quick Catch ở đây là thao tác cảm ứng do app thực hiện, không bắt buộc bật tính năng Quick Catch trả phí trong PGSharp. Chỉ chỉnh Flick Quick Catch hoặc Chờ sau ném khi thấy Berry/Flee chưa ăn; mỗi lần chỉ đổi một giá trị.
+
+## D. Dấu hiệu đúng
+• Điểm vàng trong Xem bot nhìn nằm trên đúng hàng Pokémon.
+• App bấm đúng con đang hiện, không bấm vào map.
+• Điểm ném bắt đầu giữa quả bóng; sau ném app chỉ chọn con tiếp theo khi map đã trở lại.
+• Nếu cú bấm không ăn, log báo Nearby vẫn còn và thử lại sớm.
+
+[[IMAGE:09-catch-preview|Chụp Xem bot nhìn của Auto bắt thường và Quick Catch: điểm Nearby, quả bóng, hướng ném, Berry và Flee.]]
+""", "en": """# 3. AUTO CATCH
+
+## PGSharp
+Stay on the map with Nearby Radar visible and Block Non-Shiny off. Leave optional Feed disabled for the first test.
+[[IMAGE:08-catch-layout|Correct map and Nearby layout.]]
+
+## First app test
+Choose Auto catch, limit 1, throw power 700, encounter wait 3 seconds and up to 3 balls. Keep overlay reading and cooldown protection enabled.
+Quick Catch here is the app's own touch gesture and does not require PGSharp Quick Catch.
+[[IMAGE:09-catch-preview|Live view markers for Nearby, ball, Berry and Flee.]]
+"""},
+
+    "shundo": {"vi": """# 4. CHẤM SHINY THEO IV TỪ FEED
+
+## A. PGSharp bắt buộc
+1. Block Non-Shiny = bật. Tính năng này thuộc gói PGSharp có hỗ trợ; nếu không có thì chế độ không thể phân biệt non-shiny theo luồng này.
+2. Encounter IV = bật.
+3. Quick Load Map = nên bật.
+4. Mở Quick Sniper (Feed) và để biểu tượng RSS cùng hàng Pokémon đầu nhìn thấy rõ.
+5. Thanh Nearby có dấu @ cũng phải hiện vì app chờ Pokémon teleport tải vào đây rồi mới chấm.
+6. Ngắt Virtual Go Plus trước khi chạy. Nếu còn kết nối, app bấm CANCEL cảnh báo teleport để tránh softban rồi dừng.
+
+[[IMAGE:10-shundo-feed|Chụp Block Non-Shiny ON, Encounter IV ON, Quick Sniper Feed, hàng đầu, RSS và thanh Nearby @.]]
+
+## B. Cài trong app
+1. Chọn Chấm shiny theo IV.
+2. Nhập riêng IV Công/Thủ/HP từ 0 tới 15; 15/15/15 là Shundo truyền thống.
+3. Để Chờ Pokémon xuất hiện trên Nearby = 0 nếu muốn chờ vô hạn, không bỏ spawn chậm.
+4. Giữ Chờ máy ảnh hiện = 3 giây.
+5. Khi đúng IV: chọn Tạm dừng chờ tôi bắt cho lần thử đầu.
+6. Shiny khác IV: chọn Thoát, soi con khác hoặc Tạm dừng theo nhu cầu.
+
+## C. Luồng đúng
+Feed item → teleport → chờ Nearby tải Pokémon → double-tap → non-shiny bị PGSharp chặn hoặc shiny mở encounter → đọc IV. App chỉ lấy Feed item tiếp theo sau khi kết quả hiện tại đã rõ.
+
+⚠ Nếu không đọc được IV, app giữ encounter và tạm dừng để không bỏ nhầm mục tiêu.
+
+[[IMAGE:11-shundo-calibration|Chụp Xem bot nhìn/căn tay của Feed, Nearby @, khung IV pill, toast non-shiny và Flee.]]
+""", "en": """# 4. SHINY CHECK FROM FEED
+
+Enable Block Non-Shiny, Encounter IV and preferably Quick Load Map. Show Quick Sniper Feed plus the Nearby @ bar. Disconnect Virtual Go Plus.
+Enter exact Attack/Defence/HP targets; 15/15/15 is the traditional Shundo target. Spawn wait 0 waits indefinitely.
+[[IMAGE:10-shundo-feed|Block Non-Shiny, Encounter IV, Feed/RSS and Nearby layout.]]
+[[IMAGE:11-shundo-calibration|Feed, IV pill, toast and Flee alignment.]]
+"""},
+
+    "coord": {"vi": """# 5. CHẤM SHINY TỪ DISCORD COORD
+
+## A. Cài Discord Coord Collector trên Edge
+1. Giải nén extension; không Load unpacked trực tiếp từ file ZIP.
+2. Mở edge://extensions → bật Developer mode → Load unpacked → chọn thư mục extension.
+3. Đăng nhập Discord Web và Pokedex100 trong cùng profile Edge.
+4. Mở đúng kênh Discord và giữ tab đó active. Extension không đọc Discord desktop hoặc tab Discord khác đang ẩn.
+
+[[IMAGE:12-edge-extension|Chụp thư mục extension, edge://extensions với Developer mode và popup Collector.]]
+
+## B. PGSharp bắt buộc
+1. Block Non-Shiny = bật; Encounter IV = bật; Quick Load Map = nên bật.
+2. Ngắt Virtual Go Plus.
+3. Trong Custom Shortcuts có Teleport.
+4. Mở sẵn menu PGSharp và giữ hàng Teleport hiện rõ. App bấm thẳng hàng này, không tự mở nút sao.
+5. Mở thử Teleport để thấy ô Coordinates; sau khi ẩn bàn phím, xác định đúng nút OK.
+
+[[IMAGE:13-pgsharp-teleport|Chụp menu mở sẵn, hàng Teleport, ô Coordinates, bàn phím và vị trí OK sau khi ẩn bàn phím.]]
+
+## C. Căn ba điểm trong app
+Vào 🎯 Căn chỉnh tay → Discord Coord:
+1. Dòng Teleport: giữa đúng hàng Teleport.
+2. Ô nhập Coordinates: giữa ô nhập.
+3. Nút OK Teleport: giữa nút OK ở trạng thái bàn phím đã ẩn.
+
+## D. Thứ tự chạy
+1. Mở app và kiểm tra log Bộ nhận Discord Coord đang chạy tại 127.0.0.1:8765.
+2. Chọn chế độ, nhập IV và bấm Chạy.
+3. Sau đó mới mở Collector và bấm Bắt đầu.
+4. Collector gửi một coord; app chấm xong coord đó rồi mới cấp quyền lấy coord mới nhất tiếp theo.
+
+“Đang chờ coord” chỉ có nghĩa hàng đợi trống, không phải lỗi.
+
+[[IMAGE:14-coord-flow|Chụp ba điểm căn tay, log nhận coord và popup Collector đang chạy.]]
+""", "en": """# 5. SHINY CHECK FROM DISCORD COORDS
+
+Load the unpacked Edge extension, sign into Discord Web and Pokedex100 in the same profile, and keep the target Discord tab active.
+In PGSharp enable Block Non-Shiny and Encounter IV, disconnect VGP, add Teleport to Custom Shortcuts and keep the shortcut menu expanded.
+Align Teleport row, Coordinates input and the OK button after hiding the keyboard. Start the desktop app before Collector.
+[[IMAGE:12-edge-extension|Loaded Edge extension and Collector popup.]]
+[[IMAGE:13-pgsharp-teleport|Expanded PGSharp Teleport flow.]]
+[[IMAGE:14-coord-flow|Three alignment points and received-coordinate log.]]
+"""},
+
+    "spin": {"vi": """# 6. QUAY POKÉSTOP KHI ĐI ĐƯỜNG
+
+## A. PGSharp
+1. Đứng ở map tại khu vực có PokéStop.
+2. Để AutoWalk trong Custom Shortcuts và nên giữ menu mở trong những vòng đầu.
+3. Chế độ này không cần Virtual Go Plus hoặc PGSharp key; app tự nhìn màu stop trên màn hình.
+4. Nếu AutoWalk đang dừng và app đọc rõ biểu tượng, app bật một lần. Nếu không chắc, app không bấm đoán để tránh tắt nhầm AutoWalk đang chạy.
+
+## B. App
+1. Chọn Quay PokéStop khi đi đường.
+2. Giữ bán kính 450 px và giãn cách 2 giây cho lần đầu.
+3. Mở 👁 Xem bot nhìn. Vòng quét phải ôm quanh nhân vật và không vươn tới stop ngoài tầm.
+4. Nếu lệch, vào 🎯 Căn chỉnh tay → Quay stop và kéo vòng vào đúng vị trí.
+
+## C. Dấu hiệu đúng
+• App chỉ bấm stop xanh chưa quay nằm trong vòng.
+• Stop đã quay chuyển tím nên tự bị bỏ qua.
+• Popup Stop AutoWalk? luôn được bấm CANCEL.
+• Nếu màn hình đĩa PokéStop mở, app tự đóng dấu X và trở lại map.
+
+[[IMAGE:15-spin-preview|Chụp AutoWalk trong shortcut và Xem bot nhìn có vòng quét, stop xanh được chọn, stop tím bị bỏ qua.]]
+""", "en": """# 6. SPIN POKÉSTOPS
+
+Stay on the map in a stop-dense area and keep AutoWalk visible in Custom Shortcuts for the initial check. VGP is not required.
+Use the default 450 px circle and 2-second gap first. In Live view the circle must surround the avatar without reaching distant stops.
+[[IMAGE:15-spin-preview|AutoWalk shortcut and Live view scan circle.]]
+"""},
+
+    "errors": {"vi": """# 7. CĂN CHỈNH, ẢNH HƯỚNG DẪN VÀ BÁO LỖI
+
+## Khi nào mới căn tay
+1. Bấm 👁 Xem bot nhìn và bật Vẽ vùng bot nhìn.
+2. Chỉ sửa mục có điểm/khung lệch thật sự; đừng kéo tất cả theo cảm giác.
+3. Tọa độ lưu chỉ dành cho độ phân giải hiện tại. Đổi máy/DPI thì Đặt lại mặc định và căn lại.
+4. Riêng Nearby, app vẫn ưu tiên tâm hàng đọc trực tiếp từ PGSharp khi đọc được; điểm tay là đường lui.
+
+## Cách thêm ảnh vào hướng dẫn
+1. Tạo thư mục guide_images cạnh AutoCatchPokemonPGSharp.exe.
+2. Đặt PNG đúng tên mã hiển thị trong từng ô, ví dụ 01-app-windows.png.
+3. Đóng và mở lại app. Ảnh sẽ tự thay ô “ẢNH CẦN THÊM”; không phải sửa code.
+4. Nên chụp cùng một máy, cùng ngôn ngữ, che tài khoản/coord/webhook và dùng khung đỏ hoặc mũi tên chỉ đúng nút.
+
+## Khi gửi lỗi
+1. Giữ nguyên màn hình lỗi nếu có thể.
+2. Bấm 🧾 Xuất báo cáo lỗi.
+3. Gửi ZIP cùng tên chế độ và thao tác cuối app làm đúng.
+4. Lỗi vị trí cần thêm ảnh Xem bot nhìn có overlay.
+
+⚠ Không gửi công khai webhook Discord, email đăng nhập, tên trainer hoặc coord riêng tư.
+""", "en": """# 7. ALIGNMENT, GUIDE IMAGES AND REPORTS
+
+Use Live view before Manual align and only move a visibly incorrect marker. Saved coordinates belong to the current resolution; Nearby still prefers PGSharp's live row centre.
+
+To add guide screenshots, create guide_images beside the EXE and use the exact PNG filename shown in each placeholder. Restart the app to load them.
+
+For bugs, export the report ZIP and include the mode plus a Live view screenshot for alignment problems. Never publish webhooks or account details.
+"""},
+}
+
+
+def _parse_guide_image_marker(line: str) -> tuple[str, str] | None:
+    """Return (filename stem, caption) for ``[[IMAGE:stem|caption]]`` guide lines."""
+    text = line.strip()
+    if not (text.startswith("[[IMAGE:") and text.endswith("]]")):
+        return None
+    payload = text[len("[[IMAGE:"):-2]
+    stem, sep, caption = payload.partition("|")
+    stem = stem.strip()
+    if not sep or not stem or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for ch in stem):
+        return None
+    return stem, caption.strip()
 
 
 def _settings_path() -> str:
@@ -733,20 +1045,23 @@ class App:
         note = ttk.Label(sh_grp, text=self.tr("shundo_note"), wraplength=400, foreground="#666")
         note.grid(row=0, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 4))
         self._i18n.append((note, "shundo_note"))
-        self.tp_wait = self._spin(sh_grp, "tp_wait", 1, 0, 3600, 0.0, is_float=True)
-        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 2, 2, 12, 3.0, is_float=True)
-        self._label(sh_grp, "shundo_action", row=3, column=0, sticky="w", padx=6, pady=2)
+        self.target_iv_atk = self._spin(sh_grp, "target_iv_atk", 1, 0, 15, 15)
+        self.target_iv_def = self._spin(sh_grp, "target_iv_def", 2, 0, 15, 15)
+        self.target_iv_sta = self._spin(sh_grp, "target_iv_sta", 3, 0, 15, 15)
+        self.tp_wait = self._spin(sh_grp, "tp_wait", 4, 0, 3600, 0.0, is_float=True)
+        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 5, 2, 12, 3.0, is_float=True)
+        self._label(sh_grp, "shundo_action", row=6, column=0, sticky="w", padx=6, pady=2)
         self.shundo_action = "pause"   # "pause" | "stop"
         self.action_var = tk.StringVar()
         self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
-        self.action_combo.grid(row=3, column=1, sticky="e", padx=6, pady=2)
+        self.action_combo.grid(row=6, column=1, sticky="e", padx=6, pady=2)
         self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
-        self._label(sh_grp, "shiny_action", row=4, column=0, sticky="w", padx=6, pady=2)
+        self._label(sh_grp, "shiny_action", row=7, column=0, sticky="w", padx=6, pady=2)
         self.shiny_action = "skip"     # "skip" | "pause"
         self.shiny_action_var = tk.StringVar()
         self.shiny_action_combo = ttk.Combobox(sh_grp, textvariable=self.shiny_action_var,
                                                 state="readonly", width=22)
-        self.shiny_action_combo.grid(row=4, column=1, sticky="e", padx=6, pady=2)
+        self.shiny_action_combo.grid(row=7, column=1, sticky="e", padx=6, pady=2)
         self.shiny_action_combo.bind("<<ComboboxSelected>>", self._on_shiny_action_change)
         # A skipped shiny still alerts Discord (with screenshot), it just isn't waited on.
         self.alert_shiny = tk.BooleanVar(value=True)
@@ -770,9 +1085,21 @@ class App:
         self._donate_row(self.tab_donate, "Ko-fi:", DONATE_KOFI, link=True)
         self._donate_row(self.tab_donate, "Discord:", DISCORD_INVITE, link=True)
 
-        # ---- Guide tab ---- (read-only, scrollable, retranslated on language switch)
+        # ---- Guide tab ---- (sectioned, scrollable and ready for owner-supplied screenshots)
+        guide_nav = ttk.Frame(self.tab_guide)
+        guide_nav.pack(fill="x", padx=8, pady=(8, 0))
+        guide_label = self._label(guide_nav, "guide_section")
+        guide_label.pack(side="left")
+        self.guide_section_code = GUIDE_SECTIONS[0][0]
+        self.guide_section_var = tk.StringVar()
+        self.guide_section_combo = ttk.Combobox(
+            guide_nav, textvariable=self.guide_section_var, state="readonly", width=28,
+        )
+        self.guide_section_combo.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        self.guide_section_combo.bind("<<ComboboxSelected>>", self._on_guide_section_change)
+
         gframe = ttk.Frame(self.tab_guide)
-        gframe.pack(fill="both", expand=True, padx=8, pady=8)
+        gframe.pack(fill="both", expand=True, padx=8, pady=(6, 8))
         gscroll = ttk.Scrollbar(gframe, orient="vertical")
         gscroll.pack(side="right", fill="y")
         self.guide_text = tk.Text(gframe, wrap="word", yscrollcommand=gscroll.set,
@@ -791,12 +1118,119 @@ class App:
         self.lang_combo.pack(side="left", padx=6)
         self.lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
 
+    def _on_guide_section_change(self, _event=None) -> None:
+        index = self.guide_section_combo.current()
+        if 0 <= index < len(GUIDE_SECTIONS):
+            self.guide_section_code = GUIDE_SECTIONS[index][0]
+        self._set_guide_text()
+
+    def _guide_image_path(self, stem: str) -> str | None:
+        """Find an owner-supplied guide PNG beside the EXE or in a bundled resource folder."""
+        filename = f"{stem}.png"
+        candidates = []
+        if getattr(sys, "frozen", False):
+            candidates.append(os.path.join(os.path.dirname(sys.executable), "guide_images", filename))
+        candidates.append(resource_path(os.path.join("guide_images", filename)))
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return None
+
+    def _insert_guide_image(self, stem: str, caption: str) -> None:
+        """Render a PNG when present; otherwise render an annotated, filename-stable slot."""
+        path = self._guide_image_path(stem)
+        if path is not None:
+            image = cv2.imread(path, cv2.IMREAD_COLOR)
+            if image is not None and image.size:
+                max_w = max(320, min(720, self.guide_text.winfo_width() - 36))
+                max_h = 520
+                height, width = image.shape[:2]
+                scale = min(1.0, max_w / width, max_h / height)
+                if scale < 1.0:
+                    image = cv2.resize(
+                        image,
+                        (max(1, round(width * scale)), max(1, round(height * scale))),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                ok, png = cv2.imencode(".png", image)
+                if ok:
+                    photo = tk.PhotoImage(data=base64.b64encode(png.tobytes()))
+                    self._guide_photos.append(photo)
+                    self.guide_text.insert("end", "\n")
+                    self.guide_text.image_create("end", image=photo)
+                    self.guide_text.insert("end", f"\n{caption}\n\n", "guide_caption")
+                    return
+
+        if self.lang == "vi":
+            title = f"🖼 ẢNH CẦN THÊM — {stem}.png"
+            folder = f"Đặt file vào: guide_images/{stem}.png"
+        else:
+            title = f"🖼 IMAGE NEEDED — {stem}.png"
+            folder = f"Put the file at: guide_images/{stem}.png"
+        self.guide_text.insert(
+            "end", f"\n{title}\n{caption}\n{folder}\n\n", "guide_placeholder",
+        )
+
     def _set_guide_text(self) -> None:
-        """Fill the guide box with the current language's text (read-only)."""
+        """Render the selected detailed guide page and its optional screenshot slots."""
+        labels = [label[self.lang] for _code, label in GUIDE_SECTIONS]
+        self.guide_section_combo.configure(values=labels)
+        codes = [code for code, _label in GUIDE_SECTIONS]
+        try:
+            index = codes.index(self.guide_section_code)
+        except ValueError:
+            index = 0
+            self.guide_section_code = codes[0]
+        self.guide_section_var.set(labels[index])
+
         self.guide_text.config(state="normal")
         self.guide_text.delete("1.0", "end")
-        self.guide_text.insert("1.0", self.tr("guide_text"))
+        self._guide_photos: list[tk.PhotoImage] = []
+        self.guide_text.tag_configure(
+            "guide_title", font=("Segoe UI", 13, "bold"), spacing1=2, spacing3=10,
+        )
+        self.guide_text.tag_configure(
+            "guide_heading", font=("Segoe UI", 10, "bold"), spacing1=8, spacing3=3,
+        )
+        self.guide_text.tag_configure(
+            "guide_bullet", lmargin1=8, lmargin2=20, spacing1=1, spacing3=2,
+        )
+        self.guide_text.tag_configure(
+            "guide_step", lmargin1=8, lmargin2=23, spacing1=1, spacing3=2,
+        )
+        self.guide_text.tag_configure(
+            "guide_warning", foreground="#a04b00", font=("Segoe UI", 10, "bold"),
+            lmargin1=8, lmargin2=18, spacing1=4, spacing3=4,
+        )
+        self.guide_text.tag_configure(
+            "guide_placeholder", background="#fff4cf", foreground="#674d00",
+            lmargin1=10, lmargin2=10, rmargin=10, spacing1=8, spacing3=8,
+            relief="solid", borderwidth=1,
+        )
+        self.guide_text.tag_configure(
+            "guide_caption", foreground="#555", justify="center", spacing3=6,
+        )
+
+        page = GUIDE_PAGES[self.guide_section_code][self.lang]
+        for raw_line in page.splitlines():
+            marker = _parse_guide_image_marker(raw_line)
+            if marker is not None:
+                self._insert_guide_image(*marker)
+                continue
+            if raw_line.startswith("# "):
+                self.guide_text.insert("end", raw_line[2:] + "\n", "guide_title")
+            elif raw_line.startswith("## "):
+                self.guide_text.insert("end", raw_line[3:] + "\n", "guide_heading")
+            elif raw_line.startswith("•"):
+                self.guide_text.insert("end", raw_line + "\n", "guide_bullet")
+            elif raw_line.startswith("⚠"):
+                self.guide_text.insert("end", raw_line + "\n", "guide_warning")
+            elif len(raw_line) >= 3 and raw_line[0].isdigit() and raw_line[1:3] in (". ", ") "):
+                self.guide_text.insert("end", raw_line + "\n", "guide_step")
+            else:
+                self.guide_text.insert("end", raw_line + "\n")
         self.guide_text.config(state="disabled")
+        self.guide_text.see("1.0")
 
     def _donate_row(self, parent, brand: str, value: str, link: bool) -> None:
         """One donate line: brand label, the address (clickable when it's a URL), a copy button."""
@@ -1024,6 +1458,9 @@ class App:
             self.catch_style = data["catch_style"]
         self.tp_wait.set(max(0.0, float(data.get("tp_wait", self.tp_wait.get()))))
         self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
+        self.target_iv_atk.set(max(0, min(15, int(data.get("target_iv_atk", self.target_iv_atk.get())))))
+        self.target_iv_def.set(max(0, min(15, int(data.get("target_iv_def", self.target_iv_def.get())))))
+        self.target_iv_sta.set(max(0, min(15, int(data.get("target_iv_sta", self.target_iv_sta.get())))))
         if data.get("shundo_action") in ("pause", "stop"):
             self.shundo_action = data["shundo_action"]
         if data.get("shiny_action") in ("skip", "pause"):
@@ -1070,6 +1507,9 @@ class App:
             "catch_style": self.catch_style,
             "tp_wait": float(self.tp_wait.get()),
             "s_enc_wait": float(self.s_enc_wait.get()),
+            "target_iv_atk": max(0, min(15, int(self.target_iv_atk.get()))),
+            "target_iv_def": max(0, min(15, int(self.target_iv_def.get()))),
+            "target_iv_sta": max(0, min(15, int(self.target_iv_sta.get()))),
             "shundo_action": self.shundo_action,
             "shiny_action": self.shiny_action,
             "alert_shiny": bool(self.alert_shiny.get()),
@@ -2156,6 +2596,11 @@ class App:
                     spawn_timeout=(0.0 if self.mode == "coord_shundo"
                                    else max(0.0, float(self.tp_wait.get()))),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
+                    target_ivs=(
+                        max(0, min(15, int(self.target_iv_atk.get()))),
+                        max(0, min(15, int(self.target_iv_def.get()))),
+                        max(0, min(15, int(self.target_iv_sta.get()))),
+                    ),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
                     flee_taps=max(1, int(self.flee_taps.get())),
@@ -2308,23 +2753,36 @@ class App:
                     self.log_queue.put(self.tr("msg_coord_using").format(
                         item.coordinate, name, self.coord_queue.qsize()))
             if outcome == "shundo":
+                target_ivs = (
+                    int(self.target_iv_atk.get()), int(self.target_iv_def.get()),
+                    int(self.target_iv_sta.get()))
+                actual_iv = "/".join(str(value) for value in (stats.last_ivs or target_ivs))
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
-                self.log_queue.put(self.tr("msg_s_shundo").format(how))
-                self._send_discord(self.tr("dc_shundo").format(how, stats.checked, stats.shinies), shot=True)
+                self.log_queue.put(self.tr("msg_s_shundo").format(actual_iv, how))
+                self._send_discord(self.tr("dc_shundo").format(actual_iv, how, stats.checked, stats.shinies), shot=True)
                 if self.shundo_action == "pause":
                     self.log_queue.put("__paused_shundo__")
             elif outcome == "shiny":
+                actual_iv = ("/".join(str(value) for value in stats.last_ivs)
+                             if stats.last_ivs is not None else "?")
+                target_iv = "/".join(str(value) for value in (
+                    int(self.target_iv_atk.get()), int(self.target_iv_def.get()),
+                    int(self.target_iv_sta.get())))
                 if self.shiny_action == "skip":
-                    # Not a full shundo: the routine flees and keeps hunting. Still alert
+                    # Different IV: the routine flees and keeps hunting. Still alert
                     # Discord with a screenshot so the user knows a shiny went by.
-                    self.log_queue.put(self.tr("msg_s_shiny_skip"))
-                    self._send_discord(self.tr("dc_shiny_skip").format(stats.checked), shot=True)
+                    self.log_queue.put(self.tr("msg_s_shiny_skip").format(actual_iv, target_iv))
+                    self._send_discord(self.tr("dc_shiny_skip").format(actual_iv, target_iv, stats.checked), shot=True)
                 else:
                     how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
-                    self.log_queue.put(self.tr("msg_s_shiny").format(how))
-                    self._send_discord(self.tr("dc_shiny").format(how, stats.checked), shot=True)
+                    self.log_queue.put(self.tr("msg_s_shiny").format(actual_iv, target_iv, how))
+                    self._send_discord(self.tr("dc_shiny").format(actual_iv, target_iv, how, stats.checked), shot=True)
                     if self.shundo_action == "pause":
                         self.log_queue.put("__paused_shiny__")
+            elif outcome == "iv_unknown":
+                self.log_queue.put(self.tr("msg_s_iv_unknown"))
+                self._send_discord(self.tr("msg_s_iv_unknown"), shot=True)
+                self.log_queue.put("__paused_shiny__")
             elif outcome == "goplus":
                 # Shundo teleports every cycle and Go Plus refuses every teleport; the
                 # routine ends itself, so say plainly why rather than looking like a crash.

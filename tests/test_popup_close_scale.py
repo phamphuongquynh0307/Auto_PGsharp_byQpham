@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from avc.catch import CatchRoutine
+from avc.catch import CatchConfig, CatchRoutine
 from avc.layout import CALIBRATION_SWEEP
 from avc.shundo import ShundoRoutine
 from avc.vision import Match, find_popup_close, load_template
@@ -42,6 +42,7 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine.stop_event = threading.Event()
         routine._popup_block_until = 0.0
         routine._popup_scales = (0.55,)
+        routine._game_popup_scales = (0.66,)
         routine._cancel_btn = None
         routine._popup_weather = None
         routine._popup_speed = None
@@ -61,6 +62,7 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertEqual(1, close.call_count)
         self.assertEqual(0.82, close.call_args.kwargs["threshold"])
+        self.assertEqual((0.66,), close.call_args.kwargs["scales"])
         self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
 
     def test_medal_x_wins_before_the_share_button_can_match_weather(self):
@@ -72,6 +74,7 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine.stop_event = threading.Event()
         routine._popup_block_until = 0.0
         routine._popup_scales = (0.55,)
+        routine._game_popup_scales = (0.66,)
         routine._cancel_btn = None
         routine._popup_weather = object()
         routine._popup_speed = None
@@ -103,6 +106,7 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine.stats = SimpleNamespace(last_event="")
         routine._popup_block_until = 0.0
         routine._scales = (0.55,)
+        routine._popup_scales = (0.66,)
         routine._cancel_btn = None
         routine._popup_weather = None
         routine._popup_speed = None
@@ -115,7 +119,62 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertEqual(1, close.call_count)
         self.assertEqual(0.82, close.call_args.kwargs["threshold"])
+        self.assertEqual((0.66,), close.call_args.kwargs["scales"])
         self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
+
+    def test_shundo_uses_geometry_when_android_cancel_artwork_does_not_match(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._scales = (0.55,)
+        routine._popup_scales = (0.66,)
+        routine._cancel_btn = None
+        routine._teleport_blocked = False
+
+        with patch("avc.shundo.find_dialog_buttons",
+                   return_value=[(720, 1520), (490, 1520)]), \
+                patch("avc.shundo.find_popup_close",
+                      side_effect=AssertionError("dialog fallback ran too late")):
+            handled = routine._handle_popups(np.zeros((1440, 810, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(490, 1520)], taps)
+        self.assertTrue(routine._teleport_blocked)
+
+    def test_pokestop_uses_calibrated_close_point_when_x_template_misses(self):
+        taps = []
+        routine = object.__new__(CatchRoutine)
+        routine.config = CatchConfig()
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine.stop_event = threading.Event()
+        routine._popup_block_until = 0.0
+        routine._popup_scales = (1.0,)
+        routine._game_popup_scales = (1.0,)
+        routine._cancel_btn = None
+        routine._popup_weather = None
+        routine._popup_speed = None
+        routine._maybe_later = None
+        routine._popup_autowalk = None
+        routine._claim_rewards = None
+        routine._caught_ok = None
+        routine._check_btn = None
+        routine._close_btn = object()
+        routine._close_btn_blue = object()
+        routine._close_btn_white = object()
+        routine._ball_in = lambda _frame: None
+        routine._is_pokestop_screen = lambda _frame: True
+
+        with patch("avc.catch.find_dialog_buttons", return_value=[]), \
+                patch("avc.catch.find_popup_close", return_value=None), \
+                patch("avc.catch.find_fast", return_value=[]):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([routine.config.pokestop_close_xy], taps)
 
 
 if __name__ == "__main__":

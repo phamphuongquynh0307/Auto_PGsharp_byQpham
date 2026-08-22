@@ -36,6 +36,9 @@ _ENCOUNTER_PREFIX = "hl_ec_sum_"
 _COOLDOWN_TEXT = "hl_cd_text"
 
 _CLOCK = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)$")
+_IV_EXPLICIT = re.compile(r"\bIV\s*:?\s*(100|\d{1,2})(?:\s*%)?\b", re.I)
+_IV_BARE = re.compile(r"^\s*(100|\d{1,2})(?:\s*%)?\s*$")
+_IV_STATS = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})\b")
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
@@ -87,6 +90,69 @@ class UiState:
     def in_encounter(self) -> bool:
         """PGSharp only renders its encounter summary while an encounter is open."""
         return bool(self.encounter)
+
+    @property
+    def iv_stats(self) -> tuple[int, int, int] | None:
+        """Exact attack / defence / stamina IV columns shown by PGSharp.
+
+        These values must stay separate: ``15/15/14`` and ``14/15/15`` have the same
+        percentage but are different targets to the user.
+        """
+        for text in self.encounter.values():
+            stats = _IV_STATS.search(text)
+            if not stats:
+                continue
+            values = tuple(int(value) for value in stats.groups())
+            if all(0 <= value <= 15 for value in values):
+                return values
+
+        # Some PGSharp builds expose the three stats as separate views instead of one
+        # ``15/15/14`` string. Resource suffixes vary slightly, so accept their common
+        # abbreviated and full names but never treat an unrelated bare number as a stat.
+        individual: dict[str, int] = {}
+        aliases = {
+            "attack": ("atk", "attack"),
+            "defence": ("def", "defence", "defense"),
+            "stamina": ("sta", "stamina", "hp"),
+        }
+        for name, text in self.encounter.items():
+            suffix = name.lower().strip("_-")
+            bare = _IV_BARE.match(text)
+            if not bare:
+                continue
+            value = int(bare.group(1))
+            if not 0 <= value <= 15:
+                continue
+            for stat, names in aliases.items():
+                if suffix in names or any(suffix.endswith(f"_{alias}") for alias in names):
+                    individual[stat] = value
+                    break
+        if len(individual) == 3:
+            return individual["attack"], individual["defence"], individual["stamina"]
+        return None
+
+    @property
+    def iv_percent(self) -> int | None:
+        """IV percentage shown by PGSharp, retained for callers that only need a summary.
+
+        PGSharp versions use slightly different ``hl_ec_sum_*`` suffixes and some put
+        ``IV`` in the resource id while others put it in the visible text. Prefer those
+        explicit fields, then derive the familiar rounded percentage from 0-15 attack /
+        defence / stamina values when only the stat triplet is exposed.
+        """
+        for name, text in self.encounter.items():
+            explicit = _IV_EXPLICIT.search(f"{name} {text}")
+            if explicit:
+                value = int(explicit.group(1))
+                if 0 <= value <= 100:
+                    return value
+            if "iv" in name.lower():
+                bare = _IV_BARE.match(text)
+                if bare:
+                    return int(bare.group(1))
+
+        stats = self.iv_stats
+        return round(sum(stats) * 100 / 45) if stats is not None else None
 
 
 def parse(xml_text: str) -> UiState | None:

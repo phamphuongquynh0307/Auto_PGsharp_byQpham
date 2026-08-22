@@ -16,12 +16,24 @@ import os
 # one-line warning buried in the build log. So ask first, and only step in when the answer
 # is that Tcl/Tk genuinely cannot start.
 def _tcl_tk_starts() -> bool:
+    root = None
     try:
         import tkinter
-        tkinter.Tcl()           # an interpreter, not a window — safe during a build
+        # ``tkinter.Tcl()`` alone only proves that the DLL loads.  A Python runtime can
+        # still be missing init.tcl/tk.tcl, in which case the bundled EXE starts but never
+        # creates its window.  Construct the same Tk root the application needs, hide it
+        # immediately, and fall back to the checked-in scripts if that fails.
+        root = tkinter.Tk()
+        root.withdraw()
         return True
     except Exception:
         return False
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 if not _tcl_tk_starts():
@@ -40,6 +52,10 @@ a = Analysis(
     binaries=[],
     datas=[
         ('templates/*.png', 'templates'),
+        # Ship the complete in-app guide with the one-file EXE.  The GUI still checks a
+        # guide_images folder beside the EXE first, so a newer screenshot can override a
+        # bundled one without rebuilding the application.
+        ('guide_images/*.png', 'guide_images'),
         ('adb/adb.exe', 'adb'),
         ('adb/AdbWinApi.dll', 'adb'),
         ('adb/AdbWinUsbApi.dll', 'adb'),
@@ -68,7 +84,10 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    runtime_tmpdir=None,
+    # Some Windows security configurations let the bootloader extract into %TEMP% but
+    # prevent Tcl/Tk from sourcing init.tcl there.  The documented install folder is
+    # writable, so unpack the one-file runtime in the launch working directory instead.
+    runtime_tmpdir='.',
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,

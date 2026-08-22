@@ -13,13 +13,15 @@ A Windows automation tool for catching Pokemon in Pokemon GO with PGSharp. It co
 
 The extension feeds the **Shundo from Discord coords** mode. Extract the ZIP, open `edge://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted folder.
 
+Vietnamese users can follow the [detailed setup guide for every mode](HUONG_DAN.md), including prepared screenshot locations.
+
 ## Features
 
 - **Automatic catching** — catches Pokemon shown in PGSharp's nearby feed.
 - **Quick Catch without a PGSharp key** — uses Android touch control to throw the ball and exit the encounter quickly.
 - **Editable throws** — adjust throw power and flick duration for different phones.
 - **Manual calibration** — fine-tune touch coordinates when automatic scaling is not accurate enough.
-- **Shundo hunting** — stop only for shiny or 100% IV Pokemon, depending on your settings.
+- **Exact-IV shiny hunting** — enter separate 0–15 Attack/Defence/HP targets; both source modes stop only when all three columns match.
 - **Shundo from Discord coords** — receives coordinates from the Edge extension, teleports in order, and requests the next coordinate only after a check completes.
 - **Popup handling** — closes weather, speed, level-up, and PokeStop screens automatically.
 - **Out-of-ball recovery** — pauses catching while AutoWalk continues searching for more items, then resumes automatically.
@@ -58,7 +60,7 @@ The extension feeds the **Shundo from Discord coords** mode. Extract the ZIP, op
 ### 3. Choose a mode
 
 - **Catch Pokemon** — catches Pokemon from the nearby feed automatically.
-- **Shundo** — hunts only shiny or 100% IV Pokemon according to your configuration.
+- **Exact-IV shiny check** — uses the same Attack/Defence/HP target triplet for feed and Discord-coordinate modes.
 
 Choose a catch style as well:
 

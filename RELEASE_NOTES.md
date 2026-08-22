@@ -1,59 +1,71 @@
-# v1.4.1
+# v1.4.2
 
 ## Tiếng Việt
 
-### Discord Coord Collector v0.3.1
+### Nearby nhanh và chính xác hơn
 
-- Chỉ lấy trước một coord mới nhất thay vì giữ bộ đệm ba coord, tránh coord nằm chờ quá lâu khiến Pokémon chạy mất.
-- Sau khi app chấm xong Pokémon hiện tại, extension mới lấy coord mới nhất tiếp theo từ Discord.
+- Không còn phụ thuộc cứng vào một tọa độ Nearby: khi đọc được giao diện PGSharp, app tự lấy tâm Pokémon đầu tiên và ưu tiên vị trí thật đó trong suốt phiên chạy.
+- Nếu thao tác chạm bị PGSharp bỏ qua nhưng thanh Nearby vẫn còn nguyên, app xác nhận bằng hai frame mới rồi thử lại sớm thay vì chờ hết timeout encounter.
+- Giữ kết nối điều khiển scrcpy giữa các Pokémon và gửi lệnh nhả con trỏ dự phòng; chỉ kết nối lại khi socket thật sự lỗi, giúp giảm khoảng chờ 1–5 giây trên Wi-Fi.
 
-### Shundo từ Discord Coord
+### Popup ổn định trên nhiều máy
 
-- Thêm chế độ **Shundo từ Discord Coord**: app nhận tọa độ tại `127.0.0.1:8765`, nhập coord vào PGSharp bằng Android key event an toàn và teleport tuần tự.
-- Mỗi coord được giữ cho tới khi Pokémon hiện tại có kết quả xác nhận. App chỉ báo extension lấy thêm đúng một coord sau khi chấm xong, tránh bỏ spawn chậm hoặc tiêu tốn nhầm coord tiếp theo.
-- Thêm nhóm căn chỉnh riêng cho dòng Teleport, ô Coordinates và nút OK; hỗ trợ tự co giãn theo màn hình như các chế độ khác.
-- Tăng độ chắc chắn khi nhận diện Pokémon trong sidebar: loại map/gyms tối phía sau thanh trong suốt nhưng vẫn giữ sprite Pokémon sáng phía trước.
+- Tách tỷ lệ hiển thị của lớp PGSharp, Android và giao diện Pokémon GO để popup không còn dùng nhầm scale từ máy gốc.
+- Cải thiện xử lý các popup huy chương, thông báo thời tiết, nút Check/Maybe Later, màn hình Pokémon Caught và đĩa PokéStop.
+- Khi đã xác nhận đúng loại popup nhưng hình nút X thay đổi theo phiên bản game, app dùng điểm đóng đã căn hoặc vị trí hình học an toàn thay vì đứng chờ vô hạn.
 
-### Discord Coord Collector v0.3.0
+### Chấm shiny theo bộ IV tùy chọn
 
-- Extension Edge theo dõi đúng tab Discord Web đang active, lấy link **Click for Coords** từ Pokedex100 và tự đóng tab tạm sau khi đọc xong.
-- Bộ đệm ban đầu lấy tối đa ba coord; sau đó app desktop hoàn tất một Pokémon thì extension mới cấp thêm một coord.
-- Cho phép dán tối đa 2.000 `latitude,longitude` từ clipboard, tự bỏ coord sai/trùng và gắn chú thích **Từ Discord Pokedex100**.
-- Thêm nút **Xóa dữ liệu cũ**, dọn lịch sử extension, hàng chờ và hàng coord trong app desktop.
-- Extension được đặt trực tiếp trong repository tại `downloads/discord-coord-collector-v0.3.0.zip`, kèm link tải nhanh trong README.
+- Thêm ba mục tiêu IV riêng cho Công/Thủ/HP, mỗi cột từ 0–15, dùng chung cho chế độ Feed và Discord Coord; `15/15/15` vẫn là Shundo truyền thống.
+- Đọc trực tiếp ba cột IV từ cây giao diện PGSharp, phân biệt được các Pokémon có cùng phần trăm nhưng khác bộ chỉ số.
+- Nếu gặp shiny nhưng không đọc chắc được IV, app giữ encounter và tạm dừng thay vì bỏ nhầm Pokémon.
+- Log và thông báo Discord ghi cả IV thực tế lẫn IV mục tiêu để dễ kiểm tra.
+
+### Hướng dẫn trong app và đóng gói Windows
+
+- Viết lại tab **Hướng dẫn** thành các mục riêng cho cài Windows, Android/USB, PGSharp, bắt Pokémon, chấm shiny từ Feed, Discord Coord, quay PokéStop và báo lỗi.
+- Thêm đủ 15 ảnh minh họa vào hướng dẫn và nhúng trực tiếp trong EXE; ảnh cùng tên trong `guide_images` cạnh EXE vẫn có thể ghi đè mà không cần build lại.
+- Bổ sung tài liệu tiếng Việt `HUONG_DAN.md` và liên kết từ README.
+- Sửa khởi động Tcl/Tk trên các máy Windows chặn việc nạp script giao diện từ `%TEMP%`.
 
 ### Kiểm chứng
 
-- Kiểm tra cú pháp toàn bộ JavaScript của extension và mô phỏng luồng nhập hàng loạt → gửi tool → xóa dữ liệu.
-- **164 test đạt**, không có lỗi; 17 test phụ thuộc môi trường được bỏ qua đúng điều kiện. Bộ test bao phủ bridge, hàng coord, nhập phím Android, luồng Shundo và nhận diện sidebar.
-- EXE Windows build thành công; xác nhận `avc.coord_source` và `avc.coord_shundo` có trong gói PyInstaller.
+- **184 test đạt**, không có lỗi; 17 test giao diện được bỏ qua đúng điều kiện khi môi trường test không có desktop Tk.
+- Bộ test mới bao phủ retry Nearby, tọa độ Nearby động, scale popup, tái sử dụng kết nối điều khiển, đọc chính xác ba cột IV và nội dung hướng dẫn.
+- EXE Windows one-file chứa đủ 15 ảnh hướng dẫn và được kiểm tra khởi động sau khi build.
 
 ---
 
 ## English
 
-### Discord Coord Collector v0.3.1
+### Faster and more accurate Nearby handling
 
-- Prefetches only the first/newest coordinate instead of holding a three-coordinate buffer, reducing stale spawns.
-- After the app finishes checking the current Pokémon, the extension fetches the next newest coordinate from Discord.
+- Nearby is no longer tied to one fixed coordinate. When the PGSharp hierarchy is available, the app remembers the live centre of the first Pokémon and prefers it for the rest of the run.
+- If PGSharp ignores a tap while the occupied Nearby row remains visible, two fresh frames confirm the miss and trigger an early retry instead of waiting for the full encounter timeout.
+- The scrcpy control connection stays warm between Pokémon. Duplicate pointer-up events clear stale touch state, with reconnection reserved for a genuinely broken socket, reducing the 1–5 second Wi-Fi delay.
 
-### Shundo from Discord coords
+### Popups across different devices
 
-- Added **Shundo from Discord coords** mode. The app receives coordinates on `127.0.0.1:8765`, enters them into PGSharp using safe Android key events, and teleports sequentially.
-- A coordinate remains active until the current Pokémon has a confirmed result. The app grants exactly one new-coordinate credit after a completed check, preventing slow spawns from consuming the next coordinate.
-- Added dedicated calibration points for the Teleport row, Coordinates input, and OK button, with the same screen scaling support as other modes.
-- Strengthened sidebar Pokémon detection by rejecting dark map/gym detail behind the translucent bar while retaining bright foreground sprites.
+- PGSharp overlays, Android dialogs and Pokémon GO game UI now use separate render scales instead of inheriting one authoring-device scale.
+- Improved handling for medal, weather, Check/Maybe Later, Pokémon Caught and PokéStop-disc screens.
+- Once a popup is structurally confirmed, calibrated or geometry-based close points safely handle versions whose X artwork no longer matches the template.
 
-### Discord Coord Collector v0.3.0
+### Configurable exact-IV shiny checks
 
-- The Edge extension follows only the active Discord Web tab, extracts Pokedex100 **Click for Coords** links, and closes temporary tabs after processing.
-- It prefetches up to three coordinates, then requests one more only after the desktop app completes a Pokémon check.
-- It can paste up to 2,000 `latitude,longitude` entries from the clipboard, skips invalid/duplicate values, and labels them **From Discord Pokedex100**.
-- Added **Clear old data** to remove extension history, pending work, and the desktop app's coordinate queue.
-- The extension archive is stored directly in the repository at `downloads/discord-coord-collector-v0.3.0.zip`, with a direct download link in the README.
+- Added separate 0–15 Attack, Defence and HP targets shared by Feed and Discord-coordinate modes; `15/15/15` remains the traditional Shundo target.
+- Reads the three IV columns directly from the PGSharp UI hierarchy, distinguishing Pokémon with the same percentage but different stat spreads.
+- If a shiny's IV cannot be read confidently, the app keeps the encounter and pauses rather than fleeing the wrong Pokémon.
+- Logs and Discord notifications include both actual and target IVs.
+
+### In-app guide and Windows packaging
+
+- Rebuilt the **Guide** tab into focused pages for Windows, Android/USB, PGSharp, catching, Feed shiny checks, Discord coordinates, PokéStop spinning and bug reports.
+- Added and bundled all 15 guide images in the EXE. Matching files in a `guide_images` folder beside the EXE can still override them without rebuilding.
+- Added the detailed Vietnamese `HUONG_DAN.md` and linked it from the README.
+- Fixed Tcl/Tk startup on Windows configurations that block GUI scripts extracted under `%TEMP%`.
 
 ### Verification
 
-- Checked all extension JavaScript and simulated the bulk import → tool delivery → clear-data flow.
-- **164 tests pass** with no failures; 17 environment-dependent tests are skipped as expected. Coverage includes the HTTP bridge, coordinate queue, Android text input, Shundo flow, and sidebar detection.
-- The Windows EXE builds successfully, with `avc.coord_source` and `avc.coord_shundo` verified inside the PyInstaller archive.
+- **184 tests pass** with no failures; 17 GUI tests are skipped as expected when the test environment has no Tk desktop.
+- New coverage includes Nearby retries, live Nearby coordinates, popup scaling, control-channel reuse, exact three-column IV parsing and guide content.
+- The Windows one-file EXE contains all 15 guide images and is smoke-tested after build.

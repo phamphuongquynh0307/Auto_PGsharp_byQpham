@@ -262,6 +262,11 @@ class CatchConfig:
     # This is an upper bound, not a fixed sleep: polling returns on the first Berry-button frame,
     # so a normal fast opening does not pay any of the extra budget.
     encounter_transition_grace: float = 2.0
+    # A rejected Nearby gesture leaves both the bar and its Pokemon visibly in place. Do not
+    # spend the entire encounter timeout waiting for a transition that never started: after a
+    # short grace, two fresh frames proving that state return control to the next retry.
+    engage_miss_grace: float = 0.8
+    engage_miss_frames: int = 2
     catch_timeout: float = 6.0      # max wait per throw for the encounter to end (ball gone)
     settle_after_catch: float = 1.2  # let the nearby list refresh before the next cycle
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
@@ -464,6 +469,7 @@ class CatchConfig:
             # --- PGSharp overlay and system dialogs (native views) ---
             anchor_region=L.region(self.anchor_region, "TR"),   # nearby bar hugs right edge
             nearby_slot=L.point(self.nearby_slot, "TR"),
+            dialog_region=L.region(self.dialog_region, "MC"),  # centred Android AlertDialog
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
             slot_offset_y=L.scale(self.slot_offset_y),
             slot_pitch=L.scale(self.slot_pitch),
@@ -522,13 +528,21 @@ class CatchRoutine:
         # popup threshold — so the other two scales buy nothing there. Off the base scale the
         # bracket spans a real span (s .. 1.0) and is kept.
         self._base_scale = abs(self._tpl_s - 1.0) < 1e-3
+        # PGSharp/system dialogs and Pokemon GO dialogs are separate render layers. On MuMu
+        # they were measured at ~0.57 and ~0.66 respectively; using the overlay scale for both
+        # is why warning/medal popups worked on the authoring phone but disappeared on others.
         self._popup_scales = (1.0,) if self._base_scale else self._scales
+        game_s = Layout(*self.config.screen, scale=self.config.game_scale).s
+        game_base_scale = abs(game_s - 1.0) < 1e-3
+        self._game_popup_scales = ((1.0,) if game_base_scale else bracket_scales(game_s))
         # The level-up screen was measured rendering at a different scale from the PGSharp
         # overlay on MuMu (claim ~0.67 against a 0.55 star), which is why it swept the full
         # calibration range. That divergence is a property of a device that rescales the UI; at
         # base scale there is nothing to diverge from, and the wide sweep was half the cost of
         # the entire popup pass (88.8ms of 178ms) for a screen that shows up once a level.
-        self._claim_scales = self._popup_scales if self._base_scale else CALIBRATION_SWEEP
+        self._claim_scales = (
+            self._game_popup_scales if game_base_scale else CALIBRATION_SWEEP
+        )
         self._cal_scale: float | None = None   # measured render scale; None until calibrated
         self._anchor_cache: tuple[int, int] | None = None
         self._star_cache: tuple[int, int] | None = None   # last star match, to skip the full sweep
@@ -546,6 +560,11 @@ class CatchRoutine:
         # the slow one-shot re-read was last spent (rate limit).
         self._nearby_last_seen_at: float | None = None
         self._nearby_fresh_at = 0.0
+        # Manual calibration is only a starting estimate. PGSharp's UI hierarchy supplies the
+        # real centre of slot 1; once observed it wins for the rest of the run. This prevents a
+        # stale manual y-coordinate from repeatedly tapping below a lone Pokemon.
+        self._ui_nearby_slot: tuple[int, int] | None = None
+        self._engage_still_nearby = False
         self._ui_dump_at = 0.0
         self._phases: list[tuple[str, float]] = []
         self._phase_t0 = 0.0
@@ -719,6 +738,14 @@ class CatchRoutine:
             self._game_samples = self._game_samples[-1:]   # disagreement: keep collecting
             return
         self._game_scale_done = True
+        # Even when the coordinate drift is too small to justify moving every game control,
+        # centre popup matching on what the game actually rendered. Popup templates are less
+        # tolerant than tap coordinates, and they must never inherit PGSharp's overlay scale.
+        self._game_popup_scales = scales_around(measured)
+        self._claim_scales = (
+            self._game_popup_scales
+            if abs(measured - 1.0) < 1e-3 else CALIBRATION_SWEEP
+        )
         # No density: the game layer's default is the width ratio, and `current` must be
         # whatever scale_to actually used or the comparison is against the wrong baseline.
         current = Layout(*cfg.screen, scale=cfg.game_scale).s
@@ -954,7 +981,7 @@ class CatchRoutine:
         live view and from inside a poll.
         """
         cfg = self.config
-        slot = cfg.nearby_slot if cfg.force_slot else self._slot_in(frame)
+        slot = self._effective_nearby_slot() if cfg.force_slot else self._slot_in(frame)
         if slot is None:
             return None
         # The manually calibrated point is already expressed in native screen pixels.
@@ -1038,9 +1065,38 @@ class CatchRoutine:
             self._trace("ui_dump_fail",
                         "Không đọc được view tree (UI đang animate?); dùng nhận diện ảnh.", 0.0)
             return None
+        if getattr(state, "nearby", None):
+            self._remember_ui_nearby_slot(state.nearby[0])
         # Every dump refreshes the cooldown for free, whatever it was taken for.
         self._note_cooldown(state.cooldown)
         return state
+
+    def _remember_ui_nearby_slot(self, target: tuple[int, int]) -> None:
+        """Cache PGSharp's authoritative slot-1 centre over a stale manual calibration."""
+        target = (int(target[0]), int(target[1]))
+        old = getattr(self, "_ui_nearby_slot", None)
+        self._ui_nearby_slot = target
+        self._nearby_last_seen_at = time.monotonic()
+        if not self.config.force_slot:
+            return
+        previous = old or self.config.nearby_slot
+        if previous == target:
+            return
+        # Bounds derived from the old slot must not survive a moved/corrected bar.
+        self._force_bottom_cache = None
+        self._force_bottom_value = None
+        self._trace(
+            "nearby_ui_realign",
+            f"PGSharp xác nhận slot đầu tại {target}; thay điểm căn tay cũ {previous} cho phiên này.",
+            0.0,
+        )
+
+    def _effective_nearby_slot(self) -> tuple[int, int]:
+        """Runtime slot centre, preferring PGSharp's live coordinate over saved calibration."""
+        ui_slot = getattr(self, "_ui_nearby_slot", None)
+        if self.config.force_slot and ui_slot is not None:
+            return ui_slot
+        return self.config.nearby_slot
 
     def _mark(self, name: str) -> None:
         """Record how far into the cycle we are. No-op unless trace_timing is on."""
@@ -1107,7 +1163,7 @@ class CatchRoutine:
         cfg = self.config
         if not cfg.force_slot or self._anchor is None:
             return False
-        x, y = cfg.nearby_slot
+        x, y = self._effective_nearby_slot()
         radius = cfg.s(120)
         region = (x - radius, y, radius * 2, cfg.slot_pitch * (cfg.force_slot_count + 3))
         return bool(find(frame, self._anchor, threshold=cfg.anchor_threshold,
@@ -1130,7 +1186,7 @@ class CatchRoutine:
         if state is None or not state.nearby:
             return None
         target = state.nearby[0]
-        self._nearby_last_seen_at = time.monotonic()
+        self._remember_ui_nearby_slot(target)
         self._trace("nearby_ui_hit",
                     f"PGSharp báo {len(state.nearby)} Pokémon trên Nearby; tap slot đầu {target}.",
                     0.0)
@@ -1407,7 +1463,7 @@ class CatchRoutine:
                 frame,
                 (self._close_btn, self._close_btn_blue, self._close_btn_white),
                 threshold=max(0.82, self.config.popup_threshold),
-                scales=self._popup_scales,
+                scales=self._game_popup_scales,
                 fallback_scales=CALIBRATION_SWEEP,
                 cache=fast_cache,
             )
@@ -1421,7 +1477,7 @@ class CatchRoutine:
         if self._popup_weather is not None:
             m = find_fast(frame, self._popup_weather,
                           threshold=max(0.82, self.config.popup_threshold),
-                          scales=self._popup_scales, cache=fast_cache)
+                          scales=self._game_popup_scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -1432,7 +1488,7 @@ class CatchRoutine:
         # Popups render at a fixed size on a given device, so a single scale is enough.
         if self._popup_speed is not None:
             m = find_fast(frame, self._popup_speed, threshold=self.config.popup_threshold,
-                          scales=self._popup_scales, cache=fast_cache)
+                          scales=self._game_popup_scales, cache=fast_cache)
             if m:
                 x, y = m[0].center
                 self.device.tap(x, y)
@@ -1442,7 +1498,7 @@ class CatchRoutine:
         # green "CHOOSE GROUP" above it). Searched by text in a centre box, so the button is missed.
         if self._maybe_later is not None:
             m = find_fast(frame, self._maybe_later, threshold=self.config.popup_threshold,
-                          scales=self._popup_scales, grayscale=False,
+                          scales=self._game_popup_scales, grayscale=False,
                           region=self.config.maybe_later_region)
             if m:
                 self.device.tap(*m[0].center)
@@ -1494,7 +1550,8 @@ class CatchRoutine:
                     # If close button appears in the center bottom region, tap it immediately
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
                         if btn is not None:
-                            m_close = find_fast(f, btn, threshold=0.7, scales=self._popup_scales,
+                            m_close = find_fast(f, btn, threshold=0.7,
+                                                scales=self._game_popup_scales,
                                                 region=self.config.rect((400, 2000, 420, 712), "BC"))
                             if m_close:
                                 self.device.tap(*m_close[0].center)
@@ -1514,20 +1571,23 @@ class CatchRoutine:
             close = None
             for btn in (self._close_btn_white, self._close_btn, self._close_btn_blue):
                 if btn is not None:
-                    m = find_fast(frame, btn, threshold=0.7, scales=self._popup_scales,
+                    m = find_fast(frame, btn, threshold=0.7, scales=self._game_popup_scales,
                                   region=region)
                     if m:
                         close = m[0].center
                         break
-            if close is not None:
-                self.device.tap(*close)
-                self.stats.last_event = "popup"
-                return True
+            # The screen itself was identified structurally from the blue photo-disc; once that
+            # proof exists, the calibrated close point is safer than leaving a user stuck just
+            # because this game version changed the X artwork.
+            self.device.tap(*(close or (fx, fy)))
+            self.stats.last_event = "popup"
+            return True
         # "POKÉMON CAUGHT" XP summary (a slipped-through catch) -> tap its green OK pill. It shows
         # first, and its ball-selector bleeds through the dialog so the encounter check reads true;
         # handle it here before anything else touches the screen.
         if self._caught_ok is not None:
-            m = find_fast(frame, self._caught_ok, threshold=0.72, scales=self._popup_scales,
+            m = find_fast(frame, self._caught_ok, threshold=0.72,
+                          scales=self._game_popup_scales,
                           grayscale=False, region=self.config.caught_ok_region)
             if m:
                 self.device.tap(*m[0].center)
@@ -1539,7 +1599,8 @@ class CatchRoutine:
         # throwable ball's bright centre.  The tight bottom-centre region plus the teal
         # button/template is already specific and excludes the encounter's controls.
         if self._check_btn is not None:
-            m = find_fast(frame, self._check_btn, threshold=0.75, scales=self._popup_scales,
+            m = find_fast(frame, self._check_btn, threshold=0.75,
+                          scales=self._game_popup_scales,
                           grayscale=False, region=self.config.check_btn_region)
             if m:
                 self.device.tap(*m[0].center)
@@ -1911,7 +1972,31 @@ class CatchRoutine:
         """
         cfg = self.config
         timeout = max(0.0, cfg.encounter_timeout) + max(0.0, cfg.encounter_transition_grace)
-        return self._poll(self._ball_in, timeout)
+        started = time.monotonic()
+        deadline = started + timeout
+        still_nearby_frames = 0
+        self._engage_still_nearby = False
+        while not self.stop_event.is_set():
+            self._wait_if_paused()
+            frame = self.device.screenshot(next_frame=True)
+            ball = self._ball_in(frame)
+            if ball is not None:
+                return ball
+
+            now = time.monotonic()
+            if now - started >= max(0.0, cfg.engage_miss_grace):
+                # If an occupied Nearby row is still there, the transition never began.
+                # Two adjacent fresh frames keep one stale H.264 frame from forcing a retry.
+                if self._bar_visible(frame) and self._scan_slots(frame) is not None:
+                    still_nearby_frames += 1
+                    if still_nearby_frames >= max(1, cfg.engage_miss_frames):
+                        self._engage_still_nearby = True
+                        return None
+                else:
+                    still_nearby_frames = 0
+            if now >= deadline:
+                return None
+        return None
 
     def _settle_after_encounter(self) -> None:
         """Let PGSharp replace the consumed Nearby row before another gesture can target it.
@@ -2115,13 +2200,13 @@ class CatchRoutine:
                             "Hết lượt ném nhưng encounter đã đóng; bỏ qua tap thoát.", 0.0)
         if threw:
             self.stats.encounters += 1
-            # A normal throw and the next Nearby tap used to share one scrcpy control socket.
-            # Wi-Fi can lose the throw's final UP while keeping that socket alive, so the next
-            # tap is delivered into stale pointer state and silently ignored.  Starting the next
-            # encounter from a clean socket is cheaper than the four-second failed-open timeout.
-            close_control = getattr(self.device, "close_control", None)
-            if close_control is not None:
-                close_control()
+            # Keep the low-latency control channel warm for the next Pokemon. Rebuilding the
+            # scrcpy server over Wi-Fi before every tap cost 1-5 seconds. Duplicate pointer-UPs
+            # clear the stale-touch failure that the old full teardown protected against; the
+            # device method still closes the channel if that reset itself fails.
+            release_pointers = getattr(self.device, "release_control_pointers", None)
+            if release_pointers is not None:
+                release_pointers()
         self._settle_after_encounter()
         return threw
 
@@ -2201,6 +2286,9 @@ class CatchRoutine:
         if s is not None and score >= CALIBRATION_MIN_SCORE:
             self._cal_scale = s
             self._scales = scales_around(s)
+            self._popup_scales = (
+                (1.0,) if abs(s - 1.0) < 1e-3 else scales_around(s)
+            )
             # Centring the template sweep is worth doing on any measurement; moving every
             # coordinate is only worth doing on one the sources back each other up on.
             if agreed:
@@ -2378,7 +2466,15 @@ class CatchRoutine:
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
-        slot = self._occupied_slot_in(frame)
+        slot = None
+        # Validate a manual slot from PGSharp once before trusting it. The cooldown check above
+        # normally obtained this same UI state for free; this covers runs where cooldown
+        # protection is disabled or its dump happened before Nearby populated.
+        if (cfg.force_slot and cfg.use_ui_dump
+                and getattr(self, "_ui_nearby_slot", None) is None):
+            slot = self._occupied_slot_ui()
+        if slot is None:
+            slot = self._occupied_slot_in(frame)
         self._mark("quet-nearby")
         if slot is None:
             slot = self._poll(self._occupied_slot_in, cfg.anchor_timeout)
@@ -2474,13 +2570,21 @@ class CatchRoutine:
             # No encounter opened (empty nearby slot / Pokémon fled). Never throw blind here:
             # a fallback swipe on the map just drags the camera and burns the cycle. If it was
             # merely slow to open, step 0.75 of the next cycle picks it up within idle_poll.
-            self._trace(
-                "encounter_initial_miss",
-                f"Chưa thấy bóng sau {time.monotonic() - tapped_at:.2f}s; quét lại ở vòng sau.",
-                0.0,
-            )
+            if self._engage_still_nearby:
+                self._trace(
+                    "encounter_tap_rejected",
+                    "Nearby vẫn còn nguyên sau cú tap; click chưa ăn, thử lại ngay.",
+                    0.0,
+                )
+            else:
+                self._trace(
+                    "encounter_initial_miss",
+                    f"Chưa thấy bóng sau {time.monotonic() - tapped_at:.2f}s; quét lại ở vòng sau.",
+                    0.0,
+                )
             self._mark("thu-lai"); self._flush_phases("KHONG-MO-DUOC")
-            self._interruptible_sleep(cfg.idle_poll)
+            if not self._engage_still_nearby:
+                self._interruptible_sleep(cfg.idle_poll)
             return False
         threw = self._finish_encounter(ball_xy)
         self._mark("encounter")
