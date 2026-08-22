@@ -564,6 +564,9 @@ class CatchRoutine:
         # real centre of slot 1; once observed it wins for the rest of the run. This prevents a
         # stale manual y-coordinate from repeatedly tapping below a lone Pokemon.
         self._ui_nearby_slot: tuple[int, int] | None = None
+        # Set by _occupied_slot_ui when a readable dump located the Nearby bar and found it
+        # empty. That is a definite answer, so the ~2.85s crisp capture behind it is skipped.
+        self._ui_empty_confirmed = False
         self._engage_still_nearby = False
         self._ui_dump_at = 0.0
         self._phases: list[tuple[str, float]] = []
@@ -1065,11 +1068,62 @@ class CatchRoutine:
             self._trace("ui_dump_fail",
                         "Không đọc được view tree (UI đang animate?); dùng nhận diện ảnh.", 0.0)
             return None
-        if getattr(state, "nearby", None):
-            self._remember_ui_nearby_slot(state.nearby[0])
+        bar = self._ui_nearby_bar(state)
+        if bar:
+            self._remember_ui_nearby_slot(bar[0])
         # Every dump refreshes the cooldown for free, whatever it was taken for.
         self._note_cooldown(state.cooldown)
         return state
+
+    def _ui_nearby_bar(self, state) -> list[tuple[int, int]] | None:
+        """The *Nearby* bar's occupied slots out of a dump, top entry first.
+
+        An empty list and None are different answers: [] is PGSharp stating that the Nearby bar
+        holds nothing, which is as authoritative as a hit and lets the caller skip the crisp
+        re-capture. None is this method declining to say which column is Nearby at all, where
+        the pixels still have to be asked.
+
+        PGSharp builds its Nearby sidebar and its Feeds sidebar from the same list widget, so
+        both report `hl_sri_icon` and a dump holds two interleaved bars rather than one list.
+        Reading them as one and taking the topmost entry picks whichever bar happens to hang
+        higher on screen — the Feed bar as often as not. That is what put a Feed coordinate
+        into _remember_ui_nearby_slot, overriding the user's calibration, and left the bot
+        double-tapping Feeds every cycle with Pokémon sitting on a full Nearby bar.
+
+        Nothing in the view tree names the bars, so the column does it: the '@' anchor marks
+        the Nearby bar and nothing else, with the calibrated point and the column already
+        accepted this session as fallbacks. With no reference at all a lone bar is
+        unambiguous and is used; two are not, and no answer beats a coin flip that teleports.
+        """
+        bars = getattr(state, "bars", None) or ([state.nearby] if state.nearby else [])
+        if not bars:
+            # No sidebar entries anywhere in the tree. Neither bar is holding anything, so
+            # Nearby is empty whichever column it occupies.
+            return []
+        anchor = self._anchor_cache
+        ui_slot = getattr(self, "_ui_nearby_slot", None)
+        if anchor is not None:
+            ref = anchor[0]
+        elif ui_slot is not None:
+            ref = ui_slot[0]
+        elif self.config.force_slot:
+            ref = self.config.nearby_slot[0]
+        else:
+            return list(bars[0]) if len(bars) == 1 else None
+        # Generous on purpose: the bars sit at opposite edges, hundreds of px apart, so a wide
+        # window cannot confuse them, while a tight one would reject a calibration measured a
+        # few px off the widget's own centre.
+        bar = min(bars, key=lambda b: abs(b[0][0] - ref))
+        if abs(bar[0][0] - ref) > self.config.handle_column_tol * 2:
+            # Every bar in the tree sits in some other column, so the Nearby bar is not among
+            # them. It is empty (an empty ListView contributes no icons), but say so only as
+            # "cannot tell" — the reference itself may be the thing that is stale.
+            return None
+        if anchor is not None:
+            # The '@' ends the Nearby bar, so an entry level with or below it belongs to
+            # something else — the other bar, dragged into this same column.
+            bar = [slot for slot in bar if slot[1] < anchor[1]]
+        return list(bar)
 
     def _remember_ui_nearby_slot(self, target: tuple[int, int]) -> None:
         """Cache PGSharp's authoritative slot-1 centre over a stale manual calibration."""
@@ -1182,13 +1236,25 @@ class CatchRoutine:
         freshest. None means either an empty bar or a dump that could not be read, which the
         caller resolves by falling back to pixels.
         """
+        self._ui_empty_confirmed = False
         state = self._ui_state()
-        if state is None or not state.nearby:
+        if state is None:
             return None
-        target = state.nearby[0]
+        bar = self._ui_nearby_bar(state)
+        if bar is None:
+            return None
+        if not bar:
+            # Measured on this device: the dump costs ~2.8s and the crisp capture another
+            # ~2.85s over Wi-Fi. Spending the second one to re-ask a question PGSharp's own
+            # view tree just answered is most of a dry cycle thrown away.
+            self._ui_empty_confirmed = True
+            self._trace("nearby_ui_empty",
+                        "PGSharp xác nhận thanh Nearby trống; bỏ qua bước chụp ảnh nét.", 0.0)
+            return None
+        target = bar[0]
         self._remember_ui_nearby_slot(target)
         self._trace("nearby_ui_hit",
-                    f"PGSharp báo {len(state.nearby)} Pokémon trên Nearby; tap slot đầu {target}.",
+                    f"PGSharp báo {len(bar)} Pokémon trên Nearby; tap slot đầu {target}.",
                     0.0)
         return target
 
@@ -1347,7 +1413,9 @@ class CatchRoutine:
             if loaded is None and now - heartbeat_at >= 10.0:
                 # Stream frames may smear a newly arrived sprite. Every heartbeat asks PGSharp
                 # directly, then falls back to one crisp ADB frame before continuing to wait.
-                loaded = self._occupied_slot_ui() or self._occupied_slot_fresh()
+                loaded = self._occupied_slot_ui()
+                if loaded is None and not self._ui_empty_confirmed:
+                    loaded = self._occupied_slot_fresh()
                 if loaded is None:
                     waited = max(0.0, now - self._feed_pending_at)
                     self._trace(
@@ -2482,8 +2550,12 @@ class CatchRoutine:
         if slot is None:
             # The stream said empty. Ask PGSharp itself before believing it — its view tree is
             # definitive where the pixels are only suggestive — and fall back to a crisp capture
-            # when the dump cannot be read.
-            slot = self._occupied_slot_ui() or self._occupied_slot_fresh()
+            # only when the dump could *not* be read. A dump that read fine and reported an
+            # empty bar has already answered; re-asking it in pixels costs ~2.85s over Wi-Fi
+            # and cannot overrule the view tree anyway.
+            slot = self._occupied_slot_ui()
+            if slot is None and not self._ui_empty_confirmed:
+                slot = self._occupied_slot_fresh()
             self._mark("ui+anh-net")
         if slot is None:
             if self._feed_pending:
@@ -2498,35 +2570,49 @@ class CatchRoutine:
                 self._mark("cho-feed-nearby"); self._flush_phases("CHO-FEED-LOAD")
                 self._interruptible_sleep(cfg.idle_poll)
                 return False
-            # Nothing on Nearby — is the walk simply stalled? Restarting it is cheaper and less
-            # disruptive than a teleport, and a paused walk is the most likely reason nothing is
-            # spawning, so it gets first refusal. Only a row showing '⊘' is tapped, so a walk
-            # that is already running falls straight through to the feed below.
-            # The rows below only exist while the menu is expanded. Open it first, then let the
-            # next cycle read the menu it just asked for rather than a half-drawn one.
+            # Both rows below only exist while the menu is expanded. Open it first, then let
+            # the next cycle read the menu it just asked for rather than a half-drawn one.
             if self._ensure_menu_open(frame):
                 self._mark("mo-menu"); self._flush_phases("mo-menu")
                 self._interruptible_sleep(cfg.menu_open_wait)
                 return False
+            # Nothing on Nearby. The feed gets first refusal whenever the user turned it on: it
+            # puts a named spawn on the bar, where restarting a stalled walk only hopes one
+            # wanders into range. Behind AutoWalk it never got a turn at all — a paused row is
+            # tapped on very nearly every dry cycle and that branch returns before the feed is
+            # so much as read, which is exactly what "bật Feed mà nó vẫn chỉ bấm AutoWalk" was.
+            # Still not on the first empty read: one of those is usually the sprite test
+            # dropping a frame rather than an empty bar, and teleporting on it abandons Pokémon
+            # sitting right there. With the feed off, _tap_feed_spawn returns at its own guard
+            # and the order here is exactly what it has always been.
+            self._mark("feed")
+            if self._idle_streak >= cfg.feed_after_idle and self._tap_feed_spawn():
+                self._flush_phases("feed-teleport")
+                self._idle_streak = 0
+                return False
+            # The feed had nothing to give — empty, locked behind a jump already made, or
+            # blocked by Go Plus — so fall back to the cheaper nudge and restart a walk that has
+            # stalled. Only a row showing '⊘' is tapped, so a walk that is already running falls
+            # straight through to the idle report below.
             if self._tap_autowalk_paused():
                 self._mark("autowalk"); self._flush_phases("autowalk")
                 self.stats.autowalks += 1
                 self._idle_streak = 0
                 self._interruptible_sleep(cfg.autowalk_wait)
                 return False
-            # Still nothing — does the PGSharp feed list a fresh spawn? Teleporting to it
-            # fills the Nearby bar for the next cycle, which beats idling until the dry-spell
-            # timer fires. Only after several empty cycles in a row though: one empty read is
-            # usually the sprite test dropping a frame, not an empty bar, and acting on it
-            # teleports away from Pokémon that are sitting right there. The jump counts as
-            # progress, so the AutoWalk streak resets.
-            self._mark("autowalk")
-            if self._idle_streak >= cfg.feed_after_idle and self._tap_feed_spawn():
-                self._flush_phases("feed-teleport")
-                self._idle_streak = 0
-                return False
-            self._mark("feed"); self._flush_phases("NEARBY-TRONG")
-            self._trace("nearby_empty", "Không thấy Pokémon trên thanh Nearby lẫn thanh feed.")
+            self._mark("autowalk"); self._flush_phases("NEARBY-TRONG")
+            # Naming the feed here is only honest while the feed is actually being read. Once
+            # a Go Plus warning has blocked a teleport the source is off and _tap_feed_spawn
+            # returns at its guard without ever looking at the bar — reporting that as "nothing
+            # on the feed either" reads as a broken detector and sends the user hunting for one.
+            if not cfg.use_feed_bar:
+                empty = "Không thấy Pokémon trên thanh Nearby (nguồn Feed đang tắt)."
+            elif self._teleport_blocked:
+                empty = ("Không thấy Pokémon trên thanh Nearby; nguồn Feed đã tắt vì teleport "
+                         "bị chặn (Go Plus đang kết nối) — ngắt Go Plus rồi chạy lại để dùng Feed.")
+            else:
+                empty = "Không thấy Pokémon trên thanh Nearby lẫn thanh feed."
+            self._trace("nearby_empty", empty)
             self._interruptible_sleep(cfg.idle_poll)
             return False
 

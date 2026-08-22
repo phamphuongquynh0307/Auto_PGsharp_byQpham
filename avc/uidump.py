@@ -6,7 +6,9 @@ the code merged into it. What matters here is that its overlay is built from rea
 instead of the game's Unity canvas, so ``uiautomator dump`` reads it directly — and that answers,
 exactly, questions the pixel detectors can only estimate:
 
-  * how many Pokemon are on the Nearby bar, and where each one is (``hl_sri_icon``)
+  * how many Pokemon are on the Nearby bar, and where each one is (``hl_sri_icon``) --
+    but see ``_columns``: the Feeds sidebar is the same widget with the same id, so a dump
+    holds *two* bars under it and only their columns tell them apart
   * whether AutoWalk is running or paused, and where its row is (``hl_shortcut_menu_item_txt``)
   * how long PGSharp says the jump cooldown still has to run (``hl_cd_text``)
   * the encounter's level / IV / stats as text (``hl_ec_sum_*``)
@@ -42,6 +44,10 @@ _IV_STATS = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})\b")
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
+# Icons within one sidebar share an x exactly (same ListView), and the two sidebars sit at
+# opposite edges of the screen. Anything short of a full icon width therefore separates them.
+_COLUMN_TOL = 40
+
 
 def _centre(bounds: str) -> tuple[int, int] | None:
     m = _BOUNDS.match(bounds or "")
@@ -51,11 +57,43 @@ def _centre(bounds: str) -> tuple[int, int] | None:
     return ((x0 + x1) // 2, (y0 + y1) // 2)
 
 
+def _box(bounds: str) -> tuple[int, int, int, int] | None:
+    m = _BOUNDS.match(bounds or "")
+    return tuple(int(v) for v in m.groups()) if m else None  # type: ignore[return-value]
+
+
+def _columns(slots: list[tuple[int, int]], tol: int = _COLUMN_TOL) -> list[list[tuple[int, int]]]:
+    """Split slot centres into one list per sidebar, each reading top-down.
+
+    Both of PGSharp's sidebars -- Nearby and Feeds -- are the same list widget, so every entry
+    in either one reports ``hl_sri_icon`` and a dump cannot name them apart. What separates
+    them is position: each bar is a single narrow column, and every icon inside one shares an
+    x to the pixel. Grouping on x therefore recovers the bars themselves; which of them is
+    Nearby is a question for the caller, who has the '@' anchor to answer it with.
+
+    Bars dragged into the *same* column still merge here. That is the one arrangement this
+    cannot undo, and it is why the caller must still bound the bar it picks.
+    """
+    bars: list[list[tuple[int, int]]] = []
+    for slot in sorted(slots, key=lambda c: (c[0], c[1])):
+        if bars and abs(slot[0] - bars[-1][0][0]) <= tol:
+            bars[-1].append(slot)
+        else:
+            bars.append([slot])
+    for bar in bars:
+        bar.sort(key=lambda c: c[1])
+    return bars
+
+
 @dataclass
 class UiState:
     """What one dump saw. Empty lists mean "the dump was fine and there was nothing"."""
 
-    nearby: list[tuple[int, int]] = field(default_factory=list)   # slot centres, top first
+    nearby: list[tuple[int, int]] = field(default_factory=list)   # every bar's slots, top first
+    # One entry per sidebar found (Nearby and, when open, Feeds), left to right; each reads
+    # top-down. `nearby` merges them and so cannot be trusted to describe one bar -- see
+    # `_columns`, and CatchRoutine._ui_nearby_bar for the one that picks Nearby out of these.
+    bars: list[list[tuple[int, int]]] = field(default_factory=list)
     menu: dict[str, tuple[int, int]] = field(default_factory=dict)  # row text -> centre
     encounter: dict[str, str] = field(default_factory=dict)       # hl_ec_sum_* suffix -> text
     cooldown: float = 0.0        # seconds left on PGSharp's jump cooldown, 0 when clear
@@ -175,7 +213,11 @@ def parse(xml_text: str) -> UiState | None:
         if centre is None:
             continue
         if name == _NEARBY_ICON:
-            nearby.append(centre)
+            box = _box(node.get("bounds") or "")
+            # A list item scrolled half out of its ListView reports a sliver of a box. Its
+            # centre is not a slot centre, and tapping it lands on the bar's rim.
+            if box is not None and (box[3] - box[1]) * 2 >= (box[2] - box[0]):
+                nearby.append(centre)
         elif name == _MENU_TEXT:
             text = (node.get("text") or "").strip()
             if text:
@@ -190,5 +232,6 @@ def parse(xml_text: str) -> UiState | None:
             if text:
                 state.encounter[name[len(_ENCOUNTER_PREFIX):]] = text
     # The bar reads top-down, and so does every caller.
+    state.bars = _columns(nearby)
     state.nearby = sorted(nearby, key=lambda c: c[1])
     return state
