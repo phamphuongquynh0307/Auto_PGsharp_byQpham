@@ -25,6 +25,7 @@ def bare_feed_routine():
         use_feed_bar=True,
         feed_teleport_wait=0.0,
         feed_nearby_timeout=0.0,     # 0 = wait indefinitely, as these cases assume
+        feed_fresh_cooldown=30.0,
         respect_cooldown=False,
         idle_poll=0.0,
     )
@@ -32,6 +33,8 @@ def bare_feed_routine():
     routine._feed_pending = False
     routine._feed_pending_at = 0.0
     routine._feed_seen = True
+    routine._feed_miss = None
+    routine._feed_fresh_at = 0.0
     routine._rss = object()
     routine._handle = object()
     routine._cancelled_dialog = False
@@ -98,6 +101,54 @@ class CatchFeedQueueTests(unittest.TestCase):
         self.assertTrue(routine._feed_pending)
 
 
+class FeedBootstrapCaptureTests(unittest.TestCase):
+    """The crisp capture was gated on _feed_seen — which only _feed_slot_in sets once a stream
+    frame has already matched the bar. On a device where H.264 smear keeps the small RSS and
+    handle templates under threshold, that is a closed loop: the one capture able to prove the
+    bar exists is the one the gate forbids, and the feed reads as permanently absent."""
+
+    def _blind_routine(self):
+        """A feed bar the stream frames never manage to match."""
+        routine = bare_feed_routine()
+        routine._feed_seen = False
+        routine.looks = []
+
+        def look(_frame):
+            routine.looks.append("look")
+            return None
+
+        routine._feed_slot_in = look
+        return routine
+
+    def test_a_bar_never_seen_still_earns_one_crisp_look(self):
+        routine = self._blind_routine()
+
+        self.assertFalse(routine._tap_feed_spawn())
+        self.assertEqual(2, len(routine.looks))   # the stream frame, then the crisp capture
+
+    def test_the_crisp_look_is_not_bought_again_inside_the_cooldown(self):
+        routine = self._blind_routine()
+        routine._tap_feed_spawn()
+        routine.looks.clear()
+
+        routine._tap_feed_spawn()
+
+        self.assertEqual(1, len(routine.looks))   # stream frame only; no second capture
+
+    def test_a_bar_already_seen_keeps_its_crisp_retry_every_cycle(self):
+        routine = self._blind_routine()
+        routine._feed_seen = True
+        routine._feed_fresh_at = 0.0
+
+        routine._tap_feed_spawn()
+        routine.looks.clear()
+        routine._tap_feed_spawn()
+
+        # Smear drops a known bar for a frame at a time; the cooldown must not ration the
+        # retry that recovers it.
+        self.assertEqual(2, len(routine.looks))
+
+
 class FeedWaitTimeoutTests(unittest.TestCase):
     """The wait for the tapped spawn had no ceiling: a tap PGSharp silently dropped parked the
     routine in this loop for the rest of the run — observed standing still for 11 minutes."""
@@ -139,7 +190,7 @@ class FeedWaitTimeoutTests(unittest.TestCase):
         self.assertTrue(routine._feed_pending)
 
 
-def empty_nearby_routine(*, use_feed_bar=True, idle_streak=1):
+def empty_nearby_routine(*, use_feed_bar=True, dry_streak=1):
     """A routine parked in run_once's "Nearby is empty" branch, with both escapes recording."""
     routine = object.__new__(CatchRoutine)
     routine.device = FakeDevice()
@@ -150,7 +201,8 @@ def empty_nearby_routine(*, use_feed_bar=True, idle_streak=1):
     )
     routine.stats = SimpleNamespace(cycles=0, autowalks=0)
     routine.stop_event = threading.Event()
-    routine._idle_streak = idle_streak
+    routine._idle_streak = 0
+    routine._dry_streak = dry_streak
     routine._feed_pending = False
     routine._teleport_blocked = False
     routine._ui_empty_confirmed = False
@@ -197,6 +249,17 @@ class EmptyNearbyPriorityTests(unittest.TestCase):
         self.assertEqual(["feed", "autowalk"], calls)
         self.assertEqual(1, routine.stats.autowalks)
 
+    def test_autowalk_firing_every_cycle_must_not_starve_the_feed(self):
+        """With idle_before_autowalk at 1, AutoWalk zeroed the shared counter at the end of
+        every dry cycle, so the feed's own threshold was never met and _tap_feed_spawn was
+        short-circuited away — never called once, in a whole session."""
+        routine, calls = empty_nearby_routine(dry_streak=2)
+        routine._idle_streak = 0          # AutoWalk has just reset its own counter
+
+        routine.run_once()
+
+        self.assertEqual(["feed"], calls)
+
     def test_feed_off_leaves_autowalk_exactly_as_it_was(self):
         routine, calls = empty_nearby_routine(use_feed_bar=False)
         # _tap_feed_spawn returns at its own use_feed_bar guard in the real routine.
@@ -207,7 +270,7 @@ class EmptyNearbyPriorityTests(unittest.TestCase):
         self.assertEqual(["autowalk"], calls)
 
     def test_first_empty_read_is_not_worth_a_teleport(self):
-        routine, calls = empty_nearby_routine(idle_streak=0)
+        routine, calls = empty_nearby_routine(dry_streak=0)
 
         routine.run_once()
 

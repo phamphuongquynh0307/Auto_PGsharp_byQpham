@@ -160,6 +160,10 @@ class CatchConfig:
     # cycle back to Nearby + AutoWalk; the next Feed tap still has to earn its idle streak
     # again. 0 restores the old behaviour of waiting indefinitely.
     feed_nearby_timeout: float = 45.0
+    # How often a crisp capture may be spent looking for a feed bar that stream frames have
+    # never managed to match. Bounded because a user who ticked the box but has no feed bar
+    # open would otherwise pay for one every dry cycle.
+    feed_fresh_cooldown: float = 20.0
     # Consecutive empty cycles required before the feed may teleport. The sprite test is
     # marginal against a busy translucent sidebar (event scenery, gyms) and loses the odd
     # frame on a bar that is actually full; teleporting on one such read jumps away from
@@ -587,6 +591,11 @@ class CatchRoutine:
         self._feed_cache: tuple[tuple[int, int], tuple[int, int], tuple[int, int]] | None = None
         self._feed_presence_streak = 0
         self._feed_seen = False
+        # Why the last _feed_slot_in came back empty, and when a crisp capture was last spent
+        # hunting a bar the stream cannot match. Without the first, "không thấy Pokémon trên
+        # thanh feed" covers four different situations and none of them can be told apart.
+        self._feed_miss: str | None = None
+        self._feed_fresh_at = 0.0
         # A Feed tap consumes/moves the queue immediately, while its Pokemon may need many
         # seconds to load into Nearby. Keep the queue locked across catch cycles so an ordinary
         # timeout cannot tap the next Feed entry and abandon the first spawn.
@@ -635,6 +644,12 @@ class CatchRoutine:
         self._noball_tpl = load_opt(self.config.out_of_balls_template)
         self.stats = CatchStats()
         self._idle_streak = 0
+        # AutoWalk's counter above is reset the moment it fires, so with idle_before_autowalk at
+        # 1 it never holds anything but 0 — and the feed, which read the same counter, could
+        # never clear its own threshold, so _tap_feed_spawn was short-circuited away and never
+        # once called. Two features cannot share one counter when one of them resets it. This
+        # one counts consecutive dry cycles for the feed alone.
+        self._dry_streak = 0
         self._autowalk_active = False
         self._no_balls = False   # set by run_once when the "x0" badge is seen; consumed by run()
         self._popup_block_until = 0.0
@@ -1297,6 +1312,7 @@ class CatchRoutine:
         handle art, so the column check is what tells the feed bar from the Nearby bar.
         """
         cfg = self.config
+        self._feed_miss = "no_bar"
         if self._rss is None or self._handle is None:
             return None
 
@@ -1306,7 +1322,14 @@ class CatchRoutine:
                 min_foreground_bright_fraction=cfg.slot_foreground_bright_fraction,
             )
             self._feed_presence_streak = self._feed_presence_streak + 1 if present else 0
-            return slot if present and self._feed_presence_streak >= 2 else None
+            if not present:
+                self._feed_miss = "empty"
+                return None
+            if self._feed_presence_streak < 2:
+                self._feed_miss = "streak"
+                return None
+            self._feed_miss = None
+            return slot
 
         if self._feed_cache is not None:
             (rx, ry), (hx, hy), slot = self._feed_cache
@@ -1353,14 +1376,37 @@ class CatchRoutine:
         # (an encounter, a summary, a dialog, a transition), and tapping a remembered feed
         # position there fires a teleport in the middle of a catch.
         if self._slot_in(frame) is None:
+            self._trace(
+                "feed_skip_map",
+                "Bỏ qua Feed vòng này: không thấy mốc '@' của thanh Nearby trên khung hình "
+                "(có thể đang ở encounter hoặc màn hình chuyển cảnh).",
+                10.0,
+            )
             return False
         slot = self._feed_slot_in(frame)
-        if slot is None and self._feed_seen:
-            # H.264 smear between keyframes periodically drops the small RSS/handle templates
-            # below threshold; a crisp one-shot capture is worth its ~1s only once the bar has
-            # actually been seen on this device.
-            slot = self._feed_slot_in(self.device.screenshot(fresh=True))
         if slot is None:
+            # H.264 smear between keyframes routinely drops the small RSS/handle templates below
+            # threshold, and this used to be gated on _feed_seen — which _feed_slot_in only sets
+            # after a stream frame has already matched them. On a device where they never do,
+            # that is a closed loop: the crisp capture that would prove the bar exists is the one
+            # thing the gate forbids. It is now allowed to bootstrap, rate-limited so a user with
+            # no feed bar open does not buy a capture every dry cycle.
+            now = time.monotonic()
+            if self._feed_seen or now - self._feed_fresh_at >= cfg.feed_fresh_cooldown:
+                if not self._feed_seen:
+                    self._feed_fresh_at = now
+                slot = self._feed_slot_in(self.device.screenshot(fresh=True))
+        if slot is None:
+            self._trace(
+                "feed_skip",
+                "Bỏ qua Feed vòng này: " + {
+                    "no_bar": "không tìm thấy thanh Feed trên màn hình "
+                              "(icon RSS hoặc tay cầm không khớp mẫu).",
+                    "empty": "thanh Feed đang không có Pokémon nào.",
+                    "streak": "thanh Feed vừa hiện Pokémon, chờ thêm một khung hình để chắc.",
+                }.get(self._feed_miss, "không đọc được thanh Feed."),
+                10.0,
+            )
             return False
         self.device.tap(*slot)
         # Lock before waiting. feed_teleport_wait is only a fast-path wait, never permission to
@@ -2585,7 +2631,7 @@ class CatchRoutine:
         if slot is None:
             if self._feed_pending:
                 waited = max(0.0, time.monotonic() - self._feed_pending_at)
-                self._idle_streak = 0
+                self._idle_streak = self._dry_streak = 0
                 self._trace(
                     "feed_wait_nearby",
                     f"Đã tap Feed 1 lần; đang chờ Pokémon hiện trên Nearby ({waited:.0f}s), "
@@ -2611,9 +2657,9 @@ class CatchRoutine:
             # sitting right there. With the feed off, _tap_feed_spawn returns at its own guard
             # and the order here is exactly what it has always been.
             self._mark("feed")
-            if self._idle_streak >= cfg.feed_after_idle and self._tap_feed_spawn():
+            if self._dry_streak >= cfg.feed_after_idle and self._tap_feed_spawn():
                 self._flush_phases("feed-teleport")
-                self._idle_streak = 0
+                self._idle_streak = self._dry_streak = 0
                 return False
             # The feed had nothing to give — empty, locked behind a jump already made, or
             # blocked by Go Plus — so fall back to the cheaper nudge and restart a walk that has
@@ -2731,11 +2777,14 @@ class CatchRoutine:
             if self._feed_pending:
                 # Waiting for the one Feed teleport already sent is active work, not an empty
                 # cycle. Never let the dry-spell AutoWalk path interfere or unlock another tap.
-                self._idle_streak = 0
+                self._idle_streak = self._dry_streak = 0
             elif threw:
-                self._idle_streak = 0
+                self._idle_streak = self._dry_streak = 0
             else:
                 self._idle_streak += 1
+                # Deliberately not reset by the AutoWalk branch below: restarting a stalled walk
+                # says nothing about whether Pokémon have started appearing again.
+                self._dry_streak += 1
                 if cfg.idle_before_autowalk and self._idle_streak >= cfg.idle_before_autowalk:
                     # _try_autowalk itself refuses to tap an already-walking row, so calling it
                     # on every dry spell is safe — it re-taps only a stalled (paused) walk.

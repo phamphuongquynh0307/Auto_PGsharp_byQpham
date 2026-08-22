@@ -1,45 +1,55 @@
-# v1.4.4
+# v1.4.5
 
 ## Tiếng Việt
 
-### Sửa lỗi bot đứng im vô hạn sau khi tap Feed
+### Sửa lỗi Feed không bao giờ được gọi khi AutoWalk đặt ở 1 vòng
 
-- Sau khi tap một mục trên thanh Feed, app khoá nguồn Feed lại và chờ Pokémon đó xuất hiện trên thanh Nearby. Vòng chờ này **không có giới hạn nào** — nó chỉ kết thúc khi Pokémon hiện ra hoặc người dùng bấm Dừng.
-- Nếu PGSharp bỏ qua cú tap, hoặc Pokémon đã biến mất trước khi bản đồ tải xong, thì không bao giờ có gì xuất hiện và cả routine đứng im cho tới hết phiên chạy. Ghi nhận thực tế: đứng yên 11 phút, log lặp lại "vẫn chờ Pokémon hiện trên Nearby" mỗi 10 giây.
-- Nay vòng chờ có hạn mức thật. Hết hạn, app nhả khoá Feed, ghi rõ lý do vào log và trả vòng lặp về Nearby + AutoWalk.
-- Đây không phải đường Go Plus: bỏ qua một con vì hết giờ **không** làm tắt nguồn Feed cho cả phiên, lần khô kế tiếp vẫn được thử Feed lại bình thường.
+- Nguồn Feed và AutoWalk dùng chung một biến đếm số vòng khô liên tiếp. AutoWalk đặt biến đó về 0 ngay khi nó chạy, nên với **Số vòng trống trước khi bấm AutoWalk = 1**, biến luôn bằng 0 đúng vào lúc Feed cần đọc.
+- Feed kiểm tra `số vòng khô >= ngưỡng` trước khi làm bất cứ việc gì, nên điều kiện luôn sai và hàm xử lý Feed **chưa từng được gọi một lần nào**. Nhìn từ ngoài giống hệt lỗi nhận diện: bot đứng cạnh thanh Feed đầy Pokémon và không phản ứng, log không hề nói gì.
+- Nay Feed có biến đếm riêng, chỉ về 0 khi thật sự bắt được Pokémon hoặc khi đang chờ cú nhảy Feed trước đó. AutoWalk giữ nguyên biến cũ và hành vi không đổi.
+- Lỗi này chỉ xuất hiện khi đặt AutoWalk ở 1 vòng. Để 3 vòng thì Feed vẫn chạy, nên nó ẩn mình rất kỹ.
 
-### Thêm ô chỉnh thời gian chờ Feed, hiện ra khi bật Feed
+### Sửa bẫy khép kín khiến thanh Feed không bao giờ được tìm bằng ảnh nét
 
-- Thêm **Chờ Pokémon từ Feed hiện trên Nearby (giây, 0 = chờ mãi)** vào nhóm Bắt Pokémon, mặc định 45 giây.
-- Ô này chỉ hiện khi đã tick **Nearby hết Pokémon: lấy 1 con từ Feed**, giống cách ô số phút chỉ hiện khi bật quay PokéStop — một ô không có tác dụng thì không nên bày ra trước mặt người dùng.
-- Đặt 0 để giữ nguyên hành vi chờ mãi như các bản trước.
-- Trước đây ô "Chờ Pokémon xuất hiện trên Nearby" duy nhất trong app chỉ nối vào chế độ Shundo, nên ở chế độ Bắt Pokémon người dùng hoàn toàn không có cách nào đặt giới hạn.
+- Khung hình từ luồng video bị nén H.264 thường xuyên làm icon RSS và tay cầm của thanh Feed tụt dưới ngưỡng khớp mẫu. App có sẵn bước chụp ảnh nét để cứu, nhưng bước đó bị khoá sau điều kiện "đã từng thấy thanh Feed".
+- Mà cờ "đã từng thấy" chỉ được bật khi khớp thành công trên chính khung hình luồng video. Trên máy mà khung hình luôn nhoè, đó là vòng lặp khép kín: thứ duy nhất chứng minh được thanh Feed tồn tại lại chính là thứ bị cấm chạy.
+- Nay cho phép chụp một ảnh nét để khởi động, giới hạn 20 giây một lần để người bật Feed mà không mở thanh Feed không phải trả phí chụp mỗi vòng khô. Sau khi đã thấy thanh Feed một lần thì bước cứu này chạy lại bình thường mỗi vòng.
+
+### Log nói rõ vì sao bỏ qua Feed
+
+- Trước đây bốn tình huống hoàn toàn khác nhau đều in ra đúng một câu, nên không có cách nào biết bot đang vướng ở đâu.
+- Nay tách riêng từng lý do: không tìm thấy thanh Feed trên màn hình, thanh Feed đang trống, vừa hiện Pokémon và đang chờ khung hình xác nhận, hoặc không thấy mốc `@` của thanh Nearby.
 
 ### Kiểm chứng
 
-- **206 test đạt**, không có lỗi.
-- Bộ test mới bao phủ: vòng chờ kết thúc khi hết hạn và nhả khoá mà không ăn thêm mục Feed nào, nguồn Feed vẫn dùng lại được ở vòng sau, giá trị 0 giữ đúng hành vi chờ mãi, và ô cài đặt ẩn/hiện theo trạng thái của checkbox.
+- **210 test đạt**, không có lỗi. Bộ test mới khoá đúng ca gây lỗi: AutoWalk đặt ở 1 vòng và vừa đặt lại biến đếm, Feed vẫn phải tới lượt.
+- Chạy thật trên máy 1220x2712: tap Feed tại `(141, 385)`, Pokémon xuất hiện trên thanh Nearby sau **35,1 giây** và chuyển sang bắt bình thường.
+- Lưu ý về cài đặt: 35 giây đã khá sát mặc định 45 giây của ô **Chờ Pokémon từ Feed hiện trên Nearby**. Nếu mạng chậm hoặc điểm nhảy xa, nên nâng ô này lên.
 
 ---
 
 ## English
 
-### Fixed the bot standing still indefinitely after tapping the Feed
+### Fixed the Feed never being called when AutoWalk is set to 1 idle cycle
 
-- After tapping a Feed entry the app locks the Feed source and waits for that Pokémon to reach the Nearby bar. That wait had **no ceiling at all** — it ended only when the Pokémon appeared or the user pressed Stop.
-- If PGSharp dropped the tap, or the spawn despawned before the map finished loading, nothing ever arrived and the whole routine stood still for the rest of the run. Observed in practice: 11 minutes motionless, with the log repeating "still waiting for the Pokémon on Nearby" every 10 seconds.
-- The wait is now bounded. When the time is spent the app releases the Feed lock, states the reason in the log, and hands the cycle back to Nearby + AutoWalk.
-- This is not the Go Plus path: giving up on one spawn does **not** disable the Feed source for the run, and the next dry spell may use the Feed again as normal.
+- The Feed source and AutoWalk shared one counter of consecutive dry cycles. AutoWalk zeroes that counter the moment it fires, so with **idle cycles before AutoWalk = 1** the counter was always 0 at exactly the point the Feed read it.
+- The Feed checks `dry cycles >= threshold` before doing anything, so the condition never held and the Feed routine **was never called once**. From the outside this looked exactly like a detection failure: the bot standing beside a Feed bar full of Pokémon, doing nothing, with the log saying nothing at all.
+- The Feed now has its own counter, zeroed only when a Pokémon is actually caught or while waiting on a Feed jump already made. AutoWalk keeps the original counter and its behaviour is unchanged.
+- The bug only appeared with AutoWalk set to 1 cycle. At 3 the Feed still worked, which is what kept it so well hidden.
 
-### A Feed wait setting, revealed when the Feed is enabled
+### Fixed the closed loop that stopped the Feed bar ever being found on a crisp capture
 
-- Added **Wait for the Feed's Pokémon on Nearby (s, 0 = forever)** to the catching group, defaulting to 45 seconds.
-- It appears only once **Nearby hết Pokémon: lấy 1 con từ Feed** is ticked, the same way the hold length appears only once PokéStop spinning is enabled — a control that does nothing should not be put in front of the user.
-- Set it to 0 to keep the previous wait-forever behaviour.
-- The app's only existing "wait for Pokémon on Nearby" control was wired to Shundo mode alone, so catching mode had no way to bound this wait at all.
+- H.264 compression on the video stream routinely drops the Feed bar's small RSS icon and drag handle below the match threshold. The app already had a crisp-capture fallback for this, but it was gated behind "the Feed bar has been seen before".
+- That flag is only set when a match succeeds on a stream frame in the first place. On a device where stream frames never match, this is a closed loop: the one capture able to prove the bar exists is the one thing the gate forbids.
+- A crisp capture may now bootstrap that flag, rate-limited to once every 20 seconds so a user who enables the Feed without opening the Feed bar does not buy a capture on every dry cycle. Once the bar has been seen, the fallback runs every cycle as before.
+
+### The log now says why the Feed was skipped
+
+- Four genuinely different situations previously printed one identical line, leaving no way to tell where the bot was stuck.
+- Each now reports its own reason: the Feed bar could not be found on screen, the Feed bar is empty, a Pokémon has just appeared and one more frame is needed to confirm it, or the Nearby bar's `@` anchor is not in view.
 
 ### Verification
 
-- **206 tests passing**, no failures.
-- New tests cover the wait ending at its deadline and releasing the lock without consuming another Feed entry, the Feed source staying usable on the next cycle, 0 preserving the wait-forever behaviour, and the setting following its checkbox.
+- **210 tests passing**, no failures. A new test pins the exact failing case: AutoWalk set to 1 cycle and having just reset its counter, the Feed must still get its turn.
+- Confirmed on a live 1220x2712 device: Feed tapped at `(141, 385)`, the Pokémon reached the Nearby bar after **35.1 seconds**, and catching proceeded normally.
+- A note on settings: 35 seconds is close to the 45-second default of **Wait for the Feed's Pokémon on Nearby**. Raise it if your connection is slow or the jumps are long.
