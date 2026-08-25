@@ -61,6 +61,21 @@ def _load_optional(template_path: str):
         return None
 
 
+# Pokémon GO moved the on-ball quantity badge to the right of the centre ball. Builds using
+# the first box below only searched the hub itself and could never see the new ``x0`` position.
+# Keep the old value named so the GUI can migrate an unchanged saved calibration safely.
+LEGACY_OUT_OF_BALLS_REGION = (390, 2545, 340, 167)
+CURRENT_OUT_OF_BALLS_REGION = (350, 2400, 600, 312)
+
+# Do not tap on the very first transition frame after an encounter closes. After this short
+# floor, the routine compares the old slot's visual fingerprint with fresh Nearby frames and can
+# proceed as soon as the row really changed. The longer value is only a fallback ceiling for an
+# identical next sprite or an unreadable transition, not a fixed sleep on every catch.
+MIN_POST_CATCH_REFRESH = 0.25
+DEFAULT_POST_CATCH_REFRESH_TIMEOUT = 1.2
+SLOT_REFRESH_HIST_DISTANCE = 0.30
+
+
 @dataclass
 class CatchConfig:
     # Nearby sidebar is located dynamically via the distinctive '@' target icon at its bottom,
@@ -95,7 +110,10 @@ class CatchConfig:
     # double-tap rather than the first two touches of a cold slot. Set to 0 to go straight to
     # the minimum safety delay below; fully removing the priming tap made this phone accept only
     # every other encounter gesture.
-    pre_tap_delay: float = 0.8
+    # The single primer only needs to precede the double-tap by one short Android input beat.
+    # 0.8s was visibly idle time on every successful encounter; 120ms keeps the cold-row fix
+    # while opening the common encounter roughly 0.7s sooner.
+    pre_tap_delay: float = 0.12
     pre_tap_min_delay: float = 0.12
     # Corroboration for a Nearby sighting: a second hit within this many seconds confirms the
     # first. Counting over a window rather than over *consecutive* frames is what stops one
@@ -187,13 +205,13 @@ class CatchConfig:
     enc_berry_min_fill: float = 0.06
 
     # Out of balls: in an encounter the ball-count badge reads "x0" — a distinctive red pill at
-    # the bottom center. When it shows we're out of Poké Balls: flee the encounter, alert Discord,
+    # the lower-right edge of the centre ball. When it shows we're out of Poké Balls: flee, alert,
     # and hold off catching for a while (still AutoWalking) so the bag can refill instead of
     # burning cycles on an empty encounter. Matched in colour so a red "x0" can't be confused
-    # with a neutral non-zero count.
+    # with a neutral non-zero count. The box also includes the old badge position.
     out_of_balls_template: str = "templates/out_of_balls.png"
     out_of_balls_threshold: float = 0.72
-    out_of_balls_region: tuple[int, int, int, int] = (390, 2545, 340, 167)
+    out_of_balls_region: tuple[int, int, int, int] = CURRENT_OUT_OF_BALLS_REGION
     # Newer game builds remove the whole ball selector when the bag is empty instead of showing
     # the old red ``x0`` badge. Keep the template as the instant/legacy signal, then treat a
     # stable encounter with no throwable ball for this long as the current signal. Requiring
@@ -279,7 +297,7 @@ class CatchConfig:
     engage_miss_grace: float = 0.8
     engage_miss_frames: int = 2
     catch_timeout: float = 6.0      # max wait per throw for the encounter to end (ball gone)
-    settle_after_catch: float = 1.2  # let the nearby list refresh before the next cycle
+    settle_after_catch: float = DEFAULT_POST_CATCH_REFRESH_TIMEOUT  # adaptive refresh ceiling
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
     idle_poll: float = 0.3          # pause between cycles when the nearby bar isn't visible
 
@@ -571,6 +589,10 @@ class CatchRoutine:
         # the slow one-shot re-read was last spent (rate limit).
         self._nearby_last_seen_at: float | None = None
         self._nearby_fresh_at = 0.0
+        # Colour histogram of the top Nearby sprite that was actually engaged. It lets the
+        # post-catch wait finish when the list visibly advances rather than sleeping a fixed
+        # 1.2 seconds after every encounter.
+        self._engaged_slot_signature: np.ndarray | None = None
         # Manual calibration is only a starting estimate. PGSharp's UI hierarchy supplies the
         # real centre of slot 1; once observed it wins for the rest of the run. This prevents a
         # stale manual y-coordinate from repeatedly tapping below a lone Pokemon.
@@ -579,6 +601,10 @@ class CatchRoutine:
         # empty. That is a definite answer, so the ~2.85s crisp capture behind it is skipped.
         self._ui_empty_confirmed = False
         self._engage_still_nearby = False
+        # Classification for the current run_once result. A tap retry or an encounter
+        # transition is active Pokémon work, not an empty Nearby cycle; run() uses this to keep
+        # AutoWalk and dry-spell alerts out of the middle of an encounter.
+        self._cycle_result = "idle"
         self._ui_dump_at = 0.0
         self._phases: list[tuple[str, float]] = []
         self._phase_t0 = 0.0
@@ -652,6 +678,9 @@ class CatchRoutine:
         self._dry_streak = 0
         self._autowalk_active = False
         self._no_balls = False   # set by run_once when the "x0" badge is seen; consumed by run()
+        # One genuine empty-bag episode should produce one Discord warning, not another warning
+        # every time the refill wait expires. A successful throw arms the warning again.
+        self._no_balls_alerted = False
         self._popup_block_until = 0.0
         # Control flags used by the GUI; ignored by the plain CLI loop.
         self.stop_event = threading.Event()
@@ -839,6 +868,20 @@ class CatchRoutine:
                        scales=self._scales, grayscale=False, region=self.config.out_of_balls_region)
         return bool(matches)
 
+    def _ball_selector_present(self, frame) -> bool:
+        """Whether the fixed bottom-right ball-selector control is visible.
+
+        The large centre ball is animated: it can be upside down, lifted above its resting
+        point, or remain held when a lossy Wi-Fi control packet drops a pointer-up. This control
+        tells us when releasing stale pointers may restore that ball, but it is not inventory
+        proof: the live empty-bag screen keeps drawing the same selector button.
+        """
+        cfg = self.config
+        # This control is drawn by the game engine, whose default scale follows screen width,
+        # not PGSharp's density-based overlay scale. Once measured, game_scale is definitive.
+        scale = cfg.game_scale or (frame.shape[1] / BASE_RESOLUTION[0])
+        return find_enc_ball(frame, scale=scale) is not None
+
     def _wait_for_ball_state(self, timeout: float) -> str:
         """Return ``ready``, ``closed`` or ``empty`` for the current encounter.
 
@@ -852,6 +895,7 @@ class CatchRoutine:
         cfg = self.config
         deadline = time.monotonic() + max(0.0, timeout)
         missing_frames = 0
+        pointers_released = False
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
@@ -860,8 +904,20 @@ class CatchRoutine:
             if self._is_out_of_balls(frame):
                 return "empty"
             if self._ball_ready(frame):
+                # The actual throwable ball is the only positive inventory signal. The live
+                # empty-bag UI still draws the bottom-right Poké Ball selector, so treating that
+                # button as proof of stock caused endless phantom throws at a bare throw point.
                 return "ready"
             missing_frames += 1
+            selector_present = self._ball_selector_present(frame)
+            if selector_present and not pointers_released:
+                # A lossy Quick Catch contact can leave a real ball held/rotated away from its
+                # resting hub. Release all pointers once and keep waiting for the hub to return;
+                # the selector by itself is never accepted as a throwable ball.
+                release = getattr(self.device, "release_control_pointers", None)
+                if release is not None:
+                    release()
+                pointers_released = True
             if (time.monotonic() >= deadline
                     and missing_frames >= max(1, cfg.no_balls_missing_frames)):
                 # The consequence of a false positive is a ten-minute pause, so pay for one
@@ -870,22 +926,42 @@ class CatchRoutine:
                 fresh = self.device.screenshot(fresh=True)
                 if not self._in_encounter(fresh, strict=True):
                     return "closed"
-                if self._is_out_of_balls(fresh) or not self._ball_ready(fresh):
+                if self._is_out_of_balls(fresh):
                     return "empty"
-                return "ready"
+                return "ready" if self._ball_ready(fresh) else "empty"
         return "closed"
 
     def _flag_no_balls(self) -> None:
-        """Leave the encounter and hand the pause/notification work to ``run``."""
-        self.device.tap(*self.config.flee_xy)
+        """Reliably leave the empty encounter, then hand refill work to ``run``."""
         self._no_balls = True
         self.stats.last_event = "no_balls"
+        release = getattr(self.device, "release_control_pointers", None)
+        if release is not None:
+            release()
+        # Keep this tap independent from the scrcpy socket that may have retained a throw
+        # pointer. Verify the state change instead of assuming a delivered tap was accepted.
+        tap = getattr(self.device, "adb_tap", None) or self.device.tap
+        tap(*self.config.flee_xy)
+        left = self._poll(
+            lambda frame: True if not self._in_encounter(frame, strict=True) else None,
+            2.0,
+        )
+        if left is None and not self.stop_event.is_set():
+            # Android Back is a safe independent fallback for the encounter screen.
+            back = getattr(self.device, "back", None)
+            if back is not None:
+                back()
+                left = self._poll(
+                    lambda frame: True if not self._in_encounter(frame, strict=True) else None,
+                    2.0,
+                )
         self._trace(
             "no_balls",
-            "Encounter vẫn mở nhưng biểu tượng bóng đã biến mất; xác nhận hết Poké Ball.",
+            ("Không có bóng thật tại điểm ném; đã xác nhận hết Poké Ball và về bản đồ."
+             if left is not None else
+             "Không có bóng thật tại điểm ném; đã xác nhận hết Poké Ball, đang tiếp tục tìm cách thoát encounter."),
             0.0,
         )
-        self._interruptible_sleep(1.0)
 
     def _slot_in(self, frame) -> tuple[int, int] | None:
         cfg = self.config
@@ -1051,6 +1127,43 @@ class CatchRoutine:
                 return slot
             y += step
         return None
+
+    def _slot_visual_signature(self, frame, slot: tuple[int, int]) -> np.ndarray | None:
+        """Shift-tolerant colour fingerprint of the sprite in one Nearby slot.
+
+        Comparing raw pixels is much too sensitive to H.264 noise and the animated map showing
+        through PGSharp's translucent sidebar. A coarse colour histogram of bright foreground
+        pixels stays stable while the same sprite bobs, but changes when the list advances to a
+        different Pokémon. An identical next species simply takes the conservative timeout.
+        """
+        if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+            return None
+        cfg = self.config
+        force_slot = bool(getattr(cfg, "force_slot", False))
+        half_width = 70 if force_slot else cfg.s(70)
+        height = 110 if force_slot else cfg.s(110)
+        cx, cy = slot
+        # Use the detector's central core, excluding most of the translucent background.
+        x_radius = max(8, half_width // 2)
+        y_radius = max(8, height // 3)
+        y0, y1 = max(0, cy - y_radius), min(frame.shape[0], cy + y_radius)
+        x0, x1 = max(0, cx - x_radius), min(frame.shape[1], cx + x_radius)
+        patch = frame[y0:y1, x0:x1]
+        if patch.size == 0:
+            return None
+        pixels = patch.reshape(-1, 3)
+        bright = pixels[pixels.max(axis=1) >= 175]
+        if len(bright) < 12:
+            return None
+        bins = np.clip(bright.astype(np.int16) // 64, 0, 3)
+        indexes = bins[:, 0] * 16 + bins[:, 1] * 4 + bins[:, 2]
+        histogram = np.bincount(indexes, minlength=64).astype(np.float32)
+        histogram /= histogram.sum()
+        return histogram
+
+    @staticmethod
+    def _slot_signature_changed(before: np.ndarray, after: np.ndarray) -> bool:
+        return bool(np.abs(before - after).sum() >= SLOT_REFRESH_HIST_DISTANCE)
 
     def _occupied_slot_in(self, frame) -> tuple[int, int] | None:
         """A Nearby slot to engage — a sighting that a second one has corroborated.
@@ -2053,7 +2166,7 @@ class CatchRoutine:
         # We may have fled from an encounter, so the walk state is unknown: force one fresh
         # AutoWalk start. Afterwards _try_autowalk only re-taps a stalled (paused) row.
         self._autowalk_active = False
-        goplus_checked = not (cfg.start_goplus_on_no_balls and not cfg.quick_catch)
+        goplus_started = not (cfg.start_goplus_on_no_balls and not cfg.quick_catch)
         while time.monotonic() < deadline and not self.stop_event.is_set():
             self._wait_if_paused()
             if self.stop_event.is_set():
@@ -2061,16 +2174,25 @@ class CatchRoutine:
             self._drain_popups()
             if self._try_autowalk():
                 self._autowalk_active = True
-            # Start the accessory once, immediately after AutoWalk is confirmed/tapped. It then
-            # spins PokéStops during this ten-minute refill walk. Never retry during the same
-            # empty-bag pause: tapping a connected accessory a second time would disconnect it.
-            if self._autowalk_active and not goplus_checked:
+            # Try until the disconnected button is actually found and tapped. The detector never
+            # returns a connected green button, so retries cannot disconnect an active Go Plus;
+            # they only recover from the menu/button not being ready on the first frame.
+            if self._autowalk_active and not goplus_started:
                 self._interruptible_sleep(cfg.goplus_after_autowalk_wait)
                 started = self._try_start_goplus()
-                goplus_checked = True
+                goplus_started = started
                 if started and on_event:
                     self.stats.last_event = "goplus_started"
                     on_event(self.stats, False)
+            remaining = max(0.0, deadline - time.monotonic())
+            refill_mode = "AutoWalk + Go Plus" if cfg.start_goplus_on_no_balls else "AutoWalk"
+            if cfg.spin_on_no_balls:
+                refill_mode += " + quay stop trên màn"
+            self._trace(
+                "no_balls_refill",
+                f"Đang nạp bóng bằng {refill_mode}; còn tối đa {remaining / 60:.1f} phút trước khi thử bắt lại.",
+                60.0,
+            )
             # Spinning stops is what actually refills the bag, so spend the interval doing it
             # rather than standing still. Works with or without a PGSharp key, unlike Go Plus.
             if cfg.spin_on_no_balls:
@@ -2094,6 +2216,10 @@ class CatchRoutine:
     def _engage_nearby(self, slot: tuple[int, int]) -> None:
         """Prime a Nearby row, then send the double-tap that opens its encounter."""
         cfg = self.config
+        self._engaged_slot_signature = None
+        screenshot = getattr(self.device, "screenshot", None)
+        if screenshot is not None:
+            self._engaged_slot_signature = self._slot_visual_signature(screenshot(), slot)
         self.device.tap(*self._jitter(*slot))
         delay = max(cfg.pre_tap_min_delay, cfg.pre_tap_delay)
         self._trace("nearby_pre_tap",
@@ -2113,7 +2239,6 @@ class CatchRoutine:
         timeout = max(0.0, cfg.encounter_timeout) + max(0.0, cfg.encounter_transition_grace)
         started = time.monotonic()
         deadline = started + timeout
-        still_nearby_frames = 0
         self._engage_still_nearby = False
         while not self.stop_event.is_set():
             self._wait_if_paused()
@@ -2123,41 +2248,72 @@ class CatchRoutine:
                 return ball
 
             now = time.monotonic()
-            if now - started >= max(0.0, cfg.engage_miss_grace):
-                # If an occupied Nearby row is still there, the transition never began.
-                # Two adjacent fresh frames keep one stale H.264 frame from forcing a retry.
-                if self._bar_visible(frame) and self._scan_slots(frame) is not None:
-                    still_nearby_frames += 1
-                    if still_nearby_frames >= max(1, cfg.engage_miss_frames):
-                        self._engage_still_nearby = True
-                        return None
-                else:
-                    still_nearby_frames = 0
             if now >= deadline:
+                # Do not retry from an early Nearby frame. On the live phone the game can accept
+                # the touch immediately yet leave the row rendered for another 2-3 seconds; a
+                # second gesture then lands on the map/transition and raises a PGSharp dialog.
+                # Consume the entire configured encounter budget first, then take exactly one
+                # direct screencap outside the H.264 queue as the final verdict.
+                fresh = self.device.screenshot(fresh=True)
+                ball = self._ball_in(fresh)
+                if ball is not None:
+                    return ball
+                self._engage_still_nearby = (
+                    self._bar_visible(fresh) and self._scan_slots(fresh) is not None
+                )
                 return None
         return None
 
     def _settle_after_encounter(self) -> None:
-        """Let PGSharp replace the consumed Nearby row before another gesture can target it.
+        """Wait only until PGSharp visibly replaces the consumed Nearby row.
 
-        The old adaptive poll returned immediately on the still-rendered sprite from the catch
-        that had just closed.  The next cycle then tapped that dead row and spent four seconds
-        timing out.  Here the configured settle value is a real refresh floor.  Only a frame
-        captured after the floor may seed the next cycle's two-frame corroboration.
+        A blind zero-delay retry targeted the stale row and lost roughly six seconds, while a
+        fixed 1.2-second sleep made every healthy catch unnecessarily slow. Keep a 250ms
+        transition floor, then accept two fresh frames showing either an empty bar or a sprite
+        fingerprint different from the one just engaged. Unreadable/identical rows use the
+        configured value as a conservative maximum.
         """
         cfg = self.config
         self._nearby_last_seen_at = None
-        delay = max(0.0, cfg.settle_after_catch)
-        if delay <= 0 or self.stop_event.is_set():
-            return
-        self._interruptible_sleep(delay)
+        started = time.monotonic()
+        timeout = max(MIN_POST_CATCH_REFRESH, cfg.settle_after_catch)
+        deadline = started + timeout
         if self.stop_event.is_set():
             return
-        found = self._scan_slots(self.device.screenshot(next_frame=True))
-        if found is not None:
-            self._nearby_last_seen_at = time.monotonic()
-            self._trace("settle_next_ready",
-                        f"Nearby đã refresh; Pokémon kế tiếp sẵn tại {found}.", 0.0)
+        self._interruptible_sleep(MIN_POST_CATCH_REFRESH)
+        previous = getattr(self, "_engaged_slot_signature", None)
+        refreshed_frames = 0
+        refreshed = False
+        while previous is not None and not self.stop_event.is_set() and time.monotonic() < deadline:
+            self._wait_if_paused()
+            frame = self.device.screenshot(next_frame=True)
+            changed = False
+            if self._bar_visible(frame):
+                slot = self._scan_slots(frame)
+                if slot is None:
+                    changed = True
+                else:
+                    current = self._slot_visual_signature(frame, slot)
+                    changed = current is not None and self._slot_signature_changed(previous, current)
+            refreshed_frames = refreshed_frames + 1 if changed else 0
+            if refreshed_frames >= 2:
+                refreshed = True
+                break
+        if previous is None and not self.stop_event.is_set():
+            # A UI-dump-only engagement may not have yielded a pixel fingerprint. Preserve the
+            # safe fallback without penalising the normal image-detected path.
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                self._interruptible_sleep(remaining)
+        elapsed = max(0.0, time.monotonic() - started)
+        self._engaged_slot_signature = None
+        self._trace(
+            "settle_refresh",
+            (f"Nearby đã đổi slot sau {elapsed:.2f}s; bắt con kế tiếp ngay."
+             if refreshed else
+             f"Chờ Nearby tối đa {elapsed:.2f}s; vòng kế tiếp xác nhận lại trên 2 frame mới."),
+            5.0,
+        )
 
     def _throw_vector(self, ball_xy: tuple[int, int]) -> tuple[tuple[int, int], tuple[int, int]]:
         """Start and end point of one flick. The start is jittered in both axes so the throw
@@ -2240,9 +2396,13 @@ class CatchRoutine:
             # it already left.
             if not self._in_encounter(frame, strict=True):
                 return "closed"
-            if not self._ball_ready(frame):
+            ball_ready = self._ball_ready(frame)
+            if not ball_ready:
                 ball_left = True
             elif ball_left:
+                # The same tested hub that gates the initial throw has returned after being
+                # absent, which is the breakout cue. The selector is deliberately irrelevant:
+                # the current empty-bag UI leaves that button visible too.
                 return "breakout"
             if time.monotonic() >= deadline:
                 return "timeout"
@@ -2521,6 +2681,7 @@ class CatchRoutine:
     def run_once(self) -> bool:
         """One catch cycle. Returns True if a ball was thrown."""
         cfg = self.config
+        self._cycle_result = "idle"
         self.stats.cycles += 1
         self._phase_t0 = time.monotonic()
         self._phases = []
@@ -2581,27 +2742,25 @@ class CatchRoutine:
                 frame = self.device.screenshot()
             self._mark("giu-nhip")
 
-        # Step 0.5: out of Poké Balls? If an encounter is up with an empty bag its ball badge
-        # reads "x0". Checking here (before hunting the nearby bar) also rescues us when a useless
-        # throw left us stuck in the encounter — the nearby bar never returns, but the badge does.
-        # Flee via the running-man button and flag the loop to hold off catching.
-        if self._is_out_of_balls(frame):
-            self._flag_no_balls()
-            return False
-
-        # Step 0.75: already inside an encounter? A break-out from the previous throw, an
+        # Step 0.5: already inside an encounter? A break-out from the previous throw, an
         # encounter that opened a beat after the last cycle gave up, or a stray tap all land
         # here. The encounter screen hides the Nearby bar, so scanning for it is hopeless —
         # this check is what stops the bot from sitting in an encounter it can't see out of.
-        # Strict: nothing here says an encounter should be open, so a lone ball-selector is more
-        # likely a leftover from the one we just fled than a real encounter.
-        self._mark("het-bong")
+        # Check the comparatively expensive x0 colour template only after the cheap independent
+        # Berry detector proves an encounter is open. It can never be meaningful on the map, and
+        # skipping it there removes ~33ms from every ordinary Nearby scan on the target phone.
         ball_xy = self._ball_in(frame, strict=True)
         self._mark("check-enc")
         if ball_xy is not None:
+            if self._is_out_of_balls(frame):
+                self._mark("het-bong")
+                self._flag_no_balls()
+                return False
+            self._mark("het-bong")
             self._flush_phases("dang-trong-encounter")
             self._trace("encounter_open", "Đang ở trong encounter; ném luôn.", 0.0)
             return self._finish_encounter(ball_xy)
+        self._mark("het-bong")
 
         # Step 1: wait for the nearby bar (its '@' anchor). Polling here rides out the post-catch
         # transition/summary screen instead of wasting a whole cycle on it.
@@ -2705,6 +2864,7 @@ class CatchRoutine:
         # Step 2: prime the row, then engage it.  Even the GUI's zero-delay setting keeps a tiny
         # 120ms floor: without that primer this PGSharp build accepted only every other gesture,
         # which cost several seconds per miss instead of saving a fraction of one.
+        self._cycle_result = "encounter_wait"
         self._engage_nearby(slot)
         if self.stop_event.is_set():
             return False
@@ -2728,12 +2888,14 @@ class CatchRoutine:
             # a fallback swipe on the map just drags the camera and burns the cycle. If it was
             # merely slow to open, step 0.75 of the next cycle picks it up within idle_poll.
             if self._engage_still_nearby:
+                self._cycle_result = "engage_retry"
                 self._trace(
                     "encounter_tap_rejected",
                     "Nearby vẫn còn nguyên sau cú tap; click chưa ăn, thử lại ngay.",
                     0.0,
                 )
             else:
+                self._cycle_result = "encounter_wait"
                 self._trace(
                     "encounter_initial_miss",
                     f"Chưa thấy bóng sau {time.monotonic() - tapped_at:.2f}s; quét lại ở vòng sau.",
@@ -2763,13 +2925,17 @@ class CatchRoutine:
             if self._no_balls:
                 self._no_balls = False
                 self.stats.last_event = "no_balls"
-                if on_event:
+                if on_event and not self._no_balls_alerted:
                     on_event(self.stats, False)
+                self._no_balls_alerted = True
                 self._wait_no_balls(on_event)
                 self._idle_streak = 0
                 continue
 
-            self.stats.last_event = "throw" if threw else "idle"
+            cycle_result = getattr(self, "_cycle_result", "idle")
+            self.stats.last_event = "throw" if threw else cycle_result
+            if threw:
+                self._no_balls_alerted = False
             if on_event:
                 on_event(self.stats, threw)
 
@@ -2779,6 +2945,11 @@ class CatchRoutine:
                 # cycle. Never let the dry-spell AutoWalk path interfere or unlock another tap.
                 self._idle_streak = self._dry_streak = 0
             elif threw:
+                self._idle_streak = self._dry_streak = 0
+            elif cycle_result in ("engage_retry", "encounter_wait"):
+                # A Pokémon was confirmed and touched. Whether the tap needs a retry or the game
+                # is still drawing its encounter, this is not a dry map: do not let the second
+                # such frame start AutoWalk or fire the user's empty-cycle Discord warning.
                 self._idle_streak = self._dry_streak = 0
             else:
                 self._idle_streak += 1

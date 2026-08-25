@@ -5,6 +5,9 @@ straight into memory (no temp file on the phone) and decoded with OpenCV.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+import ipaddress
+import re
 import subprocess
 import socket
 import struct
@@ -27,6 +30,15 @@ def _quiet_run(cmd, **kwargs):
 
 class AdbError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class MdnsService:
+    """One service advertised by ``adb mdns services``."""
+
+    instance: str
+    service_type: str
+    endpoint: str
 
 
 class Device:
@@ -127,15 +139,138 @@ class Device:
         return serials
 
     @classmethod
-    def adb_connect(cls, serial: str, adb_path: str | None = None) -> None:
+    def adb_connect(
+        cls,
+        serial: str,
+        adb_path: str | None = None,
+        timeout: float = 10.0,
+    ) -> None:
         """Connect the adb server to a TCP device ('ip:port'). Raises AdbError on failure."""
         adb = adb_path or find_adb()
-        proc = _quiet_run([adb, "connect", serial], capture_output=True, timeout=10)
+        proc = _quiet_run([adb, "connect", serial], capture_output=True, timeout=timeout)
         out = (proc.stdout or b"").decode("utf-8", "replace")
         # Success prints 'connected to …' or 'already connected to …'.
         if "connected" not in out:
             err = (proc.stderr or b"").decode("utf-8", "replace")
             raise AdbError(f"adb connect {serial}: {(out + err).strip()}")
+
+    @staticmethod
+    def normalize_tcp_endpoint(endpoint: str) -> str:
+        """Validate and canonicalise an ADB ``IP:port`` endpoint.
+
+        Wireless Debugging deliberately changes its TLS port, so accepting a complete
+        endpoint is safer than guessing or scanning ports. Hostnames are not accepted here:
+        Android displays a literal LAN address and keeping this parser strict also prevents
+        accidental command-like input from reaching adb.
+        """
+        raw = endpoint.strip()
+        if raw.startswith("["):
+            close = raw.find("]")
+            if close < 0 or close + 1 >= len(raw) or raw[close + 1] != ":":
+                raise ValueError("expected [IPv6]:port")
+            host = raw[1:close]
+            port_text = raw[close + 2:]
+        else:
+            host, separator, port_text = raw.rpartition(":")
+            if not separator:
+                raise ValueError("expected IP:port")
+        try:
+            address = ipaddress.ip_address(host)
+            port = int(port_text)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("expected a valid IP:port") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("port must be between 1 and 65535")
+        if address.version == 6:
+            return f"[{address.compressed}]:{port}"
+        return f"{address.compressed}:{port}"
+
+    @staticmethod
+    def _proc_text(value) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8", "replace")
+        return value or ""
+
+    @classmethod
+    def mdns_services(cls, adb_path: str | None = None) -> list[MdnsService]:
+        """Return valid services found by adb's mDNS discovery backend."""
+        adb = adb_path or find_adb()
+        proc = _quiet_run(
+            [adb, "mdns", "services"], capture_output=True, text=True, timeout=8,
+        )
+        if proc.returncode != 0:
+            detail = (cls._proc_text(proc.stdout) + cls._proc_text(proc.stderr)).strip()
+            raise AdbError(f"adb mdns services: {detail}")
+
+        services: list[MdnsService] = []
+        for raw_line in cls._proc_text(proc.stdout).splitlines():
+            line = raw_line.strip()
+            if not line or line.lower().startswith("list of discovered"):
+                continue
+            parts = line.split()
+            if len(parts) != 3 or not parts[1].startswith("_adb"):
+                continue
+            try:
+                endpoint = cls.normalize_tcp_endpoint(parts[2])
+            except ValueError:
+                continue
+            services.append(MdnsService(parts[0], parts[1], endpoint))
+        return services
+
+    @classmethod
+    def discover_wireless(cls, adb_path: str | None = None) -> list[str]:
+        """Discover paired Android 11+ Wireless Debugging connect endpoints."""
+        endpoints: list[str] = []
+        for service in cls.mdns_services(adb_path):
+            if service.service_type != "_adb-tls-connect._tcp":
+                continue
+            if service.endpoint not in endpoints:
+                endpoints.append(service.endpoint)
+        return endpoints
+
+    @classmethod
+    def connect_discovered_wireless(
+        cls,
+        preferred_hosts: list[str] | tuple[str, ...] = (),
+        adb_path: str | None = None,
+    ) -> str | None:
+        """Connect the first paired Wireless Debugging endpoint advertised over mDNS.
+
+        Previously used phone IPs are preferred when several devices are visible on the LAN.
+        """
+        preferred = {host.strip("[]") for host in preferred_hosts if host}
+        endpoints = cls.discover_wireless(adb_path)
+
+        def priority(endpoint: str) -> tuple[int, str]:
+            host = endpoint.rsplit(":", 1)[0].strip("[]")
+            return (0 if host in preferred else 1, endpoint)
+
+        for endpoint in sorted(endpoints, key=priority):
+            try:
+                cls.adb_connect(endpoint, adb_path)
+                return endpoint
+            except (AdbError, subprocess.SubprocessError):
+                continue
+        return None
+
+    @classmethod
+    def adb_pair(cls, endpoint: str, pairing_code: str, adb_path: str | None = None) -> str:
+        """Pair once with Android Wireless Debugging; the code is never persisted."""
+        serial = cls.normalize_tcp_endpoint(endpoint)
+        code = pairing_code.strip()
+        if not re.fullmatch(r"\d{6}", code):
+            raise ValueError("pairing code must contain exactly 6 digits")
+        adb = adb_path or find_adb()
+        proc = _quiet_run(
+            [adb, "pair", serial, code], capture_output=True, timeout=15,
+        )
+        out = cls._proc_text(proc.stdout)
+        err = cls._proc_text(proc.stderr)
+        detail = (out + err).strip()
+        if proc.returncode != 0 or "successfully paired" not in detail.lower():
+            # Do not include the command (which contains the short-lived pairing code).
+            raise AdbError(f"adb pair {serial}: {detail}")
+        return serial
 
     def wifi_ip(self) -> str | None:
         """The phone's Wi-Fi IPv4 address, or None if Wi-Fi is down."""

@@ -28,12 +28,19 @@ import cv2
 import numpy as np
 
 from avc import diag
-from avc.catch import CatchConfig, CatchRoutine
+from avc.catch import (
+    CURRENT_OUT_OF_BALLS_REGION, DEFAULT_POST_CATCH_REFRESH_TIMEOUT,
+    LEGACY_OUT_OF_BALLS_REGION, MIN_POST_CATCH_REFRESH,
+    CatchConfig, CatchRoutine,
+)
 from avc.coord_shundo import CoordShundoConfig, CoordShundoRoutine
 from avc.coord_source import CoordBridge, CoordQueue
-from avc.device import Device
+from avc.device import AdbError, Device
 from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
+
+
+APP_VERSION = "1.4.6"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -155,6 +162,28 @@ LANG = {
                         "en": "✓ scrcpy control socket works (no tap sent)."},
     "test_fail":     {"vi": "✗ Kiểm tra thất bại tại {}: {}", "en": "✗ Test failed at {}: {}"},
     "connect":       {"vi": "Kết nối", "en": "Connect"},
+    "wireless_debug": {"vi": "Wireless Debug", "en": "Wireless Debug"},
+    "wd_title":      {"vi": "Kết nối Wireless Debugging", "en": "Connect Wireless Debugging"},
+    "wd_help":       {"vi": "Điện thoại và máy tính phải cùng Wi-Fi. Nếu đã ghép đôi, thử Tự tìm trước; nếu không thấy, nhập ‘Địa chỉ IP & cổng’ ở màn Wireless debugging.",
+                      "en": "Phone and PC must be on the same Wi-Fi. If already paired, try Auto find first; if it is not found, enter ‘IP address & Port’ from the Wireless debugging screen."},
+    "wd_paired":     {"vi": "Đã ghép đôi", "en": "Already paired"},
+    "wd_connect_addr": {"vi": "IP & cổng kết nối:", "en": "Connect IP & port:"},
+    "wd_auto":       {"vi": "Tự tìm", "en": "Auto find"},
+    "wd_connect":    {"vi": "Kết nối địa chỉ", "en": "Connect address"},
+    "wd_first_pair": {"vi": "Ghép đôi lần đầu", "en": "First-time pairing"},
+    "wd_pair_help":  {"vi": "Bấm ‘Ghép đôi thiết bị bằng mã ghép đôi’ trên điện thoại, rồi nhập đúng địa chỉ ghép đôi và mã 6 số bên dưới.",
+                      "en": "Tap ‘Pair device with pairing code’ on the phone, then enter its pairing address and 6-digit code below."},
+    "wd_pair_addr":  {"vi": "IP & cổng ghép đôi:", "en": "Pairing IP & port:"},
+    "wd_pair_code":  {"vi": "Mã ghép đôi:", "en": "Pairing code:"},
+    "wd_pair":       {"vi": "Ghép đôi", "en": "Pair"},
+    "wd_searching":  {"vi": "Đang tìm thiết bị Wireless Debugging đã ghép đôi…", "en": "Looking for a paired Wireless Debugging device…"},
+    "wd_not_found":  {"vi": "Không tự tìm thấy. Hãy nhập IP & cổng kết nối trên màn Wireless debugging.",
+                      "en": "Auto discovery found nothing. Enter the connect IP & port shown on the Wireless debugging screen."},
+    "wd_invalid":    {"vi": "Địa chỉ phải có dạng IP:cổng và mã ghép đôi phải đủ 6 số.",
+                      "en": "The address must be IP:port and the pairing code must be exactly 6 digits."},
+    "wd_pair_ok":    {"vi": "✓ Đã ghép đôi. Nếu chưa tự nối, quay lại màn chính Wireless debugging, nhập IP & cổng kết nối rồi bấm Kết nối địa chỉ.",
+                      "en": "✓ Paired. If it did not auto-connect, return to the main Wireless debugging screen, enter its connect IP & port, then click Connect address."},
+    "wd_failed":     {"vi": "Không kết nối được: {}", "en": "Could not connect: {}"},
     "conn_msg":      {"vi": "Điện thoại đang nối với máy tính bằng gì?", "en": "How is the phone connected?"},
     "conn_usb":      {"vi": "USB (cắm cáp)", "en": "USB (cable)"},
     "conn_wifi":     {"vi": "Wi-Fi (rút được cáp)", "en": "Wi-Fi (cable-free)"},
@@ -167,8 +196,12 @@ LANG = {
     "conn_usb_ok":   {"vi": "Đã chọn thiết bị USB: {}", "en": "USB device selected: {}"},
     "conn_re_ok":    {"vi": "✓ Tự kết nối lại Wi-Fi ({}).", "en": "✓ Reconnected over Wi-Fi ({})."},
     "conn_reconnecting": {"vi": "Đang kết nối lại Wi-Fi…", "en": "Reconnecting over Wi-Fi…"},
-    "conn_re_fail":  {"vi": "Kết nối lại thất bại — cắm cáp USB để bật lại Wi-Fi.",
-                      "en": "Reconnect failed — plug in the USB cable to re-enable Wi-Fi."},
+    "conn_run_lost": {"vi": "ADB Wi-Fi vừa rớt; đang nối lại phiên bắt ({}/{})…",
+                      "en": "Wireless ADB dropped; reconnecting the catch session ({}/{})…"},
+    "conn_run_restored": {"vi": "✓ Đã nối lại ADB ({}); tiếp tục phiên bắt hiện tại.",
+                          "en": "✓ ADB reconnected ({}); continuing the current catch session."},
+    "conn_re_fail":  {"vi": "Không tự tìm thấy thiết bị — bấm Wireless Debug để nhập IP:cổng hoặc ghép đôi.",
+                      "en": "No device was auto-discovered — click Wireless Debug to enter IP:port or pair."},
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "grp_pace":      {"vi": "Nhịp độ & an toàn tài khoản", "en": "Pacing & account safety"},
@@ -189,11 +222,8 @@ LANG = {
     "wait_catch":    {"vi": "Chờ bắt xong tối đa (giây):", "en": "Max wait after throw (s):"},
     "idle_aw":       {"vi": "Trống mấy lần thì AutoWalk (0=tắt):", "en": "Empty cycles before AutoWalk (0=off):"},
     "max_catches":   {"vi": "Giới hạn số con (0=∞):", "en": "Catch limit (0=∞):"},
-    # These two read almost identically in the old wording ("rest between catches" vs "minimum
-    # gap between catches") while meaning opposite things: settle is a ceiling that ends the
-    # moment the next Pokémon shows up, min_gap is a floor that is always served in full.
-    "settle":        {"vi": "Chờ con kế tiếp, tối đa (giây):",
-                      "en": "Wait for next Pokémon, at most (s):"},
+    "settle":        {"vi": "Chờ Nearby refresh tối đa (giây):",
+                      "en": "Max Nearby refresh wait (s):"},
     "max_throws":    {"vi": "Số bóng tối đa mỗi con:", "en": "Max throws per Pokémon:"},
     "min_gap":       {"vi": "Bắt chậm lại, cách nhau ít nhất (giây, 0=tắt):",
                       "en": "Slow down: at least this long between catches (s, 0=off):"},
@@ -384,15 +414,17 @@ LANG = {
     "msg_dim":       {"vi": "Đã tắt sáng màn hình (game vẫn chạy nền).", "en": "Screen dimmed (game keeps running)."},
     "msg_throw":     {"vi": "NÉM BÓNG", "en": "THREW BALL"},
     "msg_empty":     {"vi": "(không có pokemon)", "en": "(no pokémon)"},
+    "msg_engage_retry": {"vi": "thử lại mở encounter", "en": "retrying encounter tap"},
+    "msg_encounter_wait": {"vi": "đang chờ encounter chuyển cảnh", "en": "waiting for encounter transition"},
     "msg_cycle":     {"vi": "chu kỳ {}: {} | tổng ném: {}", "en": "cycle {}: {} | total thrown: {}"},
     "msg_autowalk":  {"vi": "→ Trống lâu, bấm AutoWalk đi kiếm spawn (lần {})", "en": "→ Dry spell, tapped AutoWalk to find spawns (#{})"},
     "msg_spin":      {"vi": "→ Đã bấm PokéStop (lần {})", "en": "→ Tapped a PokéStop (#{})"},
     "msg_spin_idle": {"vi": "chu kỳ {}: chưa có PokéStop xanh nào trong vùng quét",
                       "en": "cycle {}: no unspun PokéStop inside the scan circle"},
     "spun":          {"vi": "Đã bấm stop: {}", "en": "Stops tapped: {}"},
-    "msg_no_balls":  {"vi": "→ Hết Poké Ball! Thoát màn bắt, tạm ngừng 10 phút (vẫn tự di chuyển).", "en": "→ Out of Poké Balls! Left the encounter, holding off 10 min (still auto-walking)."},
-    "msg_no_balls_goplus": {"vi": "→ Hết Poké Ball! Đang bật AutoWalk rồi khởi động Go Plus trong 10 phút.",
-                             "en": "→ Out of Poké Balls! Starting AutoWalk then Go Plus for the 10-minute refill."},
+    "msg_no_balls":  {"vi": "→ Hết Poké Ball! Đã thoát màn bắt; AutoWalk nạp bóng tối đa {:.0f} phút.", "en": "→ Out of Poké Balls! Left the encounter; refilling with AutoWalk for up to {:.0f} min."},
+    "msg_no_balls_goplus": {"vi": "→ Hết Poké Ball! Đã thoát màn bắt; đang bật AutoWalk + Go Plus tối đa {:.0f} phút.",
+                             "en": "→ Out of Poké Balls! Left the encounter; starting AutoWalk + Go Plus for up to {:.0f} min."},
     "msg_goplus_started": {"vi": "→ Đã bật AutoWalk và bấm khởi động Go Plus.",
                             "en": "→ AutoWalk is active and Go Plus was started."},
     "msg_done":      {"vi": "Hoàn tất.", "en": "Done."},
@@ -408,9 +440,9 @@ LANG = {
                       "en": "📊 AutoClick: up {} min | thrown {} ({}/hr) | {} cycles{}"},
     "dc_batt_part":  {"vi": " | pin {}% ({}°C)", "en": " | battery {}% ({}°C)"},
     "dc_low_batt":   {"vi": "🔋 AutoClick: pin còn {}% — cắm sạc đi!", "en": "🔋 AutoClick: battery at {}% — plug in!"},
-    "dc_no_balls":   {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt, tạm ngừng 10 phút và bật tự di chuyển.", "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen, pausing 10 min and auto-walking."},
-    "dc_no_balls_goplus": {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; đang bật AutoWalk rồi khởi động Go Plus để quay PokéStop trong 10 phút.",
-                            "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; starting AutoWalk then Go Plus to spin PokéStops for 10 min."},
+    "dc_no_balls":   {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; AutoWalk nạp bóng tối đa {:.0f} phút.", "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; refilling with AutoWalk for up to {:.0f} min."},
+    "dc_no_balls_goplus": {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; bật AutoWalk + Go Plus quay PokéStop tối đa {:.0f} phút.",
+                            "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; using AutoWalk + Go Plus to spin stops for up to {:.0f} min."},
     "dc_stopped":    {"vi": "🛑 AutoClick dừng vì lỗi: {}", "en": "🛑 AutoClick stopped with error: {}"},
     "dc_sent":       {"vi": "Đã gửi cảnh báo Discord.", "en": "Discord alert sent."},
     "dc_fail":       {"vi": "Gửi Discord thất bại: {}", "en": "Discord send failed: {}"},
@@ -769,6 +801,12 @@ class App:
         # Manual alignment: device-pixel overrides for tap points / detection boxes, keyed by
         # field name; "_screen" stores the resolution they were set at. Empty = full auto.
         self.manual: dict = data.get("manual", {}) if isinstance(data.get("manual"), dict) else {}
+        # The old default box was commonly persisted as if it were a hand calibration. It ends
+        # before the quantity badge in the current game UI, so carrying it forward would undo
+        # the detector fix for existing users. Only migrate the exact legacy default; a genuinely
+        # hand-drawn box is left untouched.
+        if tuple(self.manual.get("out_of_balls_region", ())) == LEGACY_OUT_OF_BALLS_REGION:
+            self.manual["out_of_balls_region"] = list(CURRENT_OUT_OF_BALLS_REGION)
 
         self._build_ui()
         self._apply_settings(data)
@@ -826,6 +864,11 @@ class App:
         self._i18n.append((self.refresh_btn, "refresh"))
         test_row = ttk.Frame(self.tab_main)
         test_row.pack(fill="x", padx=8, pady=(0, 2))
+        self.wireless_btn = ttk.Button(
+            test_row, text=self.tr("wireless_debug"), command=self._open_wireless_debug,
+        )
+        self.wireless_btn.pack(side="left")
+        self._i18n.append((self.wireless_btn, "wireless_debug"))
         self.test_control_btn = ttk.Button(
             test_row, text=self.tr("test_control"), command=self._test_device_control,
         )
@@ -925,8 +968,10 @@ class App:
         self.wait_catch = self._spin(catch_grp, "wait_catch", 6, 2, 20, 6.0, is_float=True)
         self.idle_aw = self._spin(catch_grp, "idle_aw", 3, 0, 20, 3)
         self.max_catches = self._spin(catch_grp, "max_catches", 2, 0, 9999, 0)
-        self.settle = self._spin(catch_grp, "settle", 7, 0, 15, 1.2, is_float=True,
-                                 advanced=True)
+        self.settle = self._spin(
+            catch_grp, "settle", 7, MIN_POST_CATCH_REFRESH, 15,
+            DEFAULT_POST_CATCH_REFRESH_TIMEOUT, is_float=True, increment=0.1, advanced=True,
+        )
         self.touch_delay = self._spin(catch_grp, "touch_delay", 5, 0, 1, 0.2,
                                       is_float=True, increment=0.05, advanced=True)
         # Floor starts at the one the routine enforces: `commit_wait = max(1.0, …)` in
@@ -1003,7 +1048,7 @@ class App:
         self._i18n.append((pace_grp, "grp_pace"))
         self.min_gap = self._spin(pace_grp, "min_gap", 0, 0, 30, 3.0,
                                   is_float=True, increment=0.5)
-        self.pre_tap = self._spin(pace_grp, "pre_tap", 1, 0, 5, 0.8,
+        self.pre_tap = self._spin(pace_grp, "pre_tap", 1, 0, 5, 0.12,
                                   is_float=True, increment=0.1, advanced=True)
         self.respect_cd = tk.BooleanVar(value=True)
         cd_chk = ttk.Checkbutton(pace_grp, text=self.tr("cooldown"), variable=self.respect_cd)
@@ -1324,10 +1369,11 @@ class App:
         # for users without that key, so presenting this checkbox there would promise a feature
         # their mode cannot use.
         self._set_row_visible("no_balls_goplus", catching and not quick)
-        # Spinning to refill needs no key, so it stays on offer in both catch styles. Its
-        # length only means anything once the box is ticked.
+        # Spinning to refill needs no key, so it stays on offer in both catch styles. The refill
+        # duration applies to AutoWalk/Go Plus too, so it remains visible whichever refill helper
+        # is selected.
         self._set_row_visible("no_balls_spin", catching)
-        self._set_row_visible("no_balls_min", catching and bool(self.no_balls_spin.get()))
+        self._set_row_visible("no_balls_min", catching)
         # Same shape as the pair above: the Feed wait is dead weight until the Feed is on.
         self._set_row_visible("feed_wait", catching and bool(self.catch_use_feed.get()))
         # The flee taps are spent by Quick Catch, by Shundo and by the spin mode leaving an
@@ -1389,7 +1435,7 @@ class App:
         self.save_settings()
 
     def _retranslate(self) -> None:
-        self.root.title(self.tr("title"))
+        self.root.title(f"{self.tr('title')} v{APP_VERSION}")
         self.notebook.tab(self.tab_main, text=self.tr("tab_main"))
         self.notebook.tab(self.tab_settings, text=self.tr("tab_settings"))
         self.notebook.tab(self.tab_guide, text=self.tr("tab_guide"))
@@ -1435,7 +1481,14 @@ class App:
         self.wait_catch.set(max(2.0, float(data.get("wait_catch", self.wait_catch.get()))))
         self.idle_aw.set(data.get("idle_aw", int(self.idle_aw.get())))
         self.max_catches.set(data.get("max_catches", int(self.max_catches.get())))
-        self.settle.set(max(0.0, float(data.get("settle", self.settle.get()))))
+        saved_settle = float(data.get("settle", self.settle.get()))
+        # Old builds stored 0 to mean "no wait". Under adaptive refresh that would also remove
+        # the safety ceiling, so migrate it to the normal ceiling; the actual common wait is now
+        # about 0.25-0.5s and ends as soon as two changed frames arrive.
+        self.settle.set(
+            DEFAULT_POST_CATCH_REFRESH_TIMEOUT
+            if saved_settle < MIN_POST_CATCH_REFRESH else saved_settle
+        )
         self.touch_delay.set(timing("touch_delay", 200.0, 0.2))
         # Clamp both to the floor the routine actually enforces, so a settings file written
         # before those floors existed stops displaying a number the bot never used. Purely a
@@ -1605,6 +1658,180 @@ class App:
                 return
         self.refresh_devices()
 
+    def _known_wifi_hosts(self, serials: list[str] | None = None) -> list[str]:
+        """LAN IPs from remembered ADB endpoints, used only to rank mDNS results."""
+        hosts: list[str] = []
+        for serial in serials if serials is not None else self.known:
+            if ":" not in serial:
+                continue
+            host = serial.rsplit(":", 1)[0].strip("[]")
+            if host and host not in hosts:
+                hosts.append(host)
+        return hosts
+
+    def _adopt_wireless(self, serial: str, dialog=None) -> None:
+        """Select and remember a successfully connected Wireless Debugging endpoint."""
+        self.refresh_devices()
+        self.device_var.set(serial)
+        self._remember_device(serial)
+        self._log(self.tr("conn_re_ok").format(serial))
+        if dialog is not None and dialog.winfo_exists():
+            dialog.destroy()
+
+    def _open_wireless_debug(self) -> None:
+        """Small Wireless Debugging wizard with mDNS first and explicit address fallback."""
+        if self.worker and self.worker.is_alive():
+            self._log(self.tr("test_stop_first"))
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self.tr("wd_title"))
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        body = ttk.Frame(dlg, padding=14)
+        body.grid(sticky="nsew")
+        ttk.Label(
+            body, text=self.tr("wd_help"), wraplength=440, justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+        ttk.Label(body, text=self.tr("wd_paired"), font=("TkDefaultFont", 10, "bold")).grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(0, 5),
+        )
+        ttk.Label(body, text=self.tr("wd_connect_addr")).grid(row=2, column=0, sticky="w")
+        connect_var = tk.StringVar()
+        current = self._sel_serial()
+        if ":" in current and current != Device.MUMU_SERIAL:
+            connect_var.set(current)
+        connect_entry = ttk.Entry(body, textvariable=connect_var, width=27)
+        connect_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(8, 0))
+
+        ttk.Separator(body).grid(row=4, column=0, columnspan=3, sticky="ew", pady=12)
+        ttk.Label(body, text=self.tr("wd_first_pair"), font=("TkDefaultFont", 10, "bold")).grid(
+            row=5, column=0, columnspan=3, sticky="w", pady=(0, 5),
+        )
+        ttk.Label(
+            body, text=self.tr("wd_pair_help"), wraplength=440, justify="left",
+        ).grid(row=6, column=0, columnspan=3, sticky="w", pady=(0, 8))
+        ttk.Label(body, text=self.tr("wd_pair_addr")).grid(row=7, column=0, sticky="w", pady=3)
+        pair_addr_var = tk.StringVar()
+        pair_addr_entry = ttk.Entry(body, textvariable=pair_addr_var, width=27)
+        pair_addr_entry.grid(row=7, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=3)
+        ttk.Label(body, text=self.tr("wd_pair_code")).grid(row=8, column=0, sticky="w", pady=3)
+        pair_code_var = tk.StringVar()
+        pair_code_entry = ttk.Entry(body, textvariable=pair_code_var, width=12, show="*")
+        pair_code_entry.grid(row=8, column=1, sticky="w", padx=(8, 0), pady=3)
+
+        status_var = tk.StringVar()
+        status = ttk.Label(body, textvariable=status_var, wraplength=440, justify="left")
+        status.grid(row=10, column=0, columnspan=3, sticky="w", pady=(12, 0))
+
+        buttons: list[ttk.Button] = []
+
+        def set_busy(busy: bool, message: str = "") -> None:
+            if not dlg.winfo_exists():
+                return
+            for button in buttons:
+                button.config(state="disabled" if busy else "normal")
+            if message:
+                status_var.set(message)
+
+        def finish(serial: str | None, message: str) -> None:
+            if not dlg.winfo_exists():
+                return
+            pair_code_var.set("")
+            set_busy(False, message)
+            if serial:
+                self._adopt_wireless(serial, dlg)
+
+        def auto_find() -> None:
+            set_busy(True, self.tr("wd_searching"))
+            preferred = self._known_wifi_hosts()
+
+            def work() -> None:
+                try:
+                    serial = Device.connect_discovered_wireless(preferred)
+                    message = "" if serial else self.tr("wd_not_found")
+                except Exception as exc:  # noqa: BLE001
+                    serial = None
+                    message = self.tr("wd_failed").format(exc)
+                self.root.after(0, lambda: finish(serial, message))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def connect_address() -> None:
+            raw_endpoint = connect_var.get()
+            try:
+                endpoint = Device.normalize_tcp_endpoint(raw_endpoint)
+            except ValueError:
+                status_var.set(self.tr("wd_invalid"))
+                return
+            set_busy(True, self.tr("conn_reconnecting"))
+
+            def work() -> None:
+                try:
+                    Device.adb_connect(endpoint)
+                    serial, message = endpoint, ""
+                except Exception as exc:  # noqa: BLE001
+                    serial, message = None, self.tr("wd_failed").format(exc)
+                self.root.after(0, lambda: finish(serial, message))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        def pair_device() -> None:
+            raw_pair_endpoint = pair_addr_var.get()
+            code = pair_code_var.get()
+            raw_connect_endpoint = connect_var.get().strip()
+            try:
+                pair_endpoint = Device.normalize_tcp_endpoint(raw_pair_endpoint)
+                if raw_connect_endpoint:
+                    connect_endpoint = Device.normalize_tcp_endpoint(raw_connect_endpoint)
+                else:
+                    connect_endpoint = None
+                if len(code.strip()) != 6 or not code.strip().isdigit():
+                    raise ValueError("invalid pairing code")
+            except ValueError:
+                pair_code_var.set("")
+                status_var.set(self.tr("wd_invalid"))
+                return
+
+            set_busy(True, self.tr("wd_searching"))
+            preferred = self._known_wifi_hosts()
+
+            def work() -> None:
+                serial = None
+                try:
+                    Device.adb_pair(pair_endpoint, code)
+                    if connect_endpoint:
+                        Device.adb_connect(connect_endpoint)
+                        serial = connect_endpoint
+                    else:
+                        # Android normally advertises the secure connect port immediately after
+                        # pairing. A few short retries cover the service appearing asynchronously.
+                        for _ in range(4):
+                            serial = Device.connect_discovered_wireless(preferred)
+                            if serial:
+                                break
+                            time.sleep(0.75)
+                    message = "" if serial else self.tr("wd_pair_ok")
+                except Exception as exc:  # noqa: BLE001
+                    message = self.tr("wd_failed").format(exc)
+                self.root.after(0, lambda: finish(serial, message))
+
+            threading.Thread(target=work, daemon=True).start()
+
+        auto_btn = ttk.Button(body, text=self.tr("wd_auto"), command=auto_find)
+        auto_btn.grid(row=3, column=1, sticky="e", pady=(7, 0))
+        connect_btn = ttk.Button(body, text=self.tr("wd_connect"), command=connect_address)
+        connect_btn.grid(row=3, column=2, sticky="e", padx=(6, 0), pady=(7, 0))
+        pair_btn = ttk.Button(body, text=self.tr("wd_pair"), command=pair_device)
+        pair_btn.grid(row=9, column=2, sticky="e", pady=(7, 0))
+        buttons.extend((auto_btn, connect_btn, pair_btn))
+        connect_entry.bind("<Return>", lambda _event: connect_address())
+        pair_code_entry.bind("<Return>", lambda _event: pair_device())
+        connect_entry.focus_set()
+
     def refresh_devices(self) -> None:
         try:
             attached = Device.list_devices()
@@ -1633,23 +1860,33 @@ class App:
         # try to re-establish them all in the background while the phones' adbd is still
         # in TCP mode. On success the list is refreshed and they show up again.
         missing_wifi = [s for s in self.known if ":" in s and s not in attached]
-        if missing_wifi and not self._reconnecting:
+        # A paired Android 11+ phone normally announces its current (rotating) TLS port over
+        # mDNS. Try that even when there is no stored endpoint; routers that suppress mDNS
+        # simply yield no result and the explicit Wireless Debug dialog remains available.
+        if not self._reconnecting and (missing_wifi or not attached):
             self._reconnecting = True
 
             def rejoin() -> None:
-                regained = False
+                regained = None
                 try:
-                    for serial in missing_wifi:
-                        try:
-                            Device.adb_connect(serial)
-                            self.log_queue.put(self.tr("conn_re_ok").format(serial))
-                            regained = True
-                        except Exception:  # noqa: BLE001
-                            pass
+                    try:
+                        regained = Device.connect_discovered_wireless(
+                            self._known_wifi_hosts(missing_wifi),
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if not regained:
+                        for serial in missing_wifi:
+                            try:
+                                Device.adb_connect(serial)
+                                regained = serial
+                                break
+                            except Exception:  # noqa: BLE001
+                                pass
                 finally:
                     self._reconnecting = False
                 if regained:
-                    self.root.after(0, self.refresh_devices)
+                    self.root.after(0, lambda: self._adopt_wireless(regained))
 
             threading.Thread(target=rejoin, daemon=True).start()
 
@@ -1741,28 +1978,38 @@ class App:
             return
         # No cable → bring back a remembered Wi-Fi device (its adbd is still in TCP mode).
         wifi_known = [s for s in self.known if ":" in s]
-        if wifi_known:
-            self._reconnect_wifi(wifi_known)
-            return
-        self._log(self.tr("conn_need_usb"))
-        self._set_status("st_no_device")
+        self._reconnect_wifi(wifi_known)
 
     def _reconnect_wifi(self, serials: list[str]) -> None:
         """Reconnect remembered Wi-Fi device(s) without a cable: the phone's adbd stayed in TCP
         mode from the first cable setup, so a plain `adb connect ip:port` brings it back. Runs on
         a thread (connect can take a few seconds) and selects the first serial that comes back."""
+        if self._reconnecting:
+            self._log(self.tr("conn_reconnecting"))
+            return
+        self._reconnecting = True
         self.connect_btn.config(state="disabled")
         self._log(self.tr("conn_reconnecting"))
 
         def work() -> None:
             got = None
-            for s in serials:
+            try:
                 try:
-                    Device.adb_connect(s)
-                    got = s
-                    break
+                    got = Device.connect_discovered_wireless(
+                        self._known_wifi_hosts(serials),
+                    )
                 except Exception:  # noqa: BLE001
                     pass
+                if not got:
+                    for s in serials:
+                        try:
+                            Device.adb_connect(s)
+                            got = s
+                            break
+                        except Exception:  # noqa: BLE001
+                            pass
+            finally:
+                self._reconnecting = False
 
             def done() -> None:
                 self.connect_btn.config(state="normal")
@@ -1852,6 +2099,51 @@ class App:
         else:
             self._log(self.tr("conn_need_usb"))
             self._set_status("st_no_device")
+
+    def _recover_runtime_device(self, max_attempts: int = 3) -> str:
+        """Reconnect a TCP device after a transient ADB drop without ending the bot run."""
+        if self.device is None or not self.device.serial or ":" not in self.device.serial:
+            raise AdbError("the active device is not a reconnectable TCP endpoint")
+        current = self.device.serial
+        adb_path = self.device.adb_path
+        host = current.rsplit(":", 1)[0].strip("[]")
+        candidates = [current]
+        for serial in self.known:
+            candidate_host = serial.rsplit(":", 1)[0].strip("[]") if ":" in serial else ""
+            if candidate_host == host and serial not in candidates:
+                candidates.append(serial)
+        # One secure Wireless Debugging endpoint plus the optional legacy :5555 fallback is
+        # enough. Old rotating TLS ports are otherwise ten identical dead attempts in history.
+        candidates = candidates[:2]
+        last_error: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            self.log_queue.put(self.tr("conn_run_lost").format(attempt, max_attempts))
+            for serial in candidates:
+                try:
+                    Device.adb_connect(serial, adb_path, timeout=3.0)
+                    self.device.serial = serial
+                    self.root.after(0, lambda s=serial: self._remember_device(s))
+                    return serial
+                except Exception as exc:  # noqa: BLE001 - try the next known endpoint
+                    last_error = exc
+            if self.routine is not None and self.routine.stop_event.is_set():
+                raise AdbError("reconnect cancelled")
+            if attempt < max_attempts:
+                time.sleep(1.0)
+
+        # If the phone rotated its secure port, mDNS is the only safe way to learn the new one.
+        # On routers that suppress mDNS this returns quickly with no result and the original
+        # connection error remains the useful final message.
+        try:
+            discovered = Device.connect_discovered_wireless([host], adb_path)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            discovered = None
+        if discovered:
+            self.device.serial = discovered
+            self.root.after(0, lambda s=discovered: self._remember_device(s))
+            return discovered
+        raise AdbError(f"could not reconnect {current}: {last_error or 'no endpoint found'}")
 
     # -- Discord alert ----------------------------------------------------------
     def _send_discord(self, content: str, shot: bool = False) -> None:
@@ -2653,7 +2945,9 @@ class App:
                     catch_timeout=max(2.0, float(self.wait_catch.get())),
                     idle_before_autowalk=int(self.idle_aw.get()),
                     max_catches=int(self.max_catches.get()),
-                    settle_after_catch=max(0.0, float(self.settle.get())),
+                    settle_after_catch=max(
+                        MIN_POST_CATCH_REFRESH, float(self.settle.get()),
+                    ),
                     quick_catch=self.catch_style == "quick",
                     quick_flick_ms=max(50, int(round(float(self.quick_flick.get()) * 1000))),
                     encounter_touch_delay_ms=max(0, int(round(float(self.touch_delay.get()) * 1000))),
@@ -2722,9 +3016,18 @@ class App:
                     "start_goplus_on_no_balls",
                     False,
                 ))
-                self.log_queue.put(self.tr("msg_no_balls_goplus" if with_goplus else "msg_no_balls"))
+                pause_minutes = max(0.0, float(getattr(
+                    getattr(self.routine, "config", None), "no_balls_pause", 600.0,
+                ))) / 60.0
+                self.log_queue.put(
+                    self.tr("msg_no_balls_goplus" if with_goplus else "msg_no_balls").format(
+                        pause_minutes,
+                    )
+                )
                 self._send_discord(
-                    self.tr("dc_no_balls_goplus" if with_goplus else "dc_no_balls"),
+                    self.tr("dc_no_balls_goplus" if with_goplus else "dc_no_balls").format(
+                        pause_minutes,
+                    ),
                     shot=True,
                 )
                 return
@@ -2745,6 +3048,12 @@ class App:
             if self.mode == "spin":
                 self.log_queue.put(self.tr("msg_spin_idle").format(stats.cycles))
                 self.log_queue.put("__countstr__" + self.tr("spun").format(stats.spins))
+                return
+            if stats.last_event in ("engage_retry", "encounter_wait"):
+                key = "msg_engage_retry" if stats.last_event == "engage_retry" else "msg_encounter_wait"
+                self.log_queue.put(self.tr("msg_cycle").format(
+                    stats.cycles, self.tr(key), stats.throws))
+                self.log_queue.put(f"__count__{stats.throws}")
                 return
             tag = self.tr("msg_throw") if threw else self.tr("msg_empty")
             self.log_queue.put(self.tr("msg_cycle").format(stats.cycles, tag, stats.throws))
@@ -2832,14 +3141,26 @@ class App:
             if dim:
                 self.device.enable_dim()
                 self.log_queue.put(self.tr("msg_dim"))
-            # Keep the continuous stream light in both modes. Shundo requests a crisp
-            # one-shot capture only when an encounter opens and IV digits must be read.
-            if self.mode in ("shundo", "coord_shundo"):
-                self.device.start_stream(half=True, bitrate="2M")
-            else:
-                self.device.start_stream()
-            self.routine.run(
-                on_event=on_shundo_event if self.mode in ("shundo", "coord_shundo") else on_event)
+            # Keep the continuous stream light in both modes. Shundo requests a crisp one-shot
+            # capture only when an encounter opens and IV digits must be read. A transient Wi-Fi
+            # ADB drop used to terminate the whole unattended run; reconnect the same routine so
+            # its counters, cooldown and pending Feed state survive.
+            callback = on_shundo_event if self.mode in ("shundo", "coord_shundo") else on_event
+            while not self.routine.stop_event.is_set():
+                try:
+                    if self.mode in ("shundo", "coord_shundo"):
+                        self.device.start_stream(half=True, bitrate="2M")
+                    else:
+                        self.device.start_stream()
+                    self.routine.run(on_event=callback)
+                    break
+                except AdbError:
+                    if not self.device.serial or ":" not in self.device.serial:
+                        raise
+                    self.device.stop_stream()
+                    self.device.close_control()
+                    serial = self._recover_runtime_device()
+                    self.log_queue.put(self.tr("conn_run_restored").format(serial))
             # A safety stop already has a precise error in the log. Do not immediately
             # overwrite its meaning with the generic "Done." message.
             if self.mode in ("shundo", "coord_shundo") and self.routine.stats.last_event == "flee_failed":

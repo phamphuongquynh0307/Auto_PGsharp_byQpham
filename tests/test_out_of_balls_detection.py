@@ -6,20 +6,28 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
-from avc.catch import CatchConfig, CatchRoutine
+from avc.catch import (
+    CURRENT_OUT_OF_BALLS_REGION, LEGACY_OUT_OF_BALLS_REGION, CatchConfig, CatchRoutine,
+)
 
 
 class FrameDevice:
     def __init__(self, frames):
         self.frames = iter(frames)
+        self.releases = 0
 
     def screenshot(self, **_kwargs):
         return next(self.frames)
 
+    def release_control_pointers(self):
+        self.releases += 1
+
 
 def bare_routine(frames):
     routine = object.__new__(CatchRoutine)
-    routine.config = SimpleNamespace(no_balls_missing_frames=3)
+    routine.config = SimpleNamespace(
+        no_balls_missing_frames=3,
+    )
     routine.device = FrameDevice(frames)
     routine.stop_event = threading.Event()
     routine.pause_event = threading.Event()
@@ -27,6 +35,9 @@ def bare_routine(frames):
     routine._in_encounter = lambda frame, **_kwargs: frame != "map"
     routine._is_out_of_balls = lambda frame: frame == "x0"
     routine._ball_ready = lambda frame: frame == "ball"
+    # The live empty-bag screen still contains the bottom-right selector button. Only ``ball``
+    # models the large throwable ball resting at the throw point.
+    routine._ball_selector_present = lambda frame: frame in ("selector", "ball")
     return routine
 
 
@@ -104,6 +115,18 @@ class MissingBallDetectionTests(unittest.TestCase):
 
         self.assertEqual("ready", routine._wait_for_ball_state(0.0))
 
+    def test_visible_selector_without_a_throwable_ball_is_still_empty(self):
+        routine = bare_routine(["selector", "selector", "selector", "selector"])
+
+        self.assertEqual("empty", routine._wait_for_ball_state(0.0))
+        self.assertEqual(1, routine.device.releases)
+
+    def test_held_ball_can_snap_back_after_pointer_release(self):
+        routine = bare_routine(["selector", "ball"])
+
+        self.assertEqual("ready", routine._wait_for_ball_state(0.0))
+        self.assertEqual(1, routine.device.releases)
+
     def test_encounter_closing_during_confirmation_is_not_empty(self):
         routine = bare_routine(["missing", "map"])
 
@@ -118,6 +141,70 @@ class MissingBallDetectionTests(unittest.TestCase):
         routine = bare_routine(["missing", "missing", "missing", "ball"])
 
         self.assertEqual("ready", routine._wait_for_ball_state(0.0))
+
+
+class CurrentCountBadgeLocationTests(unittest.TestCase):
+    def test_default_region_contains_the_right_side_x0_badge(self):
+        config = CatchConfig()
+        template = cv2.imread(config.out_of_balls_template, cv2.IMREAD_COLOR)
+        self.assertIsNotNone(template)
+        frame = np.zeros((2712, 1220, 3), dtype=np.uint8)
+        x, y = 760, 2500
+        height, width = template.shape[:2]
+        frame[y:y + height, x:x + width] = template
+
+        routine = object.__new__(CatchRoutine)
+        routine.config = config
+        routine._noball_tpl = template
+        routine._scales = (1.0,)
+
+        self.assertFalse(
+            LEGACY_OUT_OF_BALLS_REGION[0]
+            <= x
+            < LEGACY_OUT_OF_BALLS_REGION[0] + LEGACY_OUT_OF_BALLS_REGION[2]
+        )
+        self.assertEqual(CURRENT_OUT_OF_BALLS_REGION, config.out_of_balls_region)
+        self.assertTrue(routine._is_out_of_balls(frame))
+
+
+class NoBallsExitTests(unittest.TestCase):
+    def _routine(self, poll_results):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(flee_xy=(120, 170))
+        routine.stop_event = threading.Event()
+        routine.stats = SimpleNamespace(last_event=None)
+        routine._no_balls = False
+        routine._in_encounter = lambda _frame, **_kwargs: False
+        results = iter(poll_results)
+        routine._poll = lambda _predicate, _timeout: next(results)
+        routine._trace = lambda *_args: None
+        routine.device = SimpleNamespace(
+            adb_taps=[], backs=0, releases=0,
+        )
+        routine.device.adb_tap = lambda *point: routine.device.adb_taps.append(point)
+        routine.device.release_control_pointers = lambda: setattr(
+            routine.device, "releases", routine.device.releases + 1,
+        )
+        routine.device.back = lambda: setattr(routine.device, "backs", routine.device.backs + 1)
+        return routine
+
+    def test_empty_bag_exit_uses_independent_adb_tap_and_verifies_map(self):
+        routine = self._routine([True])
+
+        routine._flag_no_balls()
+
+        self.assertTrue(routine._no_balls)
+        self.assertEqual("no_balls", routine.stats.last_event)
+        self.assertEqual([(120, 170)], routine.device.adb_taps)
+        self.assertEqual(1, routine.device.releases)
+        self.assertEqual(0, routine.device.backs)
+
+    def test_android_back_is_used_when_flee_tap_does_not_leave(self):
+        routine = self._routine([None, True])
+
+        routine._flag_no_balls()
+
+        self.assertEqual(1, routine.device.backs)
 
 
 if __name__ == "__main__":

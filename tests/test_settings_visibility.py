@@ -81,7 +81,7 @@ class VisibilityTests(unittest.TestCase):
         self._configure("catch", "normal", advanced=True)
         self.assertTrue(self._shown("touch_delay"))
 
-    def test_the_spin_knobs_stay_hidden_until_something_reads_them(self):
+    def test_refill_duration_stays_visible_when_only_autowalk_or_goplus_reads_it(self):
         """Nothing spins in a plain catching run, so the circle radius would be a control that
         changes nothing — the exact thing this whole sync exists to prevent."""
         self._configure("catch", "normal")
@@ -89,7 +89,7 @@ class VisibilityTests(unittest.TestCase):
         self.app._sync_settings_visibility()
 
         self.assertFalse(self._group_shown(self.app._grp_spin))
-        self.assertFalse(self._shown("no_balls_min"))
+        self.assertTrue(self._shown("no_balls_min"))
 
     def test_ticking_the_out_of_balls_box_reveals_the_spin_knobs(self):
         self._configure("catch", "normal")

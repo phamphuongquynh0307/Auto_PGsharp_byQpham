@@ -93,6 +93,7 @@ class NoBallsRecoveryTests(unittest.TestCase):
         routine._wait_if_paused = lambda: None
         routine._drain_popups = lambda: False
         routine._interruptible_sleep = lambda _seconds: None
+        routine._trace = lambda *_args: None
         events = []
 
         def autowalk():
@@ -130,6 +131,7 @@ class NoBallsRecoveryTests(unittest.TestCase):
                 routine._wait_if_paused = lambda: None
                 routine._drain_popups = lambda: False
                 routine._interruptible_sleep = lambda _seconds: None
+                routine._trace = lambda *_args: None
                 events = []
 
                 def autowalk():
@@ -143,6 +145,38 @@ class NoBallsRecoveryTests(unittest.TestCase):
                 routine._wait_no_balls()
 
                 self.assertEqual(["autowalk"], events)
+
+    def test_goplus_is_retried_until_the_disconnected_button_is_tapped(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(
+            no_balls_pause=10.0,
+            no_balls_walk_interval=0.0,
+            goplus_after_autowalk_wait=0.0,
+            spin_on_no_balls=False,
+            start_goplus_on_no_balls=True,
+            quick_catch=False,
+        )
+        routine.stop_event = threading.Event()
+        routine.stats = SimpleNamespace(last_event="no_balls")
+        routine._wait_if_paused = lambda: None
+        routine._drain_popups = lambda: False
+        routine._interruptible_sleep = lambda _seconds: None
+        routine._trace = lambda *_args: None
+        routine._try_autowalk = lambda: True
+        attempts = []
+
+        def goplus():
+            attempts.append("try")
+            if len(attempts) == 2:
+                routine.stop_event.set()
+                return True
+            return False
+
+        routine._try_start_goplus = goplus
+
+        routine._wait_no_balls()
+
+        self.assertEqual(["try", "try"], attempts)
 
 
 if __name__ == "__main__":

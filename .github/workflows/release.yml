@@ -37,6 +37,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
           gh release create ${{ github.ref_name }}
+          "dist/AutoCatchPokemonPGSharp.exe"
           "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
           "downloads/discord-coord-collector-v0.3.1.zip"
           --title ${{ github.ref_name }}
