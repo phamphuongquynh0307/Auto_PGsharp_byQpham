@@ -26,7 +26,9 @@ function renderState(state) {
   badge.textContent = state.running ? "Đang chạy" : "Đang dừng";
   badge.className = `badge ${state.running ? "running" : "stopped"}`;
   statusText.textContent = state.status;
-  toolStatus.textContent = `Tool: ${state.toolStatus || "chưa kết nối"}`;
+  const version = state.extensionVersion ? `v${state.extensionVersion}` : "bản cũ";
+  const endpoint = state.toolEndpoint || "http://127.0.0.1:8766";
+  toolStatus.textContent = `Tool ${version}: ${state.toolStatus || "chưa kết nối"} · ${endpoint}`;
   toolStatus.className = `tool-status${state.toolConnected ? " connected" : ""}`;
   savedCount.textContent = state.saved;
   queueCount.textContent = state.queued + (state.processing ? 1 : 0);

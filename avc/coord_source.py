@@ -17,6 +17,9 @@ from urllib.parse import urlparse
 
 
 COORD_RE = re.compile(r"^(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$")
+# Keep the localhost coordinate bridge separate from ADB/Wireless Debugging.  The extension
+# talks to this port only; it must never be confused with the phone's rotating ADB port.
+COORD_BRIDGE_PORT = 8766
 
 
 @dataclass(frozen=True)
@@ -189,7 +192,12 @@ class _Handler(BaseHTTPRequestHandler):
 class CoordBridge:
     """Lifecycle wrapper for the loopback HTTP bridge."""
 
-    def __init__(self, coord_queue: CoordQueue, host: str = "127.0.0.1", port: int = 8765) -> None:
+    def __init__(
+        self,
+        coord_queue: CoordQueue,
+        host: str = "127.0.0.1",
+        port: int = COORD_BRIDGE_PORT,
+    ) -> None:
         self.coord_queue = coord_queue
         self.host = host
         self.port = int(port)

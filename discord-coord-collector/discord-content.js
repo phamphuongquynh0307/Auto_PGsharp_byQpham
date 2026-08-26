@@ -1,3 +1,7 @@
+(() => {
+if (globalThis.__coordCollectorDiscordContentLoaded) return;
+globalThis.__coordCollectorDiscordContentLoaded = true;
+
 let collectorRunning = false;
 let scanTimer = null;
 let scanBusy = false;
@@ -112,3 +116,4 @@ chrome.runtime.sendMessage({ type: "getSummary" }).then((state) => {
   collectorRunning = Boolean(state?.tabEnabled);
   if (collectorRunning) rememberVisibleLinks();
 }).catch(() => {});
+})();

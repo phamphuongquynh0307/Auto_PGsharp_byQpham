@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Discord Coord Collector",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Queues Pokedex100 coordinate links from Discord Web and saves each coordinate locally.",
   "permissions": [
     "alarms",
     "clipboardRead",
     "downloads",
+    "scripting",
     "storage",
     "tabs"
   ],
@@ -15,7 +16,7 @@
     "https://ptb.discord.com/*",
     "https://canary.discord.com/*",
     "https://coord.pokedex100.com/*",
-    "http://127.0.0.1:8765/*"
+    "http://127.0.0.1:8766/*"
   ],
   "background": {
     "service_worker": "background.js"

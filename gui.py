@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.6"
+APP_VERSION = "1.4.7"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -671,7 +671,7 @@ Vào 🎯 Căn chỉnh tay → Discord Coord:
 3. Nút OK Teleport: giữa nút OK ở trạng thái bàn phím đã ẩn.
 
 ## D. Thứ tự chạy
-1. Mở app và kiểm tra log Bộ nhận Discord Coord đang chạy tại 127.0.0.1:8765.
+1. Mở app và kiểm tra log Bộ nhận Discord Coord đang chạy tại 127.0.0.1:8766.
 2. Chọn chế độ, nhập IV và bấm Chạy.
 3. Sau đó mới mở Collector và bấm Bắt đầu.
 4. Collector gửi một coord; app chấm xong coord đó rồi mới cấp quyền lấy coord mới nhất tiếp theo.
@@ -1671,9 +1671,12 @@ class App:
 
     def _adopt_wireless(self, serial: str, dialog=None) -> None:
         """Select and remember a successfully connected Wireless Debugging endpoint."""
-        self.refresh_devices()
+        # The connect worker already verified get-state=device. Do not let the follow-up picker
+        # refresh launch another reconnect while adb is still propagating the transport list.
+        self.refresh_devices(allow_reconnect=False)
         self.device_var.set(serial)
         self._remember_device(serial)
+        self._set_status("st_ready")
         self._log(self.tr("conn_re_ok").format(serial))
         if dialog is not None and dialog.winfo_exists():
             dialog.destroy()
@@ -1751,7 +1754,9 @@ class App:
 
             def work() -> None:
                 try:
-                    serial = Device.connect_discovered_wireless(preferred)
+                    serial = Device.connect_discovered_wireless(
+                        preferred, discovery_attempts=4, retry_delay=0.75,
+                    )
                     message = "" if serial else self.tr("wd_not_found")
                 except Exception as exc:  # noqa: BLE001
                     serial = None
@@ -1810,7 +1815,9 @@ class App:
                         # Android normally advertises the secure connect port immediately after
                         # pairing. A few short retries cover the service appearing asynchronously.
                         for _ in range(4):
-                            serial = Device.connect_discovered_wireless(preferred)
+                            serial = Device.connect_discovered_wireless(
+                                preferred, discovery_attempts=2, retry_delay=0.5,
+                            )
                             if serial:
                                 break
                             time.sleep(0.75)
@@ -1832,7 +1839,7 @@ class App:
         pair_code_entry.bind("<Return>", lambda _event: pair_device())
         connect_entry.focus_set()
 
-    def refresh_devices(self) -> None:
+    def refresh_devices(self, *, allow_reconnect: bool = True) -> None:
         try:
             attached = Device.list_devices()
         except Exception as e:  # noqa: BLE001
@@ -1854,7 +1861,13 @@ class App:
             self.device_var.set(options[0])
         else:
             self.device_var.set("")
-        if not attached:
+        if attached:
+            # A previous failed scan may have left the status on "no device" even though the
+            # transport is now online. Clear only that stale status; do not disturb a running or
+            # paused routine.
+            if self._status_key == "st_no_device" and not (self.worker and self.worker.is_alive()):
+                self._set_status("st_ready")
+        else:
             self._set_status("st_no_device")
         # Known Wi-Fi devices that aren't attached (adb server restarted, PC rebooted):
         # try to re-establish them all in the background while the phones' adbd is still
@@ -1863,7 +1876,7 @@ class App:
         # A paired Android 11+ phone normally announces its current (rotating) TLS port over
         # mDNS. Try that even when there is no stored endpoint; routers that suppress mDNS
         # simply yield no result and the explicit Wireless Debug dialog remains available.
-        if not self._reconnecting and (missing_wifi or not attached):
+        if allow_reconnect and not self._reconnecting and (missing_wifi or not attached):
             self._reconnecting = True
 
             def rejoin() -> None:
@@ -1871,7 +1884,7 @@ class App:
                 try:
                     try:
                         regained = Device.connect_discovered_wireless(
-                            self._known_wifi_hosts(missing_wifi),
+                            self._known_wifi_hosts(missing_wifi), discovery_attempts=2,
                         )
                     except Exception:  # noqa: BLE001
                         pass
@@ -1996,7 +2009,7 @@ class App:
             try:
                 try:
                     got = Device.connect_discovered_wireless(
-                        self._known_wifi_hosts(serials),
+                        self._known_wifi_hosts(serials), discovery_attempts=4,
                     )
                 except Exception:  # noqa: BLE001
                     pass
@@ -2013,10 +2026,11 @@ class App:
 
             def done() -> None:
                 self.connect_btn.config(state="normal")
-                self.refresh_devices()
+                self.refresh_devices(allow_reconnect=False)
                 if got:
                     self.device_var.set(got)
                     self._remember_device(got)
+                    self._set_status("st_ready")
                     self._log(self.tr("conn_re_ok").format(got))
                 else:
                     self._log(self.tr("conn_re_fail"))
@@ -2135,7 +2149,9 @@ class App:
         # On routers that suppress mDNS this returns quickly with no result and the original
         # connection error remains the useful final message.
         try:
-            discovered = Device.connect_discovered_wireless([host], adb_path)
+            discovered = Device.connect_discovered_wireless(
+                [host], adb_path, discovery_attempts=4, retry_delay=0.75,
+            )
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             discovered = None

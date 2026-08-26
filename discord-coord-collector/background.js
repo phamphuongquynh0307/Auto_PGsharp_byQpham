@@ -1,6 +1,8 @@
 const STORAGE_KEY = "coordCollectorState";
-const STATE_VERSION = 4;
+const EXTENSION_VERSION = "0.3.3";
+const STATE_VERSION = 6;
 const TOOL_RETRY_ALARM = "coordCollectorToolRetry";
+const TOOL_BASE_URL = "http://127.0.0.1:8766";
 // Keep only the first/newest coordinate ready. Extra prefetched coordinates can
 // expire while the desktop app is still checking the current Pokemon.
 const INITIAL_PREFETCH = 1;
@@ -86,6 +88,8 @@ async function saveState(state) {
 
 function summary(state) {
   return {
+    extensionVersion: EXTENSION_VERSION,
+    toolEndpoint: TOOL_BASE_URL,
     running: state.running,
     queued: state.queue.length,
     processing: Boolean(state.current),
@@ -169,7 +173,7 @@ async function postToTool(record, timeoutMs = 1200) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch("http://127.0.0.1:8765/coords", {
+    const response = await fetch(`${TOOL_BASE_URL}/coords`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(record),
@@ -189,7 +193,7 @@ async function toolRequest(path, options = {}, timeoutMs = 1000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(`http://127.0.0.1:8765${path}`, {
+    const response = await fetch(`${TOOL_BASE_URL}${path}`, {
       ...options,
       signal: controller.signal
     });
@@ -260,7 +264,7 @@ async function retryToolDelivery() {
     if (record.sentToTool) continue;
     if (!await postToTool(record)) {
       state.toolConnected = false;
-      state.toolStatus = "Không kết nối được tool tại 127.0.0.1:8765";
+      state.toolStatus = "Không kết nối được tool tại 127.0.0.1:8766";
       await saveState(state);
       chrome.alarms.create(TOOL_RETRY_ALARM, { delayInMinutes: 0.5 });
       return { ok: false, delivered, ...summary(state) };
@@ -366,16 +370,36 @@ async function notifyDiscordTabs(running, scanNow = false, maxLinks = 1, resetSe
     ]
   });
   const target = tabs.find((tab) => tab.active) || null;
-  await Promise.allSettled(
-    tabs.map((tab) => chrome.tabs.sendMessage(tab.id, {
-      type: "collectorState",
-      running: Boolean(running && target && tab.id === target.id),
-      scanNow: Boolean(scanNow && target && tab.id === target.id),
-      maxLinks: Math.max(1, Number(maxLinks) || 1),
-      resetSession: Boolean(resetSession && target && tab.id === target.id)
-    }))
+  const results = await Promise.all(
+    tabs.map(async (tab) => {
+      const message = {
+        type: "collectorState",
+        running: Boolean(running && target && tab.id === target.id),
+        scanNow: Boolean(scanNow && target && tab.id === target.id),
+        maxLinks: Math.max(1, Number(maxLinks) || 1),
+        resetSession: Boolean(resetSession && target && tab.id === target.id)
+      };
+      try {
+        await chrome.tabs.sendMessage(tab.id, message);
+        return true;
+      } catch (_error) {
+        // Reloading/updating an unpacked extension does not inject its content script into
+        // Discord tabs that were already open. Install it on demand so Start works without F5.
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["discord-content.js"]
+          });
+          await chrome.tabs.sendMessage(tab.id, message);
+          return true;
+        } catch (_injectError) {
+          return false;
+        }
+      }
+    })
   );
-  return target?.id || null;
+  const targetIndex = target ? tabs.findIndex((tab) => tab.id === target.id) : -1;
+  return targetIndex >= 0 && results[targetIndex] ? target.id : null;
 }
 
 async function processNext() {

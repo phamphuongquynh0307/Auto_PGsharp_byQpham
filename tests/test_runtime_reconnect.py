@@ -57,7 +57,9 @@ class RuntimeReconnectTests(unittest.TestCase):
             serial = app._recover_runtime_device(max_attempts=1)
 
         self.assertEqual("192.168.1.4:49999", serial)
-        discover.assert_called_once_with(["192.168.1.4"], "adb-test")
+        discover.assert_called_once_with(
+            ["192.168.1.4"], "adb-test", discovery_attempts=4, retry_delay=0.75,
+        )
 
     def test_usb_disconnect_is_not_misrepresented_as_wifi_reconnect(self):
         app = bare_app("f76cc588")

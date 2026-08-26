@@ -1,6 +1,6 @@
 # Discord Coord Collector (Edge)
 
-[Tải extension v0.3.1](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.1.zip)
+[Tải extension v0.3.3](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.3.zip)
 
 Tiện ích Edge chạy tuần tự:
 
@@ -10,7 +10,7 @@ Tiện ích Edge chạy tuần tự:
 4. Lưu cục bộ trong bộ nhớ của tiện ích, đóng tab và xử lý link kế tiếp.
 5. Tự gửi coord sang app desktop.
 
-Phiên bản hiện tại: **0.3.1**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
+Phiên bản hiện tại: **0.3.3**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
 không đọc được coord. Các trang yêu cầu Bronze/donor role mà tài khoản không có sẽ được nhận diện,
 đóng ngay và bỏ qua vĩnh viễn trong lượt thu hiện tại.
 
@@ -25,9 +25,14 @@ trong cùng message bị bỏ qua dù chúng có dùng chung domain Pokedex100.
 Chỉ tab Discord Web đang active trong cửa sổ Edge hiện tại được theo dõi. Link gửi từ tab Discord
 khác bị từ chối, tránh lấy nhầm channel khi người dùng mở nhiều tab Discord.
 
-Mỗi coord mới được gửi tới app desktop qua `http://127.0.0.1:8765/coords`. Hãy mở app desktop
+Mỗi coord mới được gửi tới app desktop qua `http://127.0.0.1:8766/coords`. Đây là cổng riêng của
+Coord Collector, tách khỏi cổng ADB/Wireless Debugging. Hãy mở app desktop
 trước khi bấm **Bắt đầu** để coord được đưa thẳng vào hàng đợi tạm của chế độ
 **Shundo từ Discord Coord**.
+
+Popup hiển thị phiên bản extension và endpoint đang dùng. Sau khi cập nhật, vào `edge://extensions` bấm
+**Reload**; phải thấy `v0.3.3` và `127.0.0.1:8766`. Nếu còn bản cũ, xóa bản đó rồi **Load unpacked** lại thư mục này.
+Từ v0.3.3, extension tự chèn lại bộ quét vào tab Discord đã mở trước khi extension được reload nên không cần F5 tab thủ công.
 
 Collector không lấy toàn bộ lịch sử đang hiển thị. Khi bấm **Bắt đầu**, các link hiện tại được ghi
 nhớ làm mốc; mỗi đợt Discord chèn message mới chỉ coord mới nhất/đầu tiên được xử lý. Mỗi lần

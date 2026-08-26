@@ -178,12 +178,16 @@ Ba điểm này phụ thuộc mạnh vào độ phân giải và bố cục PGSh
 ### Thứ tự chạy đúng
 
 1. Mở app desktop trước và chọn **Chấm shiny IV từ Discord Coord**.
-2. Kiểm tra nhật ký có dòng bộ nhận đang chạy tại `127.0.0.1:8765`.
+2. Kiểm tra nhật ký có dòng bộ nhận đang chạy tại `127.0.0.1:8766`.
 3. Nhập IV mục tiêu và bấm **Chạy**.
 4. Mở popup Discord Coord Collector trên Edge và bấm **Bắt đầu**.
 5. Collector gửi một coord mới nhất; app chấm xong coord hiện tại rồi mới cho Collector lấy coord tiếp theo.
 
 Nếu nhật ký báo **đang chờ coord**, đó là trạng thái bình thường khi hàng đợi trống, không phải lỗi.
+
+Nếu popup không nhận coord: vào `edge://extensions`, bấm **Reload** extension rồi mở popup kiểm tra phải hiện
+`v0.3.3` và endpoint `127.0.0.1:8766`. Nếu vẫn hiện bản cũ, xóa extension cũ và **Load unpacked** lại thư mục
+`discord-coord-collector`; không dùng đồng thời hai bản.
 
 <!-- ẢNH 11: Popup Collector ở trạng thái Bắt đầu và log app nhận coord. -->
 

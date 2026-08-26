@@ -2,7 +2,7 @@ import json
 import unittest
 import urllib.request
 
-from avc.coord_source import CoordBridge, CoordItem, CoordQueue
+from avc.coord_source import COORD_BRIDGE_PORT, CoordBridge, CoordItem, CoordQueue
 
 
 class CoordQueueTests(unittest.TestCase):
@@ -41,6 +41,9 @@ class CoordQueueTests(unittest.TestCase):
 
 
 class CoordBridgeTests(unittest.TestCase):
+    def test_default_port_is_separate_from_wireless_adb(self):
+        self.assertEqual(8766, COORD_BRIDGE_PORT)
+
     def setUp(self):
         self.queue = CoordQueue()
         self.bridge = CoordBridge(self.queue, port=0)

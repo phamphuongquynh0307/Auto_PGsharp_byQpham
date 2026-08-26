@@ -1,8 +1,26 @@
-const COORD_RE = /^(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$/;
 const MAX_WAIT_MS = 20000;
 const POLL_MS = 250;
 const startedAt = Date.now();
 let finished = false;
+
+function formatCoordinate(latitude, longitude) {
+  const latText = String(latitude).trim().replace(/[−–—]/g, "-");
+  const lonText = String(longitude).trim().replace(/[−–—]/g, "-");
+  const lat = Number(latText);
+  const lon = Number(lonText);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return `${latText},${lonText}`;
+}
+
+function parseCoordinateValue(raw) {
+  const text = String(raw || "")
+    .replace(/[−–—]/g, "-")
+    .replace(/\u00a0/g, " ")
+    .trim();
+  const match = text.match(/(?:^|[^\d.-])(-?\d{1,2}(?:\.\d+)?)[ \t]*,[ \t]*(-?\d{1,3}(?:\.\d+)?)(?![\d.])/);
+  return match ? formatCoordinate(match[1], match[2]) : null;
+}
 
 function findAccessError() {
   const text = (document.body?.innerText || document.body?.textContent || "")
@@ -21,23 +39,37 @@ function findAccessError() {
 }
 
 function findCoordinate() {
-  for (const input of document.querySelectorAll("input, textarea, [data-coordinate], [data-coords]")) {
-    const value = String(
-      input.value || input.dataset?.coordinate || input.dataset?.coords || input.textContent || ""
-    ).trim();
-    if (COORD_RE.test(value)) return value;
+  const selectors = "input, textarea, [data-coordinate], [data-coords], [data-latitude][data-longitude], [data-lat][data-lng]";
+  for (const element of document.querySelectorAll(selectors)) {
+    const dataLatitude = element.dataset?.latitude || element.dataset?.lat || element.getAttribute?.("data-latitude") || element.getAttribute?.("data-lat");
+    const dataLongitude = element.dataset?.longitude || element.dataset?.lng || element.getAttribute?.("data-longitude") || element.getAttribute?.("data-lng");
+    const fromAttributes = dataLatitude && dataLongitude
+      ? formatCoordinate(dataLatitude, dataLongitude)
+      : null;
+    if (fromAttributes) return fromAttributes;
+
+    const value = element.value || element.dataset?.coordinate || element.dataset?.coords || element.textContent || "";
+    const parsed = parseCoordinateValue(value);
+    if (parsed) return parsed;
   }
 
   // Some versions render the value as ordinary text instead of an input. Use
   // a strict decimal-pair fallback so CP, IV and other page numbers do not match.
-  const pageText = document.body?.innerText || document.body?.textContent || "";
+  const pageText = (document.body?.innerText || document.body?.textContent || "").replace(/[−–—]/g, "-");
   const match = pageText.match(/(?:^|[^\d.-])(-?\d{1,2}\.\d{4,}),\s*(-?\d{1,3}\.\d{4,})(?![\d.])/m);
   if (match) {
-    const latitude = Number(match[1]);
-    const longitude = Number(match[2]);
-    if (latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180) {
-      return `${match[1]},${match[2]}`;
-    }
+    return formatCoordinate(match[1], match[2]);
+  }
+
+  // A few Pokedex100 builds keep the values in the URL rather than visible text.
+  try {
+    const params = new URL(location.href).searchParams;
+    const latitude = params.get("latitude") || params.get("lat");
+    const longitude = params.get("longitude") || params.get("lng") || params.get("lon");
+    const fromUrl = latitude && longitude ? formatCoordinate(latitude, longitude) : null;
+    if (fromUrl) return fromUrl;
+  } catch (_error) {
+    // The page URL is not needed for the regular DOM extraction path.
   }
   return null;
 }

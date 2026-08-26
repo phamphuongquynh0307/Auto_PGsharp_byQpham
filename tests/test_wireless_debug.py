@@ -64,6 +64,52 @@ bad-line _adb-tls-connect._tcp not-an-endpoint
         self.assertEqual("192.168.1.9:40001", serial)
         self.assertEqual(2, connect.call_count)
 
+    def test_discovery_retries_when_mdns_is_not_ready_yet(self):
+        with patch.object(
+            Device,
+            "discover_wireless",
+            side_effect=[[], ["192.168.1.4:43239"]],
+        ), patch.object(Device, "adb_connect") as connect, patch(
+            "avc.device.time.sleep"
+        ) as sleep:
+            serial = Device.connect_discovered_wireless(
+                discovery_attempts=2, retry_delay=0.25, adb_path="adb-test",
+            )
+
+        self.assertEqual("192.168.1.4:43239", serial)
+        connect.assert_called_once_with("192.168.1.4:43239", "adb-test")
+        sleep.assert_called_once_with(0.25)
+
+    def test_connect_accepts_success_reported_on_stderr(self):
+        with patch(
+            "avc.device._quiet_run",
+            side_effect=[
+                completed(b"", b"already connected to 192.168.1.4:43239\n"),
+                completed(b"device\n", b""),
+            ],
+        ) as run:
+            Device.adb_connect("192.168.1.4:43239", "adb-test")
+
+        self.assertEqual(
+            ["adb-test", "connect", "192.168.1.4:43239"],
+            run.call_args_list[0].args[0],
+        )
+
+    def test_connect_waits_for_device_state_after_adb_says_connected(self):
+        with patch(
+            "avc.device._quiet_run",
+            side_effect=[
+                completed(b"connected to 192.168.1.4:43239\n", b""),
+                completed(b"offline\n", b""),
+                completed(b"already connected to 192.168.1.4:43239\n", b""),
+                completed(b"device\n", b""),
+            ],
+        ) as run, patch("avc.device.time.sleep") as sleep:
+            Device.adb_connect("192.168.1.4:43239", "adb-test")
+
+        self.assertEqual(4, run.call_count)
+        sleep.assert_called_once_with(0.25)
+
 
 class WirelessDebugPairTests(unittest.TestCase):
     def test_pair_passes_code_as_one_argument_and_returns_endpoint(self):

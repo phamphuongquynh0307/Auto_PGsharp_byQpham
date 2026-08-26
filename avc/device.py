@@ -12,6 +12,7 @@ import subprocess
 import socket
 import struct
 import sys
+import threading
 import time
 
 import cv2
@@ -30,6 +31,12 @@ def _quiet_run(cmd, **kwargs):
 
 class AdbError(RuntimeError):
     pass
+
+
+# ADB's server is shared by all subprocesses. Serialising connect operations prevents a
+# refresh/reconnect and the Wireless Debug dialog from racing each other and leaving a freshly
+# discovered transport in the transient ``offline`` state.
+_ADB_CONNECT_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -145,14 +152,40 @@ class Device:
         adb_path: str | None = None,
         timeout: float = 10.0,
     ) -> None:
-        """Connect the adb server to a TCP device ('ip:port'). Raises AdbError on failure."""
+        """Connect and verify a TCP device ('ip:port'). Raises AdbError on failure.
+
+        ``adb connect`` can print ``connected`` before the transport has actually entered the
+        ``device`` state. Treating that intermediate result as ready is what caused the GUI to
+        start an endless reconnect loop on Wireless Debugging.
+        """
         adb = adb_path or find_adb()
-        proc = _quiet_run([adb, "connect", serial], capture_output=True, timeout=timeout)
-        out = (proc.stdout or b"").decode("utf-8", "replace")
-        # Success prints 'connected to …' or 'already connected to …'.
-        if "connected" not in out:
-            err = (proc.stderr or b"").decode("utf-8", "replace")
-            raise AdbError(f"adb connect {serial}: {(out + err).strip()}")
+        endpoint = cls.normalize_tcp_endpoint(serial)
+        last_detail = "no response"
+        for attempt in range(3):
+            with _ADB_CONNECT_LOCK:
+                proc = _quiet_run(
+                    [adb, "connect", endpoint], capture_output=True, timeout=timeout,
+                )
+                out = cls._proc_text(proc.stdout)
+                err = cls._proc_text(proc.stderr)
+                # Success prints 'connected to …' or 'already connected to …'. Some adb builds
+                # put the message on stderr, so inspect both streams.
+                detail = (out + err).strip()
+                if proc.returncode == 0 and "connected" in detail.lower():
+                    state = _quiet_run(
+                        [adb, "-s", endpoint, "get-state"],
+                        capture_output=True,
+                        timeout=min(5.0, timeout),
+                    )
+                    state_text = cls._proc_text(state.stdout).strip().lower()
+                    if state.returncode == 0 and state_text == "device":
+                        return
+                    last_detail = f"transport state={state_text or 'unknown'}"
+                else:
+                    last_detail = detail or "adb connect failed"
+            if attempt < 2:
+                time.sleep(0.25)
+        raise AdbError(f"adb connect {endpoint}: {last_detail}")
 
     @staticmethod
     def normalize_tcp_endpoint(endpoint: str) -> str:
@@ -233,24 +266,44 @@ class Device:
         cls,
         preferred_hosts: list[str] | tuple[str, ...] = (),
         adb_path: str | None = None,
+        discovery_attempts: int = 1,
+        retry_delay: float = 0.5,
     ) -> str | None:
-        """Connect the first paired Wireless Debugging endpoint advertised over mDNS.
+        """Connect a paired Wireless Debugging endpoint advertised over mDNS.
 
-        Previously used phone IPs are preferred when several devices are visible on the LAN.
+        Android may publish the service a moment after Wireless Debugging is enabled, and its
+        TLS port can rotate after a reconnect. A short bounded retry window handles that race
+        without making a refresh hang indefinitely. Previously used phone IPs are preferred when
+        several devices are visible on the LAN.
         """
         preferred = {host.strip("[]") for host in preferred_hosts if host}
-        endpoints = cls.discover_wireless(adb_path)
-
-        def priority(endpoint: str) -> tuple[int, str]:
-            host = endpoint.rsplit(":", 1)[0].strip("[]")
-            return (0 if host in preferred else 1, endpoint)
-
-        for endpoint in sorted(endpoints, key=priority):
+        attempts = max(1, int(discovery_attempts))
+        delay = max(0.0, float(retry_delay))
+        last_error: Exception | None = None
+        for attempt in range(attempts):
             try:
-                cls.adb_connect(endpoint, adb_path)
-                return endpoint
-            except (AdbError, subprocess.SubprocessError):
-                continue
+                endpoints = cls.discover_wireless(adb_path)
+                last_error = None
+            except (AdbError, subprocess.SubprocessError) as exc:
+                # The adb mDNS backend can briefly report a stopped daemon while the phone or
+                # adb server is settling. Keep the bounded retry window useful for that case.
+                endpoints = []
+                last_error = exc
+
+            def priority(endpoint: str) -> tuple[int, str]:
+                host = endpoint.rsplit(":", 1)[0].strip("[]")
+                return (0 if host in preferred else 1, endpoint)
+
+            for endpoint in sorted(endpoints, key=priority):
+                try:
+                    cls.adb_connect(endpoint, adb_path)
+                    return endpoint
+                except (AdbError, subprocess.SubprocessError):
+                    continue
+            if attempt + 1 < attempts and delay:
+                time.sleep(delay)
+        if last_error is not None:
+            raise last_error
         return None
 
     @classmethod
