@@ -58,14 +58,12 @@ class VisibilityTests(unittest.TestCase):
         self.assertFalse(self._shown("post_throw"))
         self.assertFalse(self._shown("flee_taps"))
         self.assertFalse(self._shown("flee_gap"))
-        self.assertTrue(self._shown("no_balls_goplus"))
 
     def test_quick_catch_shows_its_own_knobs(self):
         self._configure("catch", "quick")
 
         self.assertTrue(self._shown("quick_flick"))
         self.assertTrue(self._shown("flee_taps"))
-        self.assertFalse(self._shown("no_balls_goplus"))
 
     def test_shundo_hides_the_catching_rows_but_keeps_the_flee_taps(self):
         self._configure("shundo")
@@ -81,7 +79,7 @@ class VisibilityTests(unittest.TestCase):
         self._configure("catch", "normal", advanced=True)
         self.assertTrue(self._shown("touch_delay"))
 
-    def test_refill_duration_stays_visible_when_only_autowalk_or_goplus_reads_it(self):
+    def test_refill_duration_stays_visible_when_only_autowalk_reads_it(self):
         """Nothing spins in a plain catching run, so the circle radius would be a control that
         changes nothing — the exact thing this whole sync exists to prevent."""
         self._configure("catch", "normal")
@@ -116,11 +114,10 @@ class VisibilityTests(unittest.TestCase):
         self.assertTrue(self._shown("feed_wait"))
 
     def test_spinning_to_refill_is_offered_without_a_key(self):
-        """Go Plus needs the paid key, so Quick Catch hides it — the screen spinner does not,
-        and hiding it there would leave that user no refill path at all."""
+        """Spinning stops is the refill path that needs no PGSharp key, so Quick Catch — the
+        no-key style — must still offer it, or that user has no refill path at all."""
         self._configure("catch", "quick")
 
-        self.assertFalse(self._shown("no_balls_goplus"))
         self.assertTrue(self._shown("no_balls_spin"))
 
     def test_spin_mode_shows_its_own_group_and_hides_the_catching_one(self):
@@ -153,7 +150,7 @@ class HiddenPersistenceTests(unittest.TestCase):
             root = tk.Tk()
             app = gui.App(root)
             app.throw_power.set(1234)
-            app.no_balls_goplus.set(False)
+            app.no_balls_spin.set(True)
             app.target_iv_atk.set(15)
             app.target_iv_def.set(14)
             app.target_iv_sta.set(13)
@@ -165,14 +162,14 @@ class HiddenPersistenceTests(unittest.TestCase):
             with open(gui._settings_path(), encoding="utf-8") as fh:
                 saved = json.load(fh)
             self.assertEqual(1234, saved["throw_power"])
-            self.assertFalse(saved["no_balls_goplus"])
+            self.assertTrue(saved["no_balls_spin"])
             self.assertEqual((15, 14, 13), (
                 saved["target_iv_atk"], saved["target_iv_def"], saved["target_iv_sta"]))
 
             root = tk.Tk()
             reloaded = gui.App(root)
             self.assertEqual(1234, reloaded.throw_power.get())
-            self.assertFalse(reloaded.no_balls_goplus.get())
+            self.assertTrue(reloaded.no_balls_spin.get())
             self.assertEqual((15, 14, 13), (
                 reloaded.target_iv_atk.get(), reloaded.target_iv_def.get(),
                 reloaded.target_iv_sta.get()))

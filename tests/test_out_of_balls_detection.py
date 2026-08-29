@@ -9,6 +9,7 @@ import numpy as np
 from avc.catch import (
     CURRENT_OUT_OF_BALLS_REGION, LEGACY_OUT_OF_BALLS_REGION, CatchConfig, CatchRoutine,
 )
+from avc.vision import find_throw_ball_hub
 
 
 class FrameDevice:
@@ -46,7 +47,7 @@ BALL_CENTRE = (610, 2615)   # base-resolution centre of the throwable ball
 BALL_RADIUS = 225
 
 
-def encounter_frame(dome=None, background=GRASS):
+def encounter_frame(dome=None, background=GRASS, center=BALL_CENTRE):
     """A base-resolution encounter screen, with the throwable ball drawn when `dome` is given.
 
     `dome` is the ball type's colour (BGR): red = Poké, blue = Great, near-black = Ultra. Only
@@ -56,12 +57,12 @@ def encounter_frame(dome=None, background=GRASS):
     frame = np.full((2712, 1220, 3), background, dtype=np.uint8)
     if dome is None:
         return frame                                     # empty bag: no selector at all
-    cv2.circle(frame, BALL_CENTRE, BALL_RADIUS, (245, 245, 245), -1)     # white lower half
-    cv2.ellipse(frame, BALL_CENTRE, (BALL_RADIUS, BALL_RADIUS), 0, 180, 360, dome, -1)
-    cv2.line(frame, (BALL_CENTRE[0] - BALL_RADIUS, BALL_CENTRE[1]),
-             (BALL_CENTRE[0] + BALL_RADIUS, BALL_CENTRE[1]), (18, 18, 18), 26)
-    cv2.circle(frame, BALL_CENTRE, 80, (18, 18, 18), -1)                 # black band
-    cv2.circle(frame, BALL_CENTRE, 55, (215, 215, 215), -1)              # light hub
+    cv2.circle(frame, center, BALL_RADIUS, (245, 245, 245), -1)     # white lower half
+    cv2.ellipse(frame, center, (BALL_RADIUS, BALL_RADIUS), 0, 180, 360, dome, -1)
+    cv2.line(frame, (center[0] - BALL_RADIUS, center[1]),
+             (center[0] + BALL_RADIUS, center[1]), (18, 18, 18), 26)
+    cv2.circle(frame, center, 80, (18, 18, 18), -1)                 # black band
+    cv2.circle(frame, center, 55, (215, 215, 215), -1)              # light hub
     return frame
 
 
@@ -102,6 +103,25 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
                                                 game_scale=0.66)
 
         self.assertTrue(routine._ball_ready(frame))
+
+    def test_hub_detector_follows_a_shifted_ball_instead_of_a_fixed_coordinate(self):
+        shifted = (700, 2570)
+        frame = encounter_frame((30, 30, 225), center=shifted)
+
+        found = find_throw_ball_hub(frame)
+
+        self.assertIsNotNone(found)
+        self.assertLessEqual(abs(found[0] - shifted[0]), 2)
+        self.assertLessEqual(abs(found[1] - shifted[1]), 2)
+
+    def test_detected_hub_moves_the_throw_start_but_manual_alignment_still_wins(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = CatchConfig()
+        self.assertEqual((700, 2335), routine._throw_point_from_hub((700, 2570)))
+
+        routine.config.force_ball = True
+        routine.config.ball_fallback = (640, 2300)
+        self.assertEqual((640, 2300), routine._throw_point_from_hub((700, 2570)))
 
 
 class MissingBallDetectionTests(unittest.TestCase):

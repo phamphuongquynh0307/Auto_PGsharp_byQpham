@@ -38,7 +38,8 @@ from . import uidump
 from .resources import resource_path
 from .vision import (
     best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
-    find_dialog_buttons, find_disconnected_goplus, find_pokestops, load_template,
+    find_throw_ball_hub,
+    find_dialog_buttons, find_pokestops, load_template,
     slot_has_pokemon,
 )
 
@@ -197,6 +198,9 @@ class CatchConfig:
     # a full bag empty the moment the game switched type; the hub looks the same on every type.
     ball_hub: tuple[int, int] = (610, 2615)
     ball_hub_radius: int = 90
+    # Manual alignment is an explicit override. In automatic mode the throw point follows the
+    # detected ball hub; the GUI sets this flag only when applying a saved hand-aligned point.
+    force_ball: bool = False
     # Encounter signal: the raspberry glyph inside the bottom-left Berry button. The fixed
     # circular footprint prevents red Pokemon, thrown balls, and map controls from being
     # mistaken for an encounter. The detector scans for and returns the button's real centre;
@@ -223,10 +227,6 @@ class CatchConfig:
     flee_xy: tuple[int, int] = (120, 170)   # encounter flee (running-man) button, top-left
     no_balls_pause: float = 600.0           # seconds to hold off catching when out of balls (10 min)
     no_balls_walk_interval: float = 15.0    # re-check AutoWalk this often during the hold-off
-    # PGSharp's Go Plus support requires a paid key. The GUI only enables this for normal/keyed
-    # catching; the quick/no-key path always leaves the accessory alone.
-    start_goplus_on_no_balls: bool = True
-    goplus_after_autowalk_wait: float = 1.0  # let AutoWalk settle before starting Go Plus
 
     # ---- PokéStop spinning (the "Quay stop" mode, and optionally the out-of-balls hold) ----
     # An unspun stop is one flat bright blue and a spun one is violet, so the colour test is
@@ -340,6 +340,24 @@ class CatchConfig:
     cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
     popup_threshold: float = 0.7
     popup_debounce: float = 0.75  # ignore stale stream frames after one popup tap
+    # Every popup handler above recognises its dialog by a template cropped from one phone
+    # running one PGSharp/Pokemon GO build. A build that draws a modal differently — another
+    # language, theme, game version, emulator — leaves the routine staring at something it has
+    # no handler for, and it stalls there until a human notices. That is the single most common
+    # way this fails on somebody else's device.
+    #
+    # The escape is the one a person would use: press Android BACK. It needs no template, no
+    # coordinate, no calibration and no language, and it dismisses most of Pokemon GO's modals
+    # (weather warning, level-up, medal, Pokemon detail, the Pokestop photo disc). It is not a
+    # guaranteed dismissal — some Unity screens swallow BACK — but it costs nothing to try and
+    # asks nothing of the user.
+    #
+    # It is deliberately slow and rare: a blind key press is only safe once the screen has been
+    # unrecognisable for a long time, which is what separates a real stall from the ordinary
+    # second spent on a loading frame.
+    stuck_back: bool = True
+    stuck_back_after: float = 12.0     # unrecognisable this long before the first BACK
+    stuck_back_interval: float = 8.0   # and at most one BACK per this long
     # The Pokéstop photo-disc screen's own 'X' sits at a fixed spot at the bottom center;
     # used as the tap fallback when template matching misses it (the backdrop varies).
     pokestop_close_xy: tuple[int, int] = (610, 2540)
@@ -539,6 +557,11 @@ class CatchStats:
 
 
 class CatchRoutine:
+    # How often the stall watchdog re-reads the screen. _handle_popups runs at poll_interval,
+    # but the answer feeds a timer measured in tens of seconds, so sampling every poll would
+    # buy nothing and cost two detections a frame.
+    STUCK_SAMPLE = 1.0
+
     def __init__(self, device: Device, config: CatchConfig | None = None) -> None:
         self.device = device
         self.config = config or CatchConfig()
@@ -581,6 +604,7 @@ class CatchRoutine:
         self._force_bottom_value: int | None = None               # its floor, cached for a TTL
         self._force_bottom_at = 0.0
         self._enc_berry_at: tuple[int, int] | None = None  # actual detected Berry-button centre
+        self._throw_hub_at: tuple[int, int] | None = None  # actual large-ball centre on latest frame
         # Game-UI render scale measurement: readings collected, and whether the question is
         # settled (either adopted or judged close enough). See _sample_game_scale.
         self._game_samples: list[float] = []
@@ -606,6 +630,8 @@ class CatchRoutine:
         # AutoWalk and dry-spell alerts out of the middle of an encounter.
         self._cycle_result = "idle"
         self._ui_dump_at = 0.0
+        self._ui_state_cache = None
+        self._ui_state_cache_at = 0.0
         self._phases: list[tuple[str, float]] = []
         self._phase_t0 = 0.0
         self._cooldown_until = 0.0      # monotonic deadline; 0 means clear
@@ -682,6 +708,14 @@ class CatchRoutine:
         # every time the refill wait expires. A successful throw arms the warning again.
         self._no_balls_alerted = False
         self._popup_block_until = 0.0
+        # Stall watchdog: when the screen stopped being recognisable, when BACK was last sent,
+        # and when the (rate-limited) recognisability sample was last taken.
+        self._stuck_since = 0.0
+        self._stuck_back_at = 0.0
+        self._stuck_checked_at = 0.0
+        # Called with the frame each time the watchdog fires, so the GUI can keep a picture of
+        # what the bot could not read. Set by the GUI; ignored by the plain CLI loop.
+        self._on_stuck = None
         # Control flags used by the GUI; ignored by the plain CLI loop.
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
@@ -825,7 +859,30 @@ class CatchRoutine:
     def _ball_in(self, frame, *, strict: bool = False) -> tuple[int, int] | None:
         # Return the throw point only after the independent Berry-button detector proves that
         # the encounter UI is open.
-        return self.config.ball_fallback if self._in_encounter(frame, strict=strict) else None
+        if not self._in_encounter(frame, strict=strict):
+            return None
+        hub = self._throw_hub_in(frame)
+        return self._throw_point_from_hub(hub) if hub is not None else self.config.ball_fallback
+
+    def _throw_hub_in(self, frame) -> tuple[int, int] | None:
+        """Find and remember the real centre of the currently-resting throwable ball."""
+        cfg = self.config
+        game_scale = cfg.game_scale or (frame.shape[1] / BASE_RESOLUTION[0])
+        hub = find_throw_ball_hub(frame, scale=game_scale)
+        if hub is not None:
+            self._throw_hub_at = hub
+        return hub
+
+    def _throw_point_from_hub(self, hub: tuple[int, int] | None) -> tuple[int, int]:
+        """Map a detected hub to the safe upper-half swipe start, preserving manual overrides."""
+        cfg = self.config
+        if hub is None or getattr(cfg, "force_ball", False):
+            return cfg.ball_fallback
+        # Preserve the authored relationship between the hub and throw point, scaled by the
+        # game layer. This follows a shifted ball without starting the flick on its centre button.
+        dx = cfg.ball_fallback[0] - cfg.ball_hub[0]
+        dy = cfg.ball_fallback[1] - cfg.ball_hub[1]
+        return hub[0] + dx, hub[1] + dy
 
     def _ball_ready(self, frame) -> bool:
         """True when a throwable ball — *of any type* — is sitting at the throw start point.
@@ -843,6 +900,11 @@ class CatchRoutine:
         is also what keeps flat scenery out: dark ground gives the band with no hub, and a
         pale sky or snow map gives the hub with no band.
         """
+        # Prefer the structural whole-frame detector. It follows the real ball when a different
+        # aspect ratio, navigation bar or display-size setting shifts the game UI.
+        if self._throw_hub_in(frame) is not None:
+            return True
+
         cx, cy = self.config.ball_hub
         radius = max(8, self.config.ball_hub_radius)
         patch = frame[max(0, cy - radius):cy + radius,
@@ -1203,12 +1265,33 @@ class CatchRoutine:
             self._trace("ui_dump_fail",
                         "Không đọc được view tree (UI đang animate?); dùng nhận diện ảnh.", 0.0)
             return None
+        self._ui_state_cache = state
+        self._ui_state_cache_at = time.monotonic()
         bar = self._ui_nearby_bar(state)
         if bar:
             self._remember_ui_nearby_slot(bar[0])
         # Every dump refreshes the cooldown for free, whatever it was taken for.
         self._note_cooldown(state.cooldown)
         return state
+
+    def _recent_ui_state(self, max_age: float = 1.5):
+        """A just-read hierarchy result, without turning a fast pixel path into another dump."""
+        state = getattr(self, "_ui_state_cache", None)
+        seen_at = getattr(self, "_ui_state_cache_at", 0.0)
+        return state if state is not None and time.monotonic() - seen_at <= max_age else None
+
+    def _ui_autowalk_row(self):
+        """Exact AutoWalk row/state from PGSharp's Android views, used after pixels miss."""
+        if not getattr(self.config, "use_ui_dump", False):
+            return None
+        state = self._recent_ui_state()
+        if state is None:
+            state = self._ui_state()
+        row = state.autowalk_row if state is not None else None
+        if row is None:
+            return None
+        _label, target = row
+        return target, bool(state.autowalk_paused)
 
     def _ui_nearby_bar(self, state) -> list[tuple[int, int]] | None:
         """The *Nearby* bar's occupied slots out of a dump, top entry first.
@@ -1696,15 +1779,42 @@ class CatchRoutine:
         # "Stop AutoWalk?" and its siblings: a stock two-button dialog. Handled before the
         # template-based popups because it is the one that actually blocks the flow here, and
         # because it is recognised by geometry rather than by a template that can go stale.
-        buttons = find_dialog_buttons(frame, self.config.dialog_region)
+        has_ui_dialog_proof = bool(getattr(self.config, "use_ui_dump", False))
+        buttons = find_dialog_buttons(
+            frame,
+            self.config.dialog_region,
+            broad_accent=has_ui_dialog_proof,
+            min_text_height=0 if has_ui_dialog_proof else None,
+        )
         if len(buttons) >= 2:
-            target = min(buttons, key=lambda b: b[0])      # leftmost = CANCEL
-            self.device.tap(*target)
-            self.stats.last_event = "popup"
-            self._trace("dialog_cancel",
-                        f"Hộp thoại chặn luồng ({len(buttons)} nút); bấm CANCEL tại {target}.",
-                        0.0)
-            return True
+            target = None
+            if getattr(self.config, "use_ui_dump", False):
+                # Geometry is a cheap candidate only. Android supplies the exact action text and
+                # bounds across DPI/themes/languages, and also prevents a Pokemon detail screen
+                # with two cyan stat groups from becoming a destructive POWER UP tap.
+                state = self._ui_state(force=True)
+                target = state.cancel_button if state is not None else None
+                if target is None:
+                    self._trace(
+                        "dialog_unconfirmed",
+                        "Thấy hình giống hộp thoại nhưng view tree không có CANCEL/HỦY; không bấm đoán.",
+                        0.0,
+                    )
+            else:
+                target = min(buttons, key=lambda b: b[0])  # no hierarchy support: old fallback
+            if target is None:
+                buttons = []
+            else:
+                self.device.tap(*target)
+                # The hierarchy was captured while a modal covered the screen. Never reuse its
+                # behind-dialog AutoWalk/menu state after the tap changes that state.
+                self._ui_state_cache = None
+                self._ui_state_cache_at = 0.0
+                self.stats.last_event = "popup"
+                self._trace("dialog_cancel",
+                            f"Hộp thoại chặn luồng ({len(buttons)} nút); bấm CANCEL tại {target}.",
+                            0.0)
+                return True
 
         # Medal/share screens have a real close X at the bottom, but their green SHARE button
         # is visually close enough to the weather warning's "I AM SAFE" pill to score just over
@@ -1858,9 +1968,51 @@ class CatchRoutine:
                 self.device.tap(*m[0].center)
                 self.stats.last_event = "popup"
                 return True
+        # Nothing above recognised this screen. If it stays that way, fall back to the escape
+        # that needs no template at all — see CatchConfig.stuck_back.
+        if getattr(self.config, "stuck_back", False) and self._stuck_back_due(frame):
+            self.device.back()
+            self.stats.last_event = "popup"
+            self._trace("stuck_back",
+                        "Màn hình lạ quá lâu, không nhận ra popup nào; bấm phím Back để thoát.",
+                        0.0)
+            hook = self._on_stuck
+            if hook is not None:
+                try:
+                    hook(frame)
+                except Exception:  # noqa: BLE001 - a diagnostic must never end a run
+                    pass
+            return True
         # The high-confidence X search at the start is the only generic close-button path.
         # A second pass at 0.70 used to match animated map art and create unexplained taps.
         return False
+
+    def _stuck_back_due(self, frame) -> bool:
+        """Whether the stall watchdog should send BACK now, arming the next one if so.
+
+        Two things make a blind key press safe enough to send. The screen must be neither the
+        map (Nearby bar in view) nor an encounter — BACK inside an encounter abandons the
+        Pokemon, which is the one outcome worse than staying stuck. And it must have been that
+        way continuously for stuck_back_after, so a loading frame between screens can never
+        qualify.
+
+        If BACK lands on the bare map anyway, Pokemon GO raises its "quit?" prompt — a real
+        Android AlertDialog, which the dialog handler above already answers with CANCEL.
+        """
+        now = time.monotonic()
+        if now - self._stuck_checked_at >= self.STUCK_SAMPLE:
+            self._stuck_checked_at = now
+            if self._bar_visible(frame) or self._in_encounter(frame):
+                self._stuck_since = 0.0
+            elif not self._stuck_since:
+                self._stuck_since = now
+        if not self._stuck_since or now - self._stuck_since < self.config.stuck_back_after:
+            return False
+        if now - self._stuck_back_at < self.config.stuck_back_interval:
+            return False
+        self._stuck_back_at = now
+        self._stuck_since = 0.0      # give the press a full window to prove it worked
+        return True
 
     def _drain_popups(self, frame=None) -> bool:
         """Tap once, then debounce stale stream frames so the same control cannot toggle."""
@@ -1870,7 +2022,7 @@ class CatchRoutine:
         self._interruptible_sleep(max(0.06, self.config.poll_interval))
         return True
 
-    def _autowalk_row_in(self, frame, star: tuple[int, int] | None):
+    def _autowalk_row_visual_in(self, frame, star: tuple[int, int] | None):
         """Find the AutoWalk row. Returns ((x, y), paused) or None.
 
         Both row states are tried: the '⊘' paused icon and the plain route glyph. Knowing which
@@ -1882,17 +2034,39 @@ class CatchRoutine:
         if star is not None:
             sx, sy = star
             region = (sx - cfg.s(150), sy, cfg.s(300), cfg.s(700))
+        paused = row = None
         if self._aw_paused is not None:
             m = find(frame, self._aw_paused, threshold=cfg.autowalk_paused_threshold,
                      scales=self._scales, grayscale=False, region=region, max_matches=1)
-            if m:
-                return m[0].center, True
+            paused = m[0] if m else None
         if self._aw_row is not None:
             m = find(frame, self._aw_row, threshold=cfg.autowalk_row_threshold,
                      scales=self._scales, region=region, max_matches=1)
-            if m:
-                return m[0].center, False
+            row = m[0] if m else None
+        # Both templates are looked for, and when both clear their threshold the *stronger*
+        # one decides. Taking whichever was tested first is what this used to do, and on a
+        # real 1220x2712 phone the '⊘' crop scraped 0.72 off a neighbouring menu row while the
+        # running-row glyph scored 0.97 on the actual AutoWalk row 100px below it — so the
+        # routine read a running walk as paused and tapped the wrong row, every empty cycle,
+        # with the '⊘' it was chasing never going away because it was never there.
+        if paused is not None and row is not None:
+            return ((paused.center, True) if paused.score >= row.score
+                    else (row.center, False))
+        if paused is not None:
+            return paused.center, True
+        if row is not None:
+            return row.center, False
         return None
+
+    def _autowalk_row_in(self, frame, star: tuple[int, int] | None):
+        """Find AutoWalk by pixels, then fall back to its exact Android view node.
+
+        The fallback is what makes this portable across PGSharp icon revisions and emulator
+        rendering. It is rate-limited by :meth:`_ui_state`; a hierarchy already read while
+        confirming an empty Nearby bar is reused for free.
+        """
+        row = self._autowalk_row_visual_in(frame, star)
+        return row if row is not None else self._ui_autowalk_row()
 
     def _star_in(self, frame) -> tuple[int, int] | None:
         """The PGSharp menu star, searched near where it was last seen before the whole frame.
@@ -1959,17 +2133,25 @@ class CatchRoutine:
         PGSharp overlay isn't up, so there is no row to tap anyway.
         """
         cfg = self.config
+
+        def ui_paused():
+            row = self._ui_autowalk_row()
+            return (row[0], 1.0) if row is not None and row[1] is True else None
+
         if self._aw_paused is None or self._star is None:
-            return None
+            return ui_paused()
         star = self._star_in(frame)
         if star is None:
-            return None
+            return ui_paused()
         sx, sy = star
         region = (sx - cfg.s(150), sy, cfg.s(300), cfg.s(700))
         hit = find(frame, self._aw_paused, threshold=cfg.autowalk_paused_threshold,
                    scales=self._scales, grayscale=False, region=region, max_matches=1)
         if not hit:
-            return None
+            found = ui_paused()
+            if found is not None:
+                self._aw_offset = (found[0][0] - sx, found[0][1] - sy)
+            return found
         target = hit[0].center
         # Same self-correction as _try_autowalk: every real sighting re-learns the offset.
         self._aw_offset = (target[0] - sx, target[1] - sy)
@@ -2079,25 +2261,6 @@ class CatchRoutine:
         self.device.tap(*target)
         return True
 
-    def _try_start_goplus(self) -> bool:
-        """Tap Go Plus once, but only while its disconnected button is visibly present."""
-        frame = self.device.screenshot(fresh=True)
-        if self._in_encounter(frame):
-            self._trace("goplus_skip_encounter", "Đang trong encounter; không bấm Go Plus.", 0.0)
-            return False
-        game_scale = Layout(*self.config.screen, scale=self.config.game_scale).s
-        target = find_disconnected_goplus(frame, scale=game_scale)
-        if target is None:
-            self._trace(
-                "goplus_not_disconnected",
-                "Không thấy nút Go Plus ở trạng thái tắt; không bấm để tránh ngắt kết nối đang chạy.",
-                0.0,
-            )
-            return False
-        self.device.tap(*target)
-        self._trace("goplus_start", f"Đã bấm khởi động Go Plus tại {target}.", 0.0)
-        return True
-
     # -- PokéStop spinning -----------------------------------------------------------
     def _spin_recent(self, x: int, y: int) -> bool:
         """True if this spot was tapped recently enough to be worth skipping."""
@@ -2166,7 +2329,6 @@ class CatchRoutine:
         # We may have fled from an encounter, so the walk state is unknown: force one fresh
         # AutoWalk start. Afterwards _try_autowalk only re-taps a stalled (paused) row.
         self._autowalk_active = False
-        goplus_started = not (cfg.start_goplus_on_no_balls and not cfg.quick_catch)
         while time.monotonic() < deadline and not self.stop_event.is_set():
             self._wait_if_paused()
             if self.stop_event.is_set():
@@ -2174,18 +2336,8 @@ class CatchRoutine:
             self._drain_popups()
             if self._try_autowalk():
                 self._autowalk_active = True
-            # Try until the disconnected button is actually found and tapped. The detector never
-            # returns a connected green button, so retries cannot disconnect an active Go Plus;
-            # they only recover from the menu/button not being ready on the first frame.
-            if self._autowalk_active and not goplus_started:
-                self._interruptible_sleep(cfg.goplus_after_autowalk_wait)
-                started = self._try_start_goplus()
-                goplus_started = started
-                if started and on_event:
-                    self.stats.last_event = "goplus_started"
-                    on_event(self.stats, False)
             remaining = max(0.0, deadline - time.monotonic())
-            refill_mode = "AutoWalk + Go Plus" if cfg.start_goplus_on_no_balls else "AutoWalk"
+            refill_mode = "AutoWalk"
             if cfg.spin_on_no_balls:
                 refill_mode += " + quay stop trên màn"
             self._trace(
@@ -2194,7 +2346,7 @@ class CatchRoutine:
                 60.0,
             )
             # Spinning stops is what actually refills the bag, so spend the interval doing it
-            # rather than standing still. Works with or without a PGSharp key, unlike Go Plus.
+            # rather than standing still, and it needs no PGSharp key.
             if cfg.spin_on_no_balls:
                 self._spin_for(cfg.no_balls_walk_interval)
             else:
@@ -2437,6 +2589,9 @@ class CatchRoutine:
             if ball_state == "closed":
                 closed = True
                 return threw
+            # _wait_for_ball_state has just located the current resting ball. Follow that real
+            # position unless the user explicitly saved a hand-aligned throw point.
+            ball_xy = self._throw_point_from_hub(getattr(self, "_throw_hub_at", None))
             # Reconfirm on a new frame immediately before touching the screen. This closes the
             # stale-frame race where the encounter vanished during the delay and the queued
             # throw landed on the map's centre Poké Ball.
@@ -2444,7 +2599,7 @@ class CatchRoutine:
                 closed = True
                 if attempt == 0:
                     self._trace("throw_safety_cancel",
-                                "Hủy ném: frame mới không còn thấy bóng đỏ trong đúng khung căn tay.", 0.0)
+                                "Hủy ném: frame mới không còn thấy nút Berry của encounter.", 0.0)
                 break
             self._trace(
                 "throw_start",
@@ -3013,15 +3168,29 @@ class CatchRoutine:
         box(cfg.out_of_balls_region, (0, 140, 255), "x0")
 
         # Throw: start point and where the flick ends.
-        bx, by = cfg.ball_fallback
+        hub = self._throw_hub_in(frame)
+        bx, by = self._throw_point_from_hub(hub)
         ready = self._ball_ready(frame)
         cv2.circle(img, (bx, by), max(10, cfg.s(34)), (0, 255, 0) if ready else (0, 160, 0), 4)
         # The window "còn bóng?" is actually read in — the ball's centre button, not its dome.
-        cv2.circle(img, cfg.ball_hub, cfg.ball_hub_radius,
+        cv2.circle(img, hub or cfg.ball_hub, cfg.ball_hub_radius,
                    (0, 255, 0) if ready else (0, 160, 0), 3)
         cv2.arrowedLine(img, (bx, by), (bx, by + cfg.throw_dy), (0, 255, 0), 4, tipLength=0.08)
         cv2.putText(img, "THROW", (bx + cfg.s(45), by), cv2.FONT_HERSHEY_SIMPLEX,
                     0.9, (0, 255, 0), 2)
+
+        # AutoWalk: make the portability fallback visible to users before they start a run.
+        star = self._star_in(frame)
+        row = self._autowalk_row_visual_in(frame, star)
+        if star is not None:
+            cv2.drawMarker(img, star, (0, 215, 255), cv2.MARKER_CROSS, cfg.s(55), 3)
+        if row is not None:
+            aw_xy, paused = row
+            colour = (0, 165, 255) if paused else (0, 255, 0)
+            cv2.circle(img, aw_xy, max(10, cfg.s(34)), colour, 4)
+            cv2.putText(img, "AUTOWALK PAUSED" if paused else "AUTOWALK RUNNING",
+                        (aw_xy[0] + cfg.s(45), aw_xy[1]), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.72, colour, 2)
 
         # Nearby bar: the '@' that proves it is on screen, slot 1, and the slot actually chosen.
         slot1 = cfg.nearby_slot if cfg.force_slot else self._slot_in(frame)

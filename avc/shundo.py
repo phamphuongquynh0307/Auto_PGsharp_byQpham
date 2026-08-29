@@ -560,13 +560,30 @@ class ShundoRoutine:
         # buttons and choose the left one. In Shundo this is the only native two-button modal
         # raised by the teleport path, therefore it has the same terminal meaning as the
         # template-backed Go Plus warning above.
-        buttons = find_dialog_buttons(frame, self.config.dialog_region)
+        ui_dump = getattr(self.device, "ui_dump", None)
+        buttons = find_dialog_buttons(
+            frame,
+            self.config.dialog_region,
+            broad_accent=callable(ui_dump),
+            min_text_height=0 if callable(ui_dump) else None,
+        )
         if len(buttons) >= 2:
-            target = min(buttons, key=lambda b: b[0])
-            self.device.tap(*target)
-            self._teleport_blocked = True
-            self.stats.last_event = "popup"
-            return True
+            target = None
+            if callable(ui_dump):
+                state = uidump.parse(ui_dump() or "")
+                target = state.cancel_button if state is not None else None
+            else:
+                target = min(buttons, key=lambda b: b[0])
+            if target is not None:
+                # CANCEL it — never confirm a teleport that a warning is asking about. But do
+                # NOT conclude from this that Go Plus is connected: "some two-ish buttons in a
+                # centre box, one of them labelled CANCEL" describes a great many Android
+                # dialogs, and ending the whole run on that evidence turned any stray dialog
+                # into a permanent, silent stop. Only the Go Plus warning's own template, which
+                # is matched in its own tight region above, is allowed to reach that verdict.
+                self.device.tap(*target)
+                self.stats.last_event = "popup"
+                return True
         # NOTE: there used to be a "PGSharp menu accidentally left open -> tap the star to close
         # it" handler here. The menu's expanded row list is the normal, permanent state of this
         # UI, so its Settings gear matches on every ordinary map frame — the handler fired every

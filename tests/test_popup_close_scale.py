@@ -20,6 +20,25 @@ def _popup_config():
 
 
 class PopupCloseScaleTests(unittest.TestCase):
+    def test_catch_geometry_is_confirmed_by_exact_android_cancel_node(self):
+        taps = []
+        routine = object.__new__(CatchRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = True
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._cancel_btn = None
+        routine._trace = lambda *_args: None
+        routine._ui_state = lambda force=False: SimpleNamespace(cancel_button=(515, 1510))
+
+        with patch("avc.catch.find_dialog_buttons",
+                   return_value=[(500, 1510), (760, 1510)]):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(515, 1510)], taps)
+
     def test_inner_x_matches_when_the_button_background_changed(self):
         template = load_template("templates/close_btn_white.png")
         th, tw = template.shape[:2]
@@ -142,7 +161,11 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual([(490, 1520)], taps)
-        self.assertTrue(routine._teleport_blocked)
+        # CANCEL is pressed, but the run is NOT declared dead. "Two buttons in a centre box,
+        # the left one chosen" describes a great many Android dialogs, and treating that as
+        # proof that Go Plus is connected turned any stray dialog into a permanent silent stop.
+        # Only the Go Plus warning's own template, matched in its own tight region, may do that.
+        self.assertFalse(routine._teleport_blocked)
 
     def test_pokestop_uses_calibrated_close_point_when_x_template_misses(self):
         taps = []

@@ -32,58 +32,6 @@ def _to_gray(img: np.ndarray) -> np.ndarray:
     return img
 
 
-def find_disconnected_goplus(scene: np.ndarray, *, scale: float = 1.0) -> tuple[int, int] | None:
-    """Locate Pokémon GO's disconnected accessory button in the upper-right icon rail.
-
-    The rail is dynamic: event buttons come and go, moving Go Plus vertically, so a remembered
-    coordinate is unsafe. The disconnected button itself is stable — a muted red upper
-    semicircle over a blue-grey lower half with a dark centre. Only the narrow right-edge rail is
-    searched, and the red cap must have the measured size/shape of that control. A connected or
-    connecting button is deliberately not returned, so callers cannot turn Go Plus back off.
-    """
-    if scene is None or scene.ndim != 3 or scene.shape[2] < 3:
-        return None
-    h, w = scene.shape[:2]
-    s = max(0.25, float(scale or 1.0))
-    # The icon hugs the right edge, while its vertical slot moves as event icons are inserted.
-    x0 = max(0, w - int(round(160 * s)))
-    y0 = max(0, int(round(100 * s)))
-    y1 = min(h, int(round(1100 * s)))
-    if x0 >= w or y0 >= y1:
-        return None
-    roi = scene[y0:y1, x0:w]
-    b, g, r = (channel.astype(np.int16) for channel in cv2.split(roi)[:3])
-    red = ((r > g + 25) & (r > b + 25) & (r > 110)).astype(np.uint8) * 255
-    kernel_size = max(1, int(round(3 * s)))
-    red = cv2.morphologyEx(
-        red,
-        cv2.MORPH_OPEN,
-        np.ones((kernel_size, kernel_size), dtype=np.uint8),
-    )
-    contours, _hierarchy = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    candidates: list[tuple[float, tuple[int, int]]] = []
-    for contour in contours:
-        x, y, cw, ch = cv2.boundingRect(contour)
-        if not (55 * s <= cw <= 105 * s and 20 * s <= ch <= 65 * s):
-            continue
-        fill = cv2.contourArea(contour) / max(1, cw * ch)
-        if fill < 0.35:
-            continue
-        cx = x0 + x + cw // 2
-        # The dark centre sits just below the red cap's bounding box.
-        cy = y0 + y + ch + int(round(8 * s))
-        radius = max(4, int(round(20 * s)))
-        core = scene[max(0, cy - radius):min(h, cy + radius),
-                     max(0, cx - radius):min(w, cx + radius)]
-        if core.size == 0:
-            continue
-        dark_fraction = float((core[..., :3].mean(axis=2) < 115).mean())
-        if dark_fraction < 0.25:
-            continue
-        candidates.append((fill + dark_fraction, (cx, cy)))
-    return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
-
-
 # Pokéstop blue, measured off a live 1220x2712 map (HSV, OpenCV ranges).
 #
 # The window spans hue 88-122 because a stop is drawn in two quite different blues depending on
@@ -549,6 +497,86 @@ def find_berry_button(
     return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
 
+def find_throw_ball_hub(
+    scene: np.ndarray,
+    *,
+    scale: float = 1.0,
+) -> tuple[int, int] | None:
+    """Locate the centre hub of the large throwable ball in an encounter.
+
+    The ball type itself is not a useful signal: Poké, Great, Ultra and Master Balls all use
+    different dome colours.  Their centre control is stable, however -- a compact light-grey
+    disc surrounded by a thick dark ring.  Search for that structure in a percentage-based
+    bottom-centre region so the result follows devices whose game UI is shifted by aspect ratio,
+    navigation bars or a display-size override.
+
+    This detector is normally consulted only after the independent Berry detector has proved an
+    encounter is open.  The geometry checks still matter because a bright or snowy encounter
+    background can otherwise look like an arbitrarily large grey "hub".
+    """
+    height, width = scene.shape[:2]
+    if height < 120 or width < 120:
+        return None
+    scale = max(0.2, float(scale))
+    x0, x1 = int(width * 0.25), int(width * 0.75)
+    y0, y1 = int(height * 0.80), height
+    patch = scene[y0:y1, x0:x1]
+    if patch.size == 0:
+        return None
+
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    _hue, sat, value = cv2.split(hsv)
+    light = ((sat < 70) & (value > 140)).astype(np.uint8)
+    # Compression breaks the grey disc into small islands on Wi-Fi streams. A very small close
+    # reconnects those islands without joining the hub to the white belly beyond its black ring.
+    kernel_size = max(3, int(round(5 * scale)) | 1)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    joined = cv2.morphologyEx(light, cv2.MORPH_CLOSE, kernel)
+    count, _labels, stats, centres = cv2.connectedComponentsWithStats(joined, 8)
+
+    min_area, max_area = 500 * scale * scale, 14000 * scale * scale
+    min_side, max_side = 35 * scale, 180 * scale
+    candidates: list[tuple[float, tuple[int, int]]] = []
+    for i in range(1, count):
+        bx, by, bw, bh, area = stats[i]
+        if not (min_area <= area <= max_area):
+            continue
+        if not (min_side <= bw <= max_side and min_side <= bh <= max_side):
+            continue
+        if not (0.70 <= bw / max(1, bh) <= 1.35):
+            continue
+        cx = int(round(centres[i][0])) + x0
+        cy = int(round(centres[i][1])) + y0
+        # The throwable ball is centred horizontally and bottom-anchored. The broad bands keep
+        # this independent of one author's coordinates while excluding selector/menu controls.
+        if abs(cx - width / 2) > width * 0.18 or cy < height * 0.84:
+            continue
+
+        component_radius = max(8, int(round(max(bw, bh) / 2)))
+        outer = max(component_radius + 3, int(round(component_radius * 1.8)))
+        dx0, dx1 = max(0, cx - outer), min(width, cx + outer + 1)
+        dy0, dy1 = max(0, cy - outer), min(height, cy + outer + 1)
+        disk_patch = scene[dy0:dy1, dx0:dx1]
+        disk_hsv = cv2.cvtColor(disk_patch, cv2.COLOR_BGR2HSV)
+        disk_s, disk_v = disk_hsv[..., 1], disk_hsv[..., 2]
+        yy, xx = np.ogrid[dy0 - cy:dy1 - cy, dx0 - cx:dx1 - cx]
+        distance_sq = xx * xx + yy * yy
+        inner = distance_sq <= component_radius * component_radius
+        annulus = (
+            (distance_sq >= (component_radius * 1.05) ** 2)
+            & (distance_sq <= (component_radius * 1.75) ** 2)
+        )
+        if not inner.any() or not annulus.any():
+            continue
+        inner_light = float(((disk_s < 70) & (disk_v > 140))[inner].mean())
+        ring_dark = float((disk_v[annulus] < 90).mean())
+        if inner_light < 0.45 or ring_dark < 0.22:
+            continue
+        candidates.append((inner_light + ring_dark + area / max_area, (cx, cy)))
+
+    return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
+
+
 def berry_button_visible(
     scene: np.ndarray,
     *,
@@ -572,6 +600,8 @@ def find_dialog_buttons(
     min_pixels: int = 120,
     max_gap: int = 40,
     max_panel_sat: float = 40.0,
+    broad_accent: bool = False,
+    min_text_height: int | None = None,
 ) -> list[tuple[int, int]]:
     """Centres of an Android alert dialog's text buttons, left to right.
 
@@ -598,11 +628,17 @@ def find_dialog_buttons(
         return []
     p = patch.astype(int)
     b, g, r = p[..., 0], p[..., 1], p[..., 2]
-    # The accent is a light cyan: blue and green high, red clearly lower.
-    cyan = ((b > 150) & (g > 140) & (r < 150) & (b - r > 55)).astype(np.uint8)
-    if int(cyan.sum()) < min_pixels:
+    # The authoring Android skin uses light cyan. When the caller will verify the actual button
+    # text through the Android view tree, accept other saturated accent themes as candidates too
+    # (Samsung blue, AOSP teal, emulator purple). Broad colour is never safe to tap by itself.
+    accent = (b > 150) & (g > 140) & (r < 150) & (b - r > 55)
+    if broad_accent:
+        hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        accent |= (hsv[..., 1] >= 80) & (hsv[..., 2] >= 100)
+    accent = accent.astype(np.uint8)
+    if int(accent.sum()) < min_pixels:
         return []
-    ys, xs = np.nonzero(cyan)
+    ys, xs = np.nonzero(accent)
     # Group the runs by their x gaps; each word is one group.
     order = np.argsort(xs)
     xs_s, ys_s = xs[order], ys[order]
@@ -620,6 +656,14 @@ def find_dialog_buttons(
     base = float(np.median([(y0 + y1) / 2 for _, _, y0, y1 in groups]))
     row = [gp for gp in groups if abs((gp[2] + gp[3]) / 2 - base) <= 20]
     if not row:
+        return []
+    # Tiny cyan counters/icons on the Pokemon detail card used to form two groups on one
+    # baseline and were mistaken for CANCEL/OK. Real Android action labels have a materially
+    # taller glyph box. Scale the floor from frame width so the same rule survives downsampling.
+    glyph_floor = (max(7, int(round(18 * patch.shape[1] / 950)))
+                   if min_text_height is None else max(0, int(min_text_height)))
+    row = [gp for gp in row if gp[3] - gp[2] + 1 >= glyph_floor]
+    if len(row) < 2:
         return []
 
     # The colour test alone is not enough: the map has plenty of cyan of its own (Pokestop

@@ -41,13 +41,57 @@ Những lần sau, chọn lại thiết bị đã lưu. Nếu không thấy máy
 
 <!-- ẢNH 03: Ba dòng kiểm tra ADB/stream/scrcpy thành công. -->
 
+### Có cần mọi máy cùng độ phân giải không?
+
+Không bắt buộc. Bản tự động đọc kích thước/DPI, đo tỉ lệ overlay PGSharp, đọc hàng AutoWalk từ
+view Android khi ảnh icon khác phiên bản và tìm tâm quả bóng thật trước khi ném. Không nên ép điện
+thoại thật đổi độ phân giải chỉ để giống máy của người viết app.
+
+Nếu phát nhiều máy ảo giống nhau hoặc clone một cấu hình emulator, có thể dùng profile chuẩn tùy
+chọn để việc hỗ trợ dễ hơn:
+
+1. Màn hình dọc, độ phân giải `1220 × 2712`, mật độ `480 dpi`.
+2. **Display size** và **Font size** của Android để **Default**.
+3. PGSharp dùng cùng phiên bản; thêm **AutoWalk**, **Feeds**, **Teleport** và **Settings** vào
+   Custom Shortcuts, rồi để menu shortcut mở trong lần kiểm tra đầu.
+4. Giữ bật **Đọc overlay PGSharp để soi Nearby chính xác hơn**.
+5. Sau khi đổi resolution/DPI hoặc clone máy, vào **Căn chỉnh tay → Đặt lại mặc định** để xóa tọa
+   độ của máy cũ.
+
+Profile trên là điểm chuẩn hỗ trợ, không phải điều kiện chạy. Với điện thoại thật, ưu tiên giữ
+nguyên cấu hình màn hình đang dùng và kiểm tra bằng **Xem bot nhìn**:
+
+- Ở map: AutoWalk phải được khoanh đúng hàng và ghi `RUNNING` hoặc `PAUSED` khi icon đọc được.
+- Trong encounter có bóng: vòng tâm bóng và mũi tên `THROW` phải bám vào quả bóng thật.
+- Nếu popup vẫn không được xử lý, giữ nguyên popup và bấm **Xuất báo cáo lỗi**; ZIP đã có ảnh,
+  resolution, DPI và log nhận dạng để sửa theo đúng máy, không cần người dùng đoán threshold.
+
 ### Nguyên tắc căn chỉnh
 
 - Hãy thử chế độ tự động trước. App tự đọc kích thước, DPI và tự đo tỉ lệ giao diện.
+- Điểm ném tự động bám theo tâm quả bóng thật; hàng AutoWalk ưu tiên icon rồi dùng view Android
+  làm đường lui. Chỉ căn tay khi cả hai đường tự động vẫn lệch/không đọc được.
 - Chỉ mở **🎯 Căn chỉnh tay** khi cửa sổ **Xem bot nhìn** cho thấy điểm hoặc khung bị lệch thật sự.
 - Tọa độ lưu trong phần căn tay chỉ là cấu hình cho đúng độ phân giải đã căn, không phải một vị trí dùng chung cho mọi máy.
 - Riêng vị trí Pokémon trên Nearby, app ưu tiên vị trí đang đọc trực tiếp từ giao diện PGSharp; tọa độ căn tay chỉ là đường lui khi không đọc được.
 - Sau khi đổi độ phân giải, DPI hoặc bố cục PGSharp, bấm **Đặt lại mặc định** rồi căn lại thay vì dùng tọa độ cũ.
+### Khi bot gặp popup lạ
+
+Ảnh nhận dạng popup đi kèm app được cắt từ một máy, một bản PGSharp và Pokémon GO. Máy khác bản,
+khác ngôn ngữ hay khác giao diện thì popup vẽ khác đi và app không nhận ra được.
+
+Từ bản này, không cần làm gì cả: **màn hình không đọc được liên tục quá 12 giây thì bot tự bấm
+phím Back**, giống như khi mình gặp popup lạ. Tối đa 8 giây một lần.
+
+Bot **không bao giờ** bấm Back trong hai trường hợp: đang gặp Pokémon (bấm là mất con đó) và
+đang ở map (thanh Nearby còn hiện). Nếu Back lỡ làm hiện hộp *"Thoát Pokémon GO?"* thì đó là hộp
+thoại Android thật, app đã biết bấm CANCEL.
+
+Mỗi lần kẹt app lưu một ảnh vào thư mục `stuck/` cạnh EXE. Gửi ảnh đó kèm báo lỗi thì lần cập
+nhật sau app nhận được popup đó cho tất cả mọi người — không ai phải tự chỉnh.
+
+Muốn tắt: **Cài đặt → bật Hiện tuỳ chọn nâng cao → bỏ tick "Bot kẹt: tự bấm Back để thoát màn
+hình lạ"**.
 
 ## 2. Chế độ Auto bắt Pokémon
 

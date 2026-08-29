@@ -7,6 +7,7 @@ __pycache__/
 build/
 dist/
 dist-new/
+/dist-guide*/
 *.spec.bak
 
 # Runtime / scratch
@@ -20,6 +21,9 @@ timing*.log
 # Always-on diagnostic log (avc/diag.py) and the support zips exported from it.
 autoclick.log*
 baocao-*.zip
+# Screens the stall watchdog could not read, kept so a stuck run can be reported
+# after the fact instead of having to be caught happening.
+stuck/
 
 # Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
 # Note: adb/ IS committed so the project builds out of the box.

@@ -40,12 +40,21 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.7"
+APP_VERSION = "1.4.8"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
 DONATE_KOFI = "https://ko-fi.com/qpham7286"
 DISCORD_INVITE = "https://discord.gg/QXSfKKPpG6"
+
+# Where "send the stuck screen to the author" posts, if the maintainer sets one. Paste a
+# Discord webhook URL here to switch that option on; while it is empty the option is hidden and
+# the bot only ever writes the picture to the local folder.
+#
+# Anything embedded in the EXE can be extracted from it, so this must never be a credential —
+# a webhook is the right shape precisely because the worst case is somebody spamming one
+# channel, which is fixed by deleting the webhook and shipping a new one. Never an SMTP login.
+SUPPORT_WEBHOOK = ""
 
 # Manual-alignment items shown in the calibrate window.
 # (config field, kind 'point'|'region', mode 'catch'|'shundo'|'both', i18n key, colour)
@@ -235,8 +244,6 @@ LANG = {
                       "en": "Read the PGSharp overlay for a surer Nearby check"},
     "catch_feed":    {"vi": "Nearby hết Pokémon: lấy 1 con từ Feed (mặc định tắt)",
                        "en": "When Nearby is empty: take 1 Pokémon from Feed (off by default)"},
-    "no_balls_goplus": {"vi": "Hết bóng: khởi động Go Plus sau AutoWalk (chỉ bắt có key)",
-                         "en": "Out of balls: start Go Plus after AutoWalk (keyed catch only)"},
     "no_balls_spin": {"vi": "Hết bóng: vừa đi vừa quay PokéStop (không cần key)",
                        "en": "Out of balls: spin PokéStops while walking (no key needed)"},
     "no_balls_min":  {"vi": "Hết bóng: quay stop bao nhiêu phút rồi bắt lại",
@@ -395,6 +402,14 @@ LANG = {
                        "en": "✨ SHINY IV {} (target IV {})! Bot {} — go handle it! ({} checked)"},
     "grp_discord":   {"vi": "Thông báo Discord", "en": "Discord alerts"},
     "webhook":       {"vi": "Webhook URL:", "en": "Webhook URL:"},
+    "stuck_back":    {"vi": "Bot kẹt: tự bấm Back để thoát màn hình lạ",
+                      "en": "When stuck: press Back to escape an unknown screen"},
+    "stuck_report":  {"vi": "Bot kẹt: gửi ảnh màn hình cho tác giả (tự nguyện)",
+                      "en": "When stuck: send the screen to the author (opt-in)"},
+    "stuck_saved":   {"vi": "⚠ Bot kẹt ở màn hình lạ — đã bấm Back và lưu ảnh: {0}",
+                      "en": "⚠ Stuck on an unknown screen — pressed Back and saved: {0}"},
+    "stuck_sent":    {"vi": "Đã gửi ảnh màn hình kẹt cho tác giả.",
+                      "en": "Stuck screenshot sent to the author."},
     "alert_idle":    {"vi": "Báo khi trống liên tiếp (chu kỳ, 0=tắt):", "en": "Alert after empty cycles in a row (0=off):"},
     "alert_report":  {"vi": "Báo cáo định kỳ (giây, 0=tắt):", "en": "Status report every (s, 0=off):"},
     "alert_batt":    {"vi": "Báo pin yếu dưới (%, 0=tắt):", "en": "Low battery alert below (%, 0=off):"},
@@ -423,10 +438,6 @@ LANG = {
                       "en": "cycle {}: no unspun PokéStop inside the scan circle"},
     "spun":          {"vi": "Đã bấm stop: {}", "en": "Stops tapped: {}"},
     "msg_no_balls":  {"vi": "→ Hết Poké Ball! Đã thoát màn bắt; AutoWalk nạp bóng tối đa {:.0f} phút.", "en": "→ Out of Poké Balls! Left the encounter; refilling with AutoWalk for up to {:.0f} min."},
-    "msg_no_balls_goplus": {"vi": "→ Hết Poké Ball! Đã thoát màn bắt; đang bật AutoWalk + Go Plus tối đa {:.0f} phút.",
-                             "en": "→ Out of Poké Balls! Left the encounter; starting AutoWalk + Go Plus for up to {:.0f} min."},
-    "msg_goplus_started": {"vi": "→ Đã bật AutoWalk và bấm khởi động Go Plus.",
-                            "en": "→ AutoWalk is active and Go Plus was started."},
     "msg_done":      {"vi": "Hoàn tất.", "en": "Done."},
     "msg_err":       {"vi": "Lỗi: {}", "en": "Error: {}"},
     "msg_no_init":   {"vi": "Không khởi tạo được: {}", "en": "Could not initialize: {}"},
@@ -441,8 +452,6 @@ LANG = {
     "dc_batt_part":  {"vi": " | pin {}% ({}°C)", "en": " | battery {}% ({}°C)"},
     "dc_low_batt":   {"vi": "🔋 AutoClick: pin còn {}% — cắm sạc đi!", "en": "🔋 AutoClick: battery at {}% — plug in!"},
     "dc_no_balls":   {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; AutoWalk nạp bóng tối đa {:.0f} phút.", "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; refilling with AutoWalk for up to {:.0f} min."},
-    "dc_no_balls_goplus": {"vi": "🎱 AutoClick: Hết Poké Ball! Đã thoát màn bắt; bật AutoWalk + Go Plus quay PokéStop tối đa {:.0f} phút.",
-                            "en": "🎱 AutoClick: Out of Poké Balls! Left the catch screen; using AutoWalk + Go Plus to spin stops for up to {:.0f} min."},
     "dc_stopped":    {"vi": "🛑 AutoClick dừng vì lỗi: {}", "en": "🛑 AutoClick stopped with error: {}"},
     "dc_sent":       {"vi": "Đã gửi cảnh báo Discord.", "en": "Discord alert sent."},
     "dc_fail":       {"vi": "Gửi Discord thất bại: {}", "en": "Discord send failed: {}"},
@@ -503,7 +512,15 @@ GUIDE_PAGES = {
 
 [[IMAGE:04-test-control|Chụp ba dòng kiểm tra thành công và cửa sổ Xem bot nhìn.]]
 
-⚠ Nếu đổi độ phân giải hoặc DPI Android sau khi căn tay, phải căn lại. Tọa độ của máy này không dùng chung cho máy khác.
+## E. Cấu hình nhiều máy
+Không bắt buộc điện thoại thật phải cùng độ phân giải. App tự đo scale, đọc AutoWalk từ view Android
+khi icon không khớp và bám tâm quả bóng thật. Nếu clone nhiều emulator, profile hỗ trợ khuyên dùng là
+portrait 1220×2712 @ 480 dpi, Display size/Font size = Default và cùng phiên bản PGSharp.
+
+Ở map, Xem bot nhìn phải khoanh đúng hàng AutoWalk khi icon đọc được. Trong encounter, tâm bóng và
+mũi tên THROW phải bám quả bóng. Nếu vẫn sai, giữ nguyên màn hình rồi Xuất báo cáo lỗi.
+
+⚠ Nếu đổi độ phân giải hoặc DPI Android sau khi căn tay, vào Căn chỉnh tay → Đặt lại mặc định.
 """, "en": """# 1. INSTALL AND CONNECT
 
 ## Windows
@@ -523,6 +540,12 @@ GUIDE_PAGES = {
 ## Test
 Select the device and run Test ADB/scrcpy. ADB capture, realtime stream and the control socket must all pass. Then open Live view.
 [[IMAGE:04-test-control|Three successful test lines and Live view.]]
+
+## Multiple devices
+Real phones do not need one forced resolution: the app measures scale, can read AutoWalk from the
+Android view tree and follows the real ball hub. For cloned emulators, the optional support profile
+is portrait 1220×2712 @ 480 dpi with default display/font size and the same PGSharp version. Reset
+manual alignment after any resolution/DPI change.
 """},
 
     "pgsharp": {"vi": """# 2. CÀI ĐẶT PGSHARP DÙNG CHUNG
@@ -725,6 +748,12 @@ Use the default 450 px circle and 2-second gap first. In Live view the circle mu
 3. Tọa độ lưu chỉ dành cho độ phân giải hiện tại. Đổi máy/DPI thì Đặt lại mặc định và căn lại.
 4. Riêng Nearby, app vẫn ưu tiên tâm hàng đọc trực tiếp từ PGSharp khi đọc được; điểm tay là đường lui.
 
+## Khi bot gặp popup lạ
+1. Không cần làm gì. Màn hình không đọc được quá 12 giây thì bot tự bấm phím Back để thoát.
+2. Bot không bấm Back khi đang gặp Pokémon, cũng không bấm khi đang ở map.
+3. Mỗi lần kẹt app lưu một ảnh vào thư mục stuck cạnh EXE. Gửi ảnh đó kèm báo lỗi để bản sau nhận được popup này cho mọi người.
+4. Muốn tắt: Cài đặt, bật Hiện tuỳ chọn nâng cao, bỏ tick "Bot kẹt: tự bấm Back để thoát màn hình lạ".
+
 ## Cách thêm ảnh vào hướng dẫn
 1. Tạo thư mục guide_images cạnh AutoCatchPokemonPGSharp.exe.
 2. Đặt PNG đúng tên mã hiển thị trong từng ô, ví dụ 01-app-windows.png.
@@ -741,6 +770,8 @@ Use the default 450 px circle and 2-second gap first. In Live view the circle mu
 """, "en": """# 7. ALIGNMENT, GUIDE IMAGES AND REPORTS
 
 Use Live view before Manual align and only move a visibly incorrect marker. Saved coordinates belong to the current resolution; Nearby still prefers PGSharp's live row centre.
+
+When the bot meets a popup it does not recognise it now presses Android Back by itself, after the screen has been unreadable for 12 seconds — never during an encounter and never on the map. Each stall also saves a picture into the stuck folder beside the EXE; send that with a bug report and the next build recognises that popup for everybody. Turn it off under Settings with advanced options shown.
 
 To add guide screenshots, create guide_images beside the EXE and use the exact PNG filename shown in each placeholder. Restart the app to load them.
 
@@ -800,6 +831,11 @@ class App:
         self.known: list[str] = [s for s in data.get("known_devices", []) if isinstance(s, str)][:10]
         # Manual alignment: device-pixel overrides for tap points / detection boxes, keyed by
         # field name; "_screen" stores the resolution they were set at. Empty = full auto.
+        #
+        # Kept per device serial. One install commonly drives several phones/emulators, and a
+        # single shared set meant aligning the second device silently destroyed the first one's
+        # calibration — the resolution-scaling fallback only ever covered a *resized* screen, not
+        # a different phone whose buttons sit somewhere else entirely.
         self.manual: dict = data.get("manual", {}) if isinstance(data.get("manual"), dict) else {}
         # The old default box was commonly persisted as if it were a hand calibration. It ends
         # before the quantity badge in the current game UI, so carrying it forward would undo
@@ -996,18 +1032,9 @@ class App:
         # as the run lasted. Only means anything once the box above is ticked.
         self.feed_wait = self._spin(catch_grp, "feed_wait", 15, 0, 600, 45, is_float=True,
                                     increment=5)
-        self.no_balls_goplus = tk.BooleanVar(value=True)
-        goplus_chk = ttk.Checkbutton(
-            catch_grp,
-            text=self.tr("no_balls_goplus"),
-            variable=self.no_balls_goplus,
-        )
-        goplus_chk.grid(row=16, column=0, columnspan=2, sticky="w", padx=6, pady=4)
-        self._i18n.append((goplus_chk, "no_balls_goplus"))
-        self._register_row("no_balls_goplus", goplus_chk)
         # The bag refills from PokéStops, so spinning them is the one thing that actually
-        # shortens an empty-bag hold — and unlike Go Plus it needs no PGSharp key, which is why
-        # this box stays visible in Quick Catch where the Go Plus one is hidden.
+        # shortens an empty-bag hold, and it needs no PGSharp key — which is why it is now the
+        # only refill helper offered, in both catch styles.
         self.no_balls_spin = tk.BooleanVar(value=False)
         spin_chk = ttk.Checkbutton(
             catch_grp,
@@ -1064,9 +1091,24 @@ class App:
                                  command=lambda: self._sync_cd_state())
         ud_chk.grid(row=3, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((ud_chk, "ui_dump"))
+        self.stuck_back = tk.BooleanVar(value=True)
+        sb_chk = ttk.Checkbutton(pace_grp, text=self.tr("stuck_back"), variable=self.stuck_back)
+        sb_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        self._i18n.append((sb_chk, "stuck_back"))
+        self._register_row("stuck_back", sb_chk, advanced=True)
+        self.stuck_report = tk.BooleanVar(value=False)
+        if SUPPORT_WEBHOOK:
+            # Off by default and never hidden behind a default-on switch: the picture is of
+            # somebody's phone, and it carries their trainer name, where they are standing and
+            # whatever notification happened to be on screen.
+            sr_chk = ttk.Checkbutton(pace_grp, text=self.tr("stuck_report"),
+                                     variable=self.stuck_report)
+            sr_chk.grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+            self._i18n.append((sr_chk, "stuck_report"))
+            self._register_row("stuck_report", sr_chk, advanced=True)
         self.trace_timing = tk.BooleanVar(value=False)
         tr_chk = ttk.Checkbutton(pace_grp, text=self.tr("trace"), variable=self.trace_timing)
-        tr_chk.grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=4)
+        tr_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((tr_chk, "trace"))
         self._register_row("trace", tr_chk, advanced=True)
 
@@ -1365,13 +1407,8 @@ class App:
         # Quick Catch owns the flick and the post-throw wait outright.
         for key in ("quick_flick", "post_throw"):
             self._set_row_visible(key, catching and quick)
-        # Go Plus automation belongs to PGSharp's keyed catcher. Quick Catch explicitly exists
-        # for users without that key, so presenting this checkbox there would promise a feature
-        # their mode cannot use.
-        self._set_row_visible("no_balls_goplus", catching and not quick)
-        # Spinning to refill needs no key, so it stays on offer in both catch styles. The refill
-        # duration applies to AutoWalk/Go Plus too, so it remains visible whichever refill helper
-        # is selected.
+        # Spinning to refill needs no key, so it is on offer in both catch styles. The refill
+        # duration applies to the plain AutoWalk hold as well, so it stays visible either way.
         self._set_row_visible("no_balls_spin", catching)
         self._set_row_visible("no_balls_min", catching)
         # Same shape as the pair above: the Feed wait is dead weight until the Feed is on.
@@ -1500,7 +1537,6 @@ class App:
         self.dim_screen.set(data.get("dim_screen", False))
         self.catch_use_feed.set(data.get("catch_use_feed", False))
         self.feed_wait.set(max(0.0, float(data.get("feed_wait", self.feed_wait.get()))))
-        self.no_balls_goplus.set(data.get("no_balls_goplus", True))
         self.no_balls_spin.set(data.get("no_balls_spin", False))
         self.no_balls_min.set(max(1.0, float(data.get("no_balls_min", self.no_balls_min.get()))))
         self.spin_radius.set(max(300, int(data.get("spin_radius", int(self.spin_radius.get())))))
@@ -1514,6 +1550,8 @@ class App:
         self._sync_cd_state()
         # Deliberately not persisted as on: tracing is a debugging aid, and a settings file that
         # silently keeps it enabled grows a timing.log for the rest of the user's life.
+        self.stuck_back.set(bool(data.get("stuck_back", True)))
+        self.stuck_report.set(bool(data.get("stuck_report", False)))
         self.trace_timing.set(data.get("trace_timing", False))
         self.show_advanced.set(bool(data.get("show_advanced", False)))
         if data.get("mode") in ("catch", "shundo", "coord_shundo", "spin"):
@@ -1557,7 +1595,6 @@ class App:
             "dim_screen": bool(self.dim_screen.get()),
             "catch_use_feed": bool(self.catch_use_feed.get()),
             "feed_wait": float(self.feed_wait.get()),
-            "no_balls_goplus": bool(self.no_balls_goplus.get()),
             "no_balls_spin": bool(self.no_balls_spin.get()),
             "no_balls_min": float(self.no_balls_min.get()),
             "spin_radius": int(self.spin_radius.get()),
@@ -1567,6 +1604,8 @@ class App:
             "pre_tap": float(self.pre_tap.get()),
             "respect_cooldown": bool(self.respect_cd.get()),
             "use_ui_dump": bool(self.use_ui_dump.get()),
+            "stuck_back": bool(self.stuck_back.get()),
+            "stuck_report": bool(self.stuck_report.get()),
             "trace_timing": bool(self.trace_timing.get()),
             "mode": self.mode,
             "catch_style": self.catch_style,
@@ -2162,6 +2201,59 @@ class App:
         raise AdbError(f"could not reconnect {current}: {last_error or 'no endpoint found'}")
 
     # -- Discord alert ----------------------------------------------------------
+    def _on_stuck(self, frame) -> None:
+        """The routine could not read the screen and has just pressed Back.
+
+        Keep the picture. This is the one moment worth a screenshot and the one nobody is ever
+        watching for: the modal that stalls a run turns up mid-session, and by the time the user
+        looks, it is long gone. A file on disk means they can report it afterwards instead of
+        having to catch it happening.
+        """
+        try:
+            folder = os.path.join(diag.base_dir(), "stuck")
+            os.makedirs(folder, exist_ok=True)
+            name = time.strftime("stuck-%Y%m%d-%H%M%S.jpg")
+            ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if not ok:
+                return
+            # tofile, not imwrite: cv2 cannot write through a path holding non-ASCII characters
+            # on Windows, and plenty of these installs live under a Vietnamese user folder.
+            buf.tofile(os.path.join(folder, name))
+        except Exception:  # noqa: BLE001 - a diagnostic must never end a run
+            return
+        self.log_queue.put(self.tr("stuck_saved").format(name))
+        if SUPPORT_WEBHOOK and self.stuck_report.get():
+            self._post_stuck(frame, name)
+
+    def _post_stuck(self, frame, name: str) -> None:
+        """Send the stuck screen to the maintainer's channel. Only ever from the opt-in above."""
+        def push() -> None:
+            try:
+                ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                if not ok:
+                    return
+                boundary = uuid.uuid4().hex
+                payload = {"content": f"stuck {name} — {APP_VERSION}"}
+                body = (
+                    (f"--{boundary}\r\nContent-Disposition: form-data; name=\"payload_json\"\r\n"
+                     f"Content-Type: application/json\r\n\r\n").encode("utf-8")
+                    + json.dumps(payload).encode("utf-8")
+                    + (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"files[0]\"; "
+                       f"filename=\"{name}\"\r\nContent-Type: image/jpeg\r\n\r\n").encode("utf-8")
+                    + buf.tobytes()
+                    + f"\r\n--{boundary}--\r\n".encode("utf-8")
+                )
+                request = urllib.request.Request(
+                    SUPPORT_WEBHOOK, data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                             "User-Agent": "AutoVisionClicker"})
+                urllib.request.urlopen(request, timeout=15)
+                self.log_queue.put(self.tr("stuck_sent"))
+            except Exception:  # noqa: BLE001 - reporting must never end a run
+                pass
+
+        threading.Thread(target=push, daemon=True).start()
+
     def _send_discord(self, content: str, shot: bool = False) -> None:
         """POST to the webhook on a short-lived thread so the catch loop never waits on it.
         With shot=True the current phone screen is attached as a JPEG (best effort — if the
@@ -2860,7 +2952,15 @@ class App:
                 cfg.require_anchor = False
                 cfg.force_slot = True
             if P("ball_fallback"):
-                cfg.ball_fallback = P("ball_fallback")
+                manual_ball = P("ball_fallback")
+                auto_ball = cfg.ball_fallback
+                cfg.ball_fallback = manual_ball
+                # The calibration window historically saved every default handle, even when the
+                # user only adjusted Nearby/Flee. Do not let an unchanged legacy default disable
+                # the new live ball detector; only a materially moved handle is an override.
+                tolerance = max(3, cfg.s(5))
+                cfg.force_ball = max(abs(manual_ball[0] - auto_ball[0]),
+                                     abs(manual_ball[1] - auto_ball[1])) > tolerance
             if P("berry_start"):
                 cfg.berry_start = P("berry_start")
             if P("berry_end"):
@@ -2946,12 +3046,14 @@ class App:
                 cfg = self._spin_config(CatchConfig(
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
+                    stuck_back=bool(self.stuck_back.get()),
                 ))
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 cfg = self._apply_manual(cfg, "catch")
                 self.routine = SpinRoutine(self.device, cfg)
                 self.routine._on_trace = self.log_queue.put
+                self.routine._on_stuck = self._on_stuck
                 self.routine._on_rescale = lambda c: self._apply_manual(c, "catch")
             else:
                 throw_power = abs(int(self.throw_power.get()))
@@ -2973,14 +3075,12 @@ class App:
                     max_throws_per_encounter=max(1, int(self.max_throws.get())),
                     use_feed_bar=bool(self.catch_use_feed.get()),
                     feed_nearby_timeout=max(0.0, float(self.feed_wait.get())),
-                    start_goplus_on_no_balls=(
-                        self.catch_style == "normal" and bool(self.no_balls_goplus.get())
-                    ),
                     min_catch_interval=max(0.0, float(self.min_gap.get())),
                     pre_tap_delay=max(0.0, float(self.pre_tap.get())),
                     respect_cooldown=bool(self.respect_cd.get()),
                     use_ui_dump=bool(self.use_ui_dump.get()),
                     trace_timing=bool(self.trace_timing.get()),
+                    stuck_back=bool(self.stuck_back.get()),
                 )
                 cfg = self._spin_config(cfg)
                 if dev_size is not None:
@@ -2988,6 +3088,7 @@ class App:
                 cfg = self._apply_manual(cfg, "catch")
                 self.routine = CatchRoutine(self.device, cfg)
                 self.routine._on_trace = self.log_queue.put
+                self.routine._on_stuck = self._on_stuck
                 self.routine._on_rescale = lambda c: self._apply_manual(c, "catch")
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("msg_no_init").format(e))
@@ -3025,30 +3126,11 @@ class App:
     def _run_worker(self) -> None:
         def on_event(stats, threw):
             if stats.last_event == "no_balls":
-                # on_event runs on the worker thread; read the plain config value captured at
-                # startup, never a tkinter variable from here.
-                with_goplus = bool(getattr(
-                    getattr(self.routine, "config", None),
-                    "start_goplus_on_no_balls",
-                    False,
-                ))
                 pause_minutes = max(0.0, float(getattr(
                     getattr(self.routine, "config", None), "no_balls_pause", 600.0,
                 ))) / 60.0
-                self.log_queue.put(
-                    self.tr("msg_no_balls_goplus" if with_goplus else "msg_no_balls").format(
-                        pause_minutes,
-                    )
-                )
-                self._send_discord(
-                    self.tr("dc_no_balls_goplus" if with_goplus else "dc_no_balls").format(
-                        pause_minutes,
-                    ),
-                    shot=True,
-                )
-                return
-            if stats.last_event == "goplus_started":
-                self.log_queue.put(self.tr("msg_goplus_started"))
+                self.log_queue.put(self.tr("msg_no_balls").format(pause_minutes))
+                self._send_discord(self.tr("dc_no_balls").format(pause_minutes), shot=True)
                 return
             if stats.last_event == "autowalk":
                 self.log_queue.put(self.tr("msg_autowalk").format(stats.autowalks))

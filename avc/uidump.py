@@ -95,6 +95,9 @@ class UiState:
     # `_columns`, and CatchRoutine._ui_nearby_bar for the one that picks Nearby out of these.
     bars: list[list[tuple[int, int]]] = field(default_factory=list)
     menu: dict[str, tuple[int, int]] = field(default_factory=dict)  # row text -> centre
+    # Native Android dialog actions. Unlike image templates these retain their text and exact
+    # bounds across emulator DPI, font rendering, language and light/dark themes.
+    dialog_buttons: list[tuple[str, tuple[int, int]]] = field(default_factory=list)
     encounter: dict[str, str] = field(default_factory=dict)       # hl_ec_sum_* suffix -> text
     cooldown: float = 0.0        # seconds left on PGSharp's jump cooldown, 0 when clear
 
@@ -103,7 +106,9 @@ class UiState:
         """The AutoWalk row as (label, centre). Its label carries the state: PGSharp writes
         'AW(Paused)' when the walk has stalled and 'AW' (plus the mode) while it runs."""
         for label, centre in self.menu.items():
-            if label.upper().startswith("AW"):
+            upper = label.upper().replace(" ", "")
+            # Builds in the field use both "AW(Paused)" and the unabbreviated "AutoWalk".
+            if upper.startswith("AW") or "AUTOWALK" in upper:
                 return label, centre
         return None
 
@@ -111,6 +116,15 @@ class UiState:
     def autowalk_paused(self) -> bool:
         row = self.autowalk_row
         return bool(row and "paus" in row[0].lower())
+
+    @property
+    def cancel_button(self) -> tuple[int, int] | None:
+        """The safe negative action of a native dialog, when exposed by Android."""
+        negative = {"CANCEL", "CANCELAR", "HUY", "HỦY", "NO", "KHONG", "KHÔNG"}
+        for text, centre in self.dialog_buttons:
+            if text.strip().upper() in negative:
+                return centre
+        return None
 
     @property
     def speed_kmh(self) -> float | None:
@@ -206,12 +220,19 @@ def parse(xml_text: str) -> UiState | None:
     nearby: list[tuple[int, int]] = []
     for node in root.iter("node"):
         rid = node.get("resource-id") or ""
-        if not rid:
-            continue
-        name = rid.rsplit("/", 1)[-1]
         centre = _centre(node.get("bounds") or "")
         if centre is None:
             continue
+        text = (node.get("text") or "").strip()
+        class_name = node.get("class") or ""
+        clickable = (node.get("clickable") or "").lower() == "true"
+        # Stock AlertDialog actions normally have android:id/button1..3, but several Android
+        # skins omit that id while keeping a clickable Button node. Keep both representations.
+        if text and ("android:id/button" in rid or (clickable and class_name.endswith("Button"))):
+            state.dialog_buttons.append((text, centre))
+        if not rid:
+            continue
+        name = rid.rsplit("/", 1)[-1]
         if name == _NEARBY_ICON:
             box = _box(node.get("bounds") or "")
             # A list item scrolled half out of its ListView reports a sliver of a box. Its
@@ -219,7 +240,6 @@ def parse(xml_text: str) -> UiState | None:
             if box is not None and (box[3] - box[1]) * 2 >= (box[2] - box[0]):
                 nearby.append(centre)
         elif name == _MENU_TEXT:
-            text = (node.get("text") or "").strip()
             if text:
                 state.menu[text] = centre
         elif name == _COOLDOWN_TEXT:

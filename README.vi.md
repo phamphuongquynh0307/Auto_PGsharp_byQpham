@@ -9,7 +9,7 @@ Công cụ Windows tự động bắt Pokemon trong Pokemon GO dùng với PGSha
 ## Tải bản mới nhất
 
 - [Tải AutoCatchPokemonPGSharp.exe](https://github.com/phamphuongquynh0307/Auto_PGsharp_byQpham/releases/latest/download/AutoCatchPokemonPGSharp.exe)
-- [Tải Discord Coord Collector v0.3.1 cho Edge](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.1.zip)
+- [Tải Discord Coord Collector v0.3.3 cho Edge](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.3.zip)
 
 Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải nén ZIP, mở `edge://extensions`, bật **Developer mode**, chọn **Load unpacked** rồi trỏ tới thư mục vừa giải nén.
 
@@ -19,11 +19,15 @@ Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải
 
 - **Tự động bắt Pokemon** — bắt các Pokemon xuất hiện trong danh sách gần đây của PGSharp.
 - **Bắt nhanh không cần key PGSharp** — điều khiển cảm ứng Android để ném bóng và thoát encounter nhanh.
-- **Tùy chỉnh cú ném** — chỉnh lực ném và thời gian flick cho từng điện thoại.
+- **Tự bám quả bóng** — tìm tâm bóng thật trên encounter rồi đặt điểm ném theo giao diện của máy;
+  vẫn cho phép căn tay khi cần.
+- **AutoWalk đa máy** — nhận icon bằng ảnh và dùng chính view Android của PGSharp làm đường lui,
+  hỗ trợ cả nhãn `AutoWalk` và `AW(Paused)`.
 - **Căn chỉnh thủ công** — tinh chỉnh tọa độ chạm khi tự co giãn chưa đủ chính xác.
 - **Chấm shiny theo IV** — nhập riêng IV Công/Thủ/HP từ 0–15; cả nguồn feed và Discord Coord chỉ dừng khi shiny khớp đúng cả ba cột.
 - **Shundo từ Discord Coord** — nhận tọa độ từ extension Edge, teleport lần lượt và chỉ lấy coord tiếp theo sau khi chấm xong.
-- **Tự né popup** — đóng cảnh báo thời tiết, tốc độ, level-up và màn hình PokeStop.
+- **Tự né popup an toàn** — đóng cảnh báo thời tiết, tốc độ, level-up và màn hình PokeStop; hộp
+  Android được đối chiếu đúng nút `CANCEL/HỦY` trước khi bấm.
 - **Tự xử lý khi hết bóng** — tạm ngừng bắt, vẫn cho AutoWalk tìm vật phẩm rồi tự bắt lại.
 - **Cảnh báo Discord** — báo spawn lâu, báo cáo định kỳ, pin yếu, hết bóng, gặp shiny và nhiều trạng thái khác.
 - **Thích nghi màn hình** — tự co giãn tọa độ theo kích thước màn hình Android.
@@ -95,6 +99,7 @@ Mỗi chế độ cần một bố cục PGSharp khác nhau. Trước khi chạy
 | Mất kết nối giữa chừng | Bấm **Làm mới** hoặc chọn lại điện thoại. |
 | Chạm lệch tọa độ | Mở phần căn chỉnh thủ công và chỉnh các điểm tương ứng với màn hình. |
 | Ném bóng quá yếu hoặc quá mạnh | Chỉnh **Lực ném** rồi thử lại với một Pokemon. |
+| Máy khác không nhận AutoWalk/popup/bóng | Giữ bật **Đọc overlay PGSharp**, để menu shortcut mở, bấm **Xem bot nhìn** ở map và encounter. Không cần ép điện thoại thật đổi resolution; xem profile máy ảo chuẩn và cách **Xuất báo cáo lỗi** trong [hướng dẫn chi tiết](HUONG_DAN.md). |
 | Điện thoại nóng | Giảm độ sáng, tránh vừa sạc vừa chạy khi không cần thiết và bật tùy chọn làm tối màn hình khi chạy lâu. |
 
 ## Mẹo

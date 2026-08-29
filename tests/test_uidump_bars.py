@@ -3,6 +3,7 @@ describes two bars. Everything here guards the line between them: reading them a
 put a Feed coordinate into the Nearby calibration and had the bot double-tapping Feeds while
 Nearby was full."""
 import unittest
+import time
 from types import SimpleNamespace
 
 from avc import uidump
@@ -45,6 +46,39 @@ class ColumnSplitTests(unittest.TestCase):
         state = uidump.parse(dump(*NEARBY_ICONS))
         self.assertEqual(1, len(state.bars))
         self.assertEqual(3, len(state.bars[0]))
+
+
+class PortableControlTests(unittest.TestCase):
+    def test_unabbreviated_autowalk_label_is_recognised(self):
+        xml = ('<hierarchy><node resource-id="x:id/hl_shortcut_menu_item_txt" '
+               'text="AutoWalk" bounds="[468,672][679,768]" /></hierarchy>')
+        state = uidump.parse(xml)
+
+        self.assertEqual(("AutoWalk", (573, 720)), state.autowalk_row)
+        self.assertFalse(state.autowalk_paused)
+
+    def test_paused_autowalk_from_ui_is_used_when_icon_template_misses(self):
+        xml = ('<hierarchy><node resource-id="x:id/hl_shortcut_menu_item_txt" '
+               'text="AW(Paused)" bounds="[468,672][679,768]" /></hierarchy>')
+        state = uidump.parse(xml)
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(use_ui_dump=True)
+        routine._ui_state_cache = state
+        routine._ui_state_cache_at = time.monotonic()
+        routine._autowalk_row_visual_in = lambda _frame, _star: None
+
+        self.assertEqual(((573, 720), True), routine._autowalk_row_in(None, None))
+
+    def test_native_dialog_exposes_exact_cancel_bounds_across_themes(self):
+        xml = ('<hierarchy>'
+               '<node resource-id="android:id/button2" class="android.widget.Button" '
+               'clickable="true" text="CANCEL" bounds="[430,930][610,1010]" />'
+               '<node resource-id="android:id/button1" class="android.widget.Button" '
+               'clickable="true" text="OK" bounds="[620,930][760,1010]" />'
+               '</hierarchy>')
+        state = uidump.parse(xml)
+
+        self.assertEqual((520, 970), state.cancel_button)
 
 
 def bare_routine(*, force_slot=True, nearby_slot=(927, 312), anchor=None, ui_slot=None):
