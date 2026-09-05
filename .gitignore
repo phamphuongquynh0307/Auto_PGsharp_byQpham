@@ -5,6 +5,7 @@ __pycache__/
 
 # PyInstaller build output (regenerable, and the exe is ~100MB)
 build/
+/build-new/
 dist/
 dist-new/
 /dist-guide*/
@@ -20,6 +21,7 @@ _*.png
 timing*.log
 # Always-on diagnostic log (avc/diag.py) and the support zips exported from it.
 autoclick.log*
+doi-chieu.log*
 baocao-*.zip
 # Screens the stall watchdog could not read, kept so a stuck run can be reported
 # after the fact instead of having to be caught happening.

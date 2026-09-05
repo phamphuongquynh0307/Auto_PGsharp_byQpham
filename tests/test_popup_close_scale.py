@@ -84,6 +84,51 @@ class PopupCloseScaleTests(unittest.TestCase):
         self.assertEqual((0.66,), close.call_args.kwargs["scales"])
         self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
 
+    def test_wide_scale_sweep_is_not_repaid_on_every_ordinary_cycle(self):
+        """The 17-scale fallback costs ~90ms and can only ever come back empty on a map frame.
+
+        A popup that renders at an unexpected scale is blocking, so it is still there a second
+        later; the calibrated scales keep being tried every cycle either way.
+        """
+        routine = object.__new__(CatchRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = False
+        routine.device = SimpleNamespace(tap=lambda *xy: None)
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._scales = (0.55,)
+        routine._popup_scales = (0.66,)
+        routine._game_popup_scales = (0.66,)
+        routine._cancel_btn = None
+        routine._popup_weather = None
+        routine._popup_speed = None
+        routine._popup_autowalk = None
+        routine._maybe_later = None
+        routine._claim_rewards = None
+        routine._caught_ok = None
+        routine._check_btn = None
+        routine._close_btn = object()
+        routine._close_btn_blue = object()
+        routine._close_btn_white = object()
+        routine._ball_in = lambda _frame: None
+        routine._is_pokestop_screen = lambda _frame: False
+
+        frame = np.zeros((2712, 1220, 3), dtype=np.uint8)
+        with patch("avc.catch.find_dialog_buttons", return_value=[]),                 patch("avc.catch.find_popup_close", return_value=None) as close:
+            for _ in range(4):
+                routine._handle_popups(frame)
+
+        swept = [call.kwargs["fallback_scales"] for call in close.call_args_list]
+        self.assertEqual(4, len(swept))
+        self.assertEqual(CALIBRATION_SWEEP, swept[0])
+        self.assertEqual([(), (), ()], swept[1:])
+
+        # Once the budget is up the safety net is spent again.
+        routine._popup_sweep_at -= routine.POPUP_SWEEP_INTERVAL
+        with patch("avc.catch.find_dialog_buttons", return_value=[]),                 patch("avc.catch.find_popup_close", return_value=None) as close:
+            routine._handle_popups(frame)
+        self.assertEqual(CALIBRATION_SWEEP, close.call_args.kwargs["fallback_scales"])
+
     def test_medal_x_wins_before_the_share_button_can_match_weather(self):
         taps = []
         routine = object.__new__(CatchRoutine)

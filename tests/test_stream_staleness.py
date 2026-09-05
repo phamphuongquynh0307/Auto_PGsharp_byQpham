@@ -5,7 +5,7 @@ just before that gap stays in memory across it. Acting on it means tapping where
 """
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -66,6 +66,68 @@ class ScreenshotFallbackTests(unittest.TestCase):
 
         self.assertIsNotNone(frame)
         self.assertEqual(7, device._last_frame_sequence)
+
+
+class RelaunchCleanupTests(unittest.TestCase):
+    """screenrecord's 180s cap means _run relaunches for the whole session.
+
+    Every relaunch that leaves its decoder open keeps that decoder's threads and its handle on
+    the pipe alive for the rest of the run. Measured on a live session: +6 OS threads a minute,
+    which is what turned a 0.6s popup pass into a 1.7s one over a few hours.
+    """
+
+    def _run_one_launch(self, stream: ScreenStream, container, proc):
+        """Drive ScreenStream._run through exactly one launch, then stop it."""
+        def decode(video=0):
+            yield MagicMock(**{"to_ndarray.return_value": np.zeros((4, 4, 3), np.uint8)})
+            stream._stop.set()
+
+        container.decode.side_effect = decode
+        with patch("avc.stream.subprocess.Popen", return_value=proc),                 patch("avc.stream.av.open", return_value=container):
+            stream._run()
+
+    def _stream(self) -> ScreenStream:
+        stream = ScreenStream.__new__(ScreenStream)
+        ScreenStream.__init__(stream, serial=None, adb_path="adb", native_size=None, half=False)
+        return stream
+
+    def test_the_decoder_is_closed_when_a_recording_ends(self):
+        stream = self._stream()
+        container = MagicMock()
+        self._run_one_launch(stream, container, MagicMock())
+
+        container.close.assert_called_once()
+
+    def test_the_decoder_is_closed_even_when_decoding_raises(self):
+        stream = self._stream()
+        container = MagicMock()
+
+        def boom(video=0):
+            stream._stop.set()
+            raise RuntimeError("adb hiccup")
+
+        container.decode.side_effect = boom
+        with patch("avc.stream.subprocess.Popen", return_value=MagicMock()),                 patch("avc.stream.av.open", return_value=container),                 patch("avc.stream.time.sleep"):
+            stream._run()
+
+        container.close.assert_called_once()
+
+    def test_the_recorder_pipe_is_closed_and_the_process_reaped(self):
+        stream = self._stream()
+        proc = MagicMock()
+        self._run_one_launch(stream, MagicMock(), proc)
+
+        proc.terminate.assert_called_once()
+        proc.stdout.close.assert_called_once()
+        proc.wait.assert_called_once()
+
+    def test_the_decoder_is_capped_so_it_cannot_claim_every_core(self):
+        stream = self._stream()
+        container = MagicMock()
+        video = container.streams.video.__getitem__.return_value
+        self._run_one_launch(stream, container, MagicMock())
+
+        self.assertEqual(2, video.thread_count)
 
 
 if __name__ == "__main__":

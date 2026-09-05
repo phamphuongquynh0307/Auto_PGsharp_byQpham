@@ -34,7 +34,7 @@ from .layout import (
     CALIBRATION_SWEEP, Layout,
     bracket_scales, scales_around,
 )
-from . import uidump
+from . import diag, uidump
 from .resources import resource_path
 from .vision import (
     best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
@@ -557,6 +557,10 @@ class CatchStats:
 
 
 class CatchRoutine:
+    # Wide-sweep budget for the close-X safety net (see _handle_popups). Kept as a class
+    # attribute so the sweep is always spent on a routine's very first popup pass.
+    POPUP_SWEEP_INTERVAL = 1.0
+    _popup_sweep_at = 0.0
     # How often the stall watchdog re-reads the screen. _handle_popups runs at poll_interval,
     # but the answer feeds a timer measured in tens of seconds, so sampling every poll would
     # buy nothing and cost two detections a frame.
@@ -1272,7 +1276,133 @@ class CatchRoutine:
             self._remember_ui_nearby_slot(bar[0])
         # Every dump refreshes the cooldown for free, whatever it was taken for.
         self._note_cooldown(state.cooldown)
+        self._shadow_check(state)
         return state
+
+    # Attributes the measurement is allowed to disturb and must put back. Running a detector
+    # for measurement must not change what the next real call sees: a cleared anchor cache turns
+    # the following search from a 110px box into the whole region, and a handle position written
+    # from a measurement frame would outlive the frame it was true for.
+    _SHADOW_VOLATILE = ("_anchor_cache", "_nearby_handle_cache", "_force_bottom_cache",
+                        "_force_bottom_value", "_force_bottom_at", "_star_cache")
+    _shadow_started = False
+    _shadow_caches = None    # the measurement's own copy of the above; see _shadow_check
+    _shadow_counts = None    # readings taken per kind, so a settled answer stops costing
+    # What this file holds is a profile of a phone, not a time series: once a device has
+    # answered the same question fifty times the fifty-first reading says nothing new, while
+    # the '@' search behind it still costs ~200ms on a bar whose drag handle never matches.
+    _SHADOW_ROWS_PER_KIND = 50
+
+    def _shadow_check(self, state) -> None:
+        """Measure the pixel estimates against PGSharp's own coordinates. Changes nothing.
+
+        Every tap this routine makes on the PGSharp overlay goes to a point it worked out from
+        pixels or from the user's hand calibration, and the honest answer to "does that hold on
+        somebody else's phone" is that it has never been measured — the one device it was
+        authored on cannot answer it. The view tree does hold the exact coordinate, but it costs
+        ~1.6s, which is precisely why it cannot simply be used everywhere instead.
+
+        So measure only when a dump has already been paid for by something else. The comparison
+        is then free, it samples itself at whatever rate dumps happen to occur, and the rows land
+        in the report bundle users already know how to send. Nothing here feeds back into the
+        run: the tap still goes exactly where it went before, and a device whose rows show a
+        large gap is evidence to act on later, not a decision taken now.
+        """
+        if state is None or not getattr(self.config, "use_ui_dump", False):
+            return
+        # Run the detectors against the measurement's own copy of their caches, then put the
+        # run's copies back untouched. Sharing them is wrong in both directions: a cache this
+        # cleared would slow the next real search, and simply restoring the run's value would
+        # leave the measurement permanently cold — in force_slot mode nothing else populates
+        # the anchor at all, so every dump would repay a full-region sweep (238ms against 38ms
+        # warm). Seeding from the run's values on the first pass costs nothing and starts warm
+        # wherever the pixel path is the one doing the work.
+        mine = self._shadow_caches or {}
+        theirs = {name: getattr(self, name, None) for name in self._SHADOW_VOLATILE}
+        for name in self._SHADOW_VOLATILE:
+            setattr(self, name, mine.get(name, theirs[name]))
+        try:
+            self._shadow_rows(state)
+        except Exception:  # noqa: BLE001 - diagnostics must never stop automation
+            pass
+        finally:
+            self._shadow_caches = {n: getattr(self, n, None) for n in self._SHADOW_VOLATILE}
+            for name, value in theirs.items():
+                setattr(self, name, value)
+
+    def _shadow_rows(self, state) -> None:
+        cfg = self.config
+        # Only off the live stream, where a frame is free. With the stream down screenshot()
+        # falls back to a one-shot screencap costing seconds over Wi-Fi, and a measurement is
+        # never worth that — least of all during the trouble that took the stream away.
+        if getattr(self.device, "_stream", None) is None:
+            return
+        frame = self.device.screenshot()
+        if frame is None or not hasattr(frame, "shape"):
+            return
+        if not self._shadow_started:
+            self._shadow_started = True
+            height, width = frame.shape[:2]
+            diag.shadow("=" * 78)
+            # game_scale is measured from the Berry button during the first encounter, so a
+            # header written before then must say "not yet", never 0.000 — a zero here would
+            # read as a device whose game UI renders at nothing.
+            game_s = f"{cfg.game_scale:.3f}" if cfg.game_scale else "chua-do"
+            diag.shadow(
+                f"PHIEN {time.strftime('%Y-%m-%d %H:%M:%S')}  man_hinh={width}x{height}  "
+                f"tpl_s={self._tpl_s:.3f}  game_s={game_s}  "
+                f"force_slot={bool(cfg.force_slot)}"
+            )
+            diag.shadow(f"{'gio':<8} {'muc':<16} {'anh':>15} {'pgsharp':>15} {'lech':>9}")
+        bar = self._ui_nearby_bar(state)
+        ui_slot = bar[0] if bar else None
+        # The '@' anchor path is the one genuinely independent of the dump. In force_slot mode
+        # _scan_slots reads _effective_nearby_slot, which PGSharp has already overwritten, so
+        # comparing that would only ever measure the dump against itself.
+        if not self._shadow_done("nearby-moc@"):
+            self._shadow_row("nearby-moc@", self._slot_in(frame), ui_slot)
+        # Only when there is something to compare against. The calibration is a constant the
+        # user typed, not a detector, so "the pixels saw it and the tree did not" is a sentence
+        # about an empty bar rather than about this device — and it would be written on most
+        # dumps, burying the rows that mean something.
+        if cfg.force_slot and ui_slot is not None and not self._shadow_done("nearby-canhtay"):
+            self._shadow_row("nearby-canhtay", cfg.nearby_slot, ui_slot)
+        if not self._shadow_done("autowalk"):
+            row = self._autowalk_row_visual_in(frame, self._star_cache)
+            ui_row = state.autowalk_row
+            self._shadow_row("autowalk", row[0] if row else None, ui_row[1] if ui_row else None)
+        if not self._shadow_done("dialog-cancel"):
+            buttons = find_dialog_buttons(frame, cfg.dialog_region,
+                                          broad_accent=True, min_text_height=0)
+            self._shadow_row("dialog-cancel",
+                             buttons[0] if len(buttons) >= 2 else None, state.cancel_button)
+
+    def _shadow_done(self, kind: str) -> bool:
+        """Whether this device has already answered for `kind` often enough to be believed."""
+        return (self._shadow_counts or {}).get(kind, 0) >= self._SHADOW_ROWS_PER_KIND
+
+    @staticmethod
+    def _shadow_point(point) -> str:
+        return f"({int(point[0])},{int(point[1])})" if point is not None else "-"
+
+    def _shadow_row(self, kind: str, pixel, ui) -> None:
+        """One comparison row. Neither side seeing anything is the ordinary case, so it is
+        left out — the file exists for the rows that disagree."""
+        # Count the reading, not the row: a question both sides declined to answer has still
+        # been asked, and going on asking it is exactly the cost the cap exists to stop.
+        counts = dict(self._shadow_counts or {})
+        counts[kind] = counts.get(kind, 0) + 1
+        self._shadow_counts = counts
+        if pixel is None and ui is None:
+            return
+        if pixel is not None and ui is not None:
+            gap = f"{math.hypot(pixel[0] - ui[0], pixel[1] - ui[1]):.0f}px"
+        else:
+            # A one-sided answer says which of the two this device defeats, which is a more
+            # useful thing to learn than any distance would have been.
+            gap = "CHI-ANH" if ui is None else "CHI-UI"
+        diag.shadow(f"{time.strftime('%H:%M:%S'):<8} {kind:<16} "
+                    f"{self._shadow_point(pixel):>15} {self._shadow_point(ui):>15} {gap:>9}")
 
     def _recent_ui_state(self, max_age: float = 1.5):
         """A just-read hierarchy result, without turning a fast pixel path into another dump."""
@@ -1821,12 +1951,23 @@ class CatchRoutine:
         # the generic 0.70 threshold. Take a high-confidence X before inspecting green action
         # buttons so the safe close always wins over SHARE/SAVE IMAGE.
         if self._ball_in(frame) is None:
+            # The wide sweep is the safety net for a popup rendering at a scale the
+            # calibration never saw. It costs ~90ms, because it re-searches three close
+            # templates plus their glyph crops at seventeen scales each, and on an
+            # ordinary map frame — which is nearly every frame — it can only ever
+            # come back empty. A blocking popup does not go away on its own, so spending the
+            # sweep once a second still catches it, while the calibrated scales carry on
+            # being tried on every single cycle exactly as before.
+            now = time.monotonic()
+            wide_sweep = now - self._popup_sweep_at >= self.POPUP_SWEEP_INTERVAL
+            if wide_sweep:
+                self._popup_sweep_at = now
             close = find_popup_close(
                 frame,
                 (self._close_btn, self._close_btn_blue, self._close_btn_white),
                 threshold=max(0.82, self.config.popup_threshold),
                 scales=self._game_popup_scales,
-                fallback_scales=CALIBRATION_SWEEP,
+                fallback_scales=CALIBRATION_SWEEP if wide_sweep else (),
                 cache=fast_cache,
             )
             if close is not None:

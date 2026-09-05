@@ -274,6 +274,11 @@ KEEP_PENDING = ("miss", "recheck")
 
 
 class ShundoRoutine:
+    # Wide-sweep budget for the close-X safety net (see _handle_popups). Kept as a class
+    # attribute so the sweep is always spent on a routine's very first popup pass.
+    POPUP_SWEEP_INTERVAL = 1.0
+    _popup_sweep_at = 0.0
+
     def __init__(self, device: Device, config: ShundoConfig | None = None) -> None:
         self.device = device
         self.config = config or ShundoConfig()
@@ -592,12 +597,23 @@ class ShundoRoutine:
         # Medal/share screens expose a high-confidence bottom X. Handle it before green warning
         # buttons: the SHARE pill can otherwise resemble the weather warning at low resolution.
         if not self._encounter_visible(frame):
+            # The wide sweep is the safety net for a popup rendering at a scale the
+            # calibration never saw. It costs ~90ms, because it re-searches three close
+            # templates plus their glyph crops at seventeen scales each, and on an
+            # ordinary map frame — which is nearly every frame — it can only ever
+            # come back empty. A blocking popup does not go away on its own, so spending the
+            # sweep once a second still catches it, while the calibrated scales carry on
+            # being tried on every single cycle exactly as before.
+            now = time.monotonic()
+            wide_sweep = now - self._popup_sweep_at >= self.POPUP_SWEEP_INTERVAL
+            if wide_sweep:
+                self._popup_sweep_at = now
             close = find_popup_close(
                 frame,
                 self._close_btns,
                 threshold=max(0.82, self.config.popup_threshold),
                 scales=self._popup_scales,
-                fallback_scales=CALIBRATION_SWEEP,
+                fallback_scales=CALIBRATION_SWEEP if wide_sweep else (),
                 cache=fast_cache,
             )
             if close is not None:

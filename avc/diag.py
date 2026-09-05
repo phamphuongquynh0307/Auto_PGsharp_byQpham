@@ -27,6 +27,12 @@ LOG_NAME = "autoclick.log"
 MAX_BYTES = 1_000_000
 BACKUPS = 1
 
+# Where the shadow comparison lands (CatchRoutine._shadow_check). Kept out of autoclick.log
+# on purpose: it is a machine-readable table for the author, not narration for the user, and
+# mixing it into the pane would bury the messages the user is actually meant to read.
+SHADOW_NAME = "doi-chieu.log"
+SHADOW_MAX_BYTES = 400_000
+
 _logger: logging.Logger | None = None
 _log_error: str | None = None   # why the log file could not be opened, if it could not be
 
@@ -69,6 +75,27 @@ def write(line: str) -> None:
     """Append one line to the log file. Never raises."""
     try:
         _get_logger().info(line)
+    except Exception:  # noqa: BLE001 - diagnostics must never stop automation
+        pass
+
+
+def shadow_path() -> str:
+    return os.path.join(base_dir(), SHADOW_NAME)
+
+
+def shadow(line: str) -> None:
+    """Append one comparison row. Never raises, and never grows without bound.
+
+    Past the cap the file restarts rather than rotating. What this measures is a property of
+    the device, not of the moment, so the newest rows answer the question as well as the
+    oldest ones do — and a second file in the report would only be one more thing to explain.
+    """
+    try:
+        path = shadow_path()
+        if os.path.exists(path) and os.path.getsize(path) > SHADOW_MAX_BYTES:
+            os.replace(path, path + ".1")
+        with open(path, "a", encoding="utf-8") as fh:
+            print(line, file=fh)
     except Exception:  # noqa: BLE001 - diagnostics must never stop automation
         pass
 
@@ -138,6 +165,10 @@ def export(dest: str, *, settings_path: str | None = None,
         timing = os.path.join(base_dir(), "timing.log")
         if os.path.exists(timing):
             bundle.write(timing, "timing.log")
+        for name in (SHADOW_NAME, f"{SHADOW_NAME}.1"):
+            path = os.path.join(base_dir(), name)
+            if os.path.exists(path):
+                bundle.write(path, name)
         if settings_path:
             settings = _redacted_settings(settings_path)
             if settings is not None:

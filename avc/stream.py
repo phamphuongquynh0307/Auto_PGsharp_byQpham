@@ -96,9 +96,17 @@ class ScreenStream:
     def _run(self) -> None:
         while not self._stop.is_set():
             got_frame = False
+            container = None
             try:
                 self._proc = subprocess.Popen(self._cmd(), stdout=subprocess.PIPE, creationflags=_NO_WINDOW)
                 container = av.open(_ReadOnly(self._proc.stdout), format="h264", mode="r")
+                # FFmpeg defaults to one decode thread per core, and OpenCV's template matching
+                # already claims all of them. Two threads keep up with half-resolution H.264
+                # comfortably and leave the machine free for the detectors, which is what the
+                # catch loop is actually waiting on.
+                video = container.streams.video[0]
+                video.thread_type = "AUTO"
+                video.thread_count = 2
                 for frame in container.decode(video=0):
                     if self._stop.is_set():
                         break
@@ -114,7 +122,18 @@ class ScreenStream:
                 # Transient decode/adb hiccup: pause briefly and relaunch.
                 time.sleep(0.3)
             finally:
+                # Kill the recorder first so the pipe stops filling, then release the decoder.
+                # screenrecord's own 180s cap makes this run every few minutes for the whole
+                # session, and an unclosed container keeps its decode threads and its handle on
+                # the pipe alive — a run long enough to relaunch seventy times was leaking that
+                # many decoders into a process the detectors have to share.
                 self._kill_proc()
+                if container is not None:
+                    try:
+                        container.close()
+                    except Exception:
+                        pass
+                    container = None
             if got_frame:
                 self._fail_streak = 0
             elif self._half_size is not None:
@@ -139,6 +158,18 @@ class ScreenStream:
         if self._proc is not None:
             try:
                 self._proc.terminate()
+            except Exception:
+                pass
+            # Close the pipe and reap the process. Without this the OS handle stays open until
+            # the garbage collector happens to run, which on a session that relaunches the
+            # recorder every 175s means the handles pile up for hours.
+            try:
+                if self._proc.stdout is not None:
+                    self._proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                self._proc.wait(timeout=1.0)
             except Exception:
                 pass
             self._proc = None

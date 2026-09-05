@@ -1,3 +1,69 @@
+# v1.4.9
+
+## Tiếng Việt
+
+### Chạy lâu ổn định hơn
+
+- Mỗi lần Android `screenrecord` tự khởi động lại, app giờ đóng hẳn bộ giải mã video, pipe và
+  process cũ thay vì để thread/handle tích tụ theo thời gian.
+- Giới hạn bộ giải mã còn 2 thread để dành CPU cho nhận dạng màn hình; các phiên chạy nhiều giờ
+  không còn chậm dần sau hàng chục lần stream khởi động lại.
+
+### Nhận dạng nhanh hơn mà vẫn giữ đường lui an toàn
+
+- Tìm template trong một vùng nhỏ giờ crop ảnh trước khi đổi sang grayscale và tái sử dụng trực
+  tiếp score map, giảm chuyển đổi pixel và cấp phát bộ nhớ không cần thiết.
+- Bộ dò nút đóng vẫn thử scale đã căn ở mọi chu kỳ, còn lượt quét rộng 17 scale được giới hạn một
+  lần mỗi giây. Popup lạ vẫn được bắt, nhưng map bình thường không còn trả thêm khoảng 90 ms ở
+  từng vòng lặp.
+
+### Có số liệu thật để sửa lệch trên máy khác
+
+- Khi app đã đọc overlay PGSharp vì công việc sẵn có, app âm thầm đối chiếu tọa độ do ảnh nhận ra
+  với tọa độ thật trong view Android cho Nearby, AutoWalk và nút CANCEL.
+- Kết quả nằm trong `doi-chieu.log` và tự đi kèm gói **Xuất báo cáo lỗi**. Phần đo không thay đổi
+  bất kỳ tọa độ bấm hay cache nào của phiên chạy, không tự chụp ảnh chậm khi stream mất, và tự
+  dừng sau khi đủ mẫu để không tốn CPU mãi.
+
+### Kiểm chứng
+
+- **272 test đạt**, không có lỗi; 19 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+
+---
+
+## English
+
+### More stable long-running sessions
+
+- Every Android `screenrecord` relaunch now closes the previous video decoder, pipe, and process
+  instead of accumulating threads and handles over time.
+- The decoder is capped at two threads so screen recognition keeps the CPU it needs, preventing
+  multi-hour sessions from slowing down after repeated stream restarts.
+
+### Faster recognition with the safety net intact
+
+- Region-based template searches now crop before grayscale conversion and reuse the score map
+  directly, avoiding unnecessary full-frame work and memory allocations.
+- Calibrated popup-close scales are still checked every cycle, while the expensive 17-scale safety
+  sweep is limited to once per second. Unexpected popup sizes remain detectable without adding
+  roughly 90 ms to every ordinary map pass.
+
+### Real cross-device alignment evidence
+
+- Whenever the app already reads the PGSharp overlay, it passively compares image-derived
+  coordinates with Android view coordinates for Nearby, AutoWalk, and CANCEL controls.
+- Results are stored in `doi-chieu.log` and included in **Export error report** bundles. Measurement
+  never changes tap coordinates or detector caches, never buys a slow one-shot screenshot when
+  the stream is unavailable, and stops after enough samples have been collected.
+
+### Verification
+
+- **272 tests pass** with no failures; 19 GUI tests are skipped as expected when no Tk desktop is
+  available.
+
+---
+
 # v1.4.8
 
 ## Tiếng Việt
