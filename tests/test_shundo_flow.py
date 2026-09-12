@@ -392,6 +392,35 @@ class ShundoAnswerTests(unittest.TestCase):
 
         self.assertFalse(background_badge_visible(frame, (0, 0, 200, 80)))
 
+    def test_background_badge_detector_rejects_the_dense_post_shiny_status_glyph(self):
+        """Regression for the user's Gible: its ordinary white glyph is not Background.
+
+        This is the thresholded shape that triggered the live false positive, normalised to a
+        tiny text fixture. It is dense and touches parts of every side of its bounding box, but
+        it is taller than wide and does not carry a square four-sided frame.
+        """
+        import cv2
+        import numpy as np
+
+        rows = (
+            "..##......##......#.", "..##....#####....###",
+            ".####..#######..####", ".###################",
+            ".###################", ".#############..####",
+            ".####.########...##.", "..#################.",
+            "..########..######..", "...######....###....",
+            "...#####.....###....", ".########....####...",
+            ".#################.#", ".....#########......",
+            "....##########......", "..#####.......####..",
+            "..####.........####.", "..####..........###.",
+            "...#######....####..", "....############....",
+        )
+        glyph = np.array([[char == "#" for char in row] for row in rows], dtype=np.uint8)
+        glyph = cv2.resize(glyph, (30, 38), interpolation=cv2.INTER_NEAREST).astype(bool)
+        frame = np.full((170, 720, 3), 55, dtype=np.uint8)
+        frame[28:66, 506:536][glyph] = 235
+
+        self.assertFalse(background_badge_visible(frame, (0, 0, 720, 170)))
+
     def test_unreadable_iv_is_not_fled_as_a_mismatch(self):
         routine = bare_routine()
         routine.config.target_ivs = (15, 15, 14)

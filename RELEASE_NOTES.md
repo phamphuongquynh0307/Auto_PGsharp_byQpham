@@ -1,3 +1,38 @@
+# v1.4.14
+
+## Tiếng Việt
+
+### Không nhầm icon trạng thái thành Special Background
+
+- Sửa ca shiny Gible `IV100 15/15/15` không có Background nhưng bot vẫn báo có và tạm dừng.
+- Nguyên nhân là biểu tượng trạng thái màu trắng sau dấu shiny cao hơn rộng, chỉ có hai cạnh giống
+  khung nhưng detector cũ vẫn cho qua. Badge Background giờ phải gần vuông và có đủ bốn cạnh;
+  trường hợp ảnh bị thu nhỏ mất một cạnh chỉ được nhận khi ba cạnh còn rõ và phần icon đủ đặc.
+- Giữ hỗ trợ các artwork Background khác nhau giữa máy/sự kiện: detector vẫn kiểm tra hình học
+  của khung, không đóng đinh hình vẽ bên trong.
+- Đối chiếu trực tiếp hai ảnh người dùng cung cấp: ảnh có badge vẫn được nhận, Gible không badge
+  bị từ chối.
+
+### Kiểm chứng
+
+- **293 test đạt**, không có lỗi; 19 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+- Thêm test hồi quy bằng đúng hình dạng threshold của biểu tượng gây dừng nhầm.
+
+---
+
+## English
+
+### Do not mistake an encounter-status glyph for a Special Background
+
+- Fixes a shiny `IV100 15/15/15` Gible without a Background being reported as a target.
+- Background candidates must now remain square and retain a real four-sided frame. A compressed
+  three-sided badge is accepted only when its enclosed artwork is sufficiently dense.
+- Detection remains artwork-independent, and the reported false-positive shape has a dedicated
+  regression test.
+
+---
+
 # v1.4.13
 
 ## Tiếng Việt

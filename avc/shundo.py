@@ -72,7 +72,10 @@ def background_badge_visible(frame, region: tuple[int, int, int, int]) -> bool:
         cx, cy, cw, ch, area = (int(v) for v in stats[index])
         if not (min_side <= cw <= max_side and min_side <= ch <= max_side):
             continue
-        if not 0.68 <= cw / max(1, ch) <= 1.45:
+        # A Background badge is authored as a square. The ordinary encounter-status glyph
+        # immediately after the shiny sparkle is visibly taller than wide (the reported false
+        # positive measured 30x38), yet the old 0.68 tolerance still admitted it.
+        if not 0.82 <= cw / max(1, ch) <= 1.22:
             continue
         if cx + cw / 2 < roi_w * 0.52:
             continue
@@ -85,12 +88,13 @@ def background_badge_visible(frame, region: tuple[int, int, int, int]) -> bool:
             float(patch[:, -band:].mean()),
         )
         fill = area / max(1, cw * ch)
-        # Downscaling can erase one one-pixel side of the frame (the supplied 176x43 crop loses
-        # its left edge) while leaving the badge itself densely filled. Accept that compressed
-        # form only when three sides remain strong and the component is far denser than text.
+        # A real frame keeps all four sides. Downscaling can erase one one-pixel side (the
+        # supplied 176x43 Background crop loses its left edge), so accept three sides only when
+        # the enclosed artwork stays very dense. The regular post-shiny status glyph that caused
+        # the live false stop had only two strong sides and 0.62 fill.
         strong_sides = sum(support >= 0.45 for support in border_support)
-        if ((min(border_support) >= 0.30 and fill >= 0.22)
-                or (strong_sides >= 3 and fill >= 0.62)):
+        if ((strong_sides == 4 and fill >= 0.22)
+                or (strong_sides >= 3 and fill >= 0.72)):
             return True
     return False
 

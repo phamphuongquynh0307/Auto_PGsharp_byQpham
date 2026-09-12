@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.13"
+APP_VERSION = "1.4.14"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
