@@ -1,3 +1,40 @@
+# v1.4.13
+
+## Tiếng Việt
+
+### Đọc đúng IV khi PGSharp không đưa chữ vào UI dump
+
+- Sửa trường hợp encounter hiện rõ IV như `11/7/15` nhưng log vẫn báo **Không đọc được IV**.
+  Một số bản PGSharp vẽ dòng Encounter IV trực tiếp lên màn hình và không tạo node chữ Android,
+  nên UI dump dù hợp lệ vẫn không có dữ liệu để đọc.
+- Thêm bộ đọc ảnh CRNN chạy hoàn toàn cục bộ và đóng gói sẵn trong EXE. Bộ đọc chỉ tìm ba cụm
+  số quanh hai dấu `/`, giới hạn từng chỉ số trong 0–15 và đối chiếu thêm IV% khi nhìn thấy để
+  giảm khả năng nhận nhầm nền hoặc icon.
+- Vẫn ưu tiên UI dump vì nhanh; OCR chỉ chạy khi đường đó không có IV. Nếu cả hai chưa đủ chắc,
+  bot tiếp tục giữ encounter thay vì tự thoát nhầm Pokémon.
+- Đã kiểm tra trực tiếp ảnh phản hồi `IV73 11/7/15`: kết quả đọc là **11/7/15**.
+
+### Kiểm chứng
+
+- **292 test đạt**, không có lỗi; 19 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+- Có test mới cho IV bất kỳ, từ chối chuỗi thiếu hai dấu phân cách và fallback khi UI dump rỗng.
+
+---
+
+## English
+
+### Exact IV OCR when PGSharp exposes no accessibility text
+
+- Fixes visible triplets such as `11/7/15` being reported as unreadable when PGSharp paints the
+  Encounter IV pill without Android text nodes.
+- Adds a bundled, fully local CRNN fallback scoped to the three slash-delimited stat fields. It
+  validates each value as 0–15 and uses the displayed IV percentage as extra consistency evidence.
+- Accessibility text remains the fast path. An uncertain result still keeps the encounter open
+  instead of fleeing a potentially matching Pokémon.
+
+---
+
 # v1.4.12
 
 ## Tiếng Việt

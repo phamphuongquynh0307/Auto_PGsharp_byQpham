@@ -14,10 +14,10 @@ Per cycle:
      the user either way. Reading PGSharp's info pill ("▼ L3 IV40 0/6/12 ✨ ⚡") for the
      IV value decides whether it matches the user's configured target.
 
-The sub-IVs are read by template-matching the glyphs '1', '5' and '/' inside the pill
-region and checking for the exact ordered sequence 1 5 / 1 5 / 1 5 with sane gaps.
-The '5' glyph was cropped from the pill's larger IV-percent font, so it is matched at
-~0.84 scale to fit the smaller sub-IV font.
+The exact sub-IVs are read from PGSharp's accessibility text when available. Some builds
+paint the pill without exposing any text nodes, so a bundled local CRNN reader segments the
+three fields around their slash glyphs. The old lightweight 15/15/15 templates remain the
+last fallback for hundo-only setups.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from dataclasses import dataclass, field, replace
 from .catch import _load_optional, _resolve
 from .device import Device
 from . import uidump
+from .ivocr import IvOcr
 from .layout import (
     BASE_DENSITY, BASE_RESOLUTION, CALIBRATION_MIN_SCORE, CALIBRATION_SWEEP, Layout,
     bracket_scales, scales_around,
@@ -188,6 +189,7 @@ class ShundoConfig:
     glyph_threshold: float = 0.72
     glyph_max_gap: int = 45         # max px between consecutive glyph centers
     iv_read_tries: int = 3          # re-read the pill a few times before deciding
+    iv_ocr_model: str = "models/text_recognition_CRNN_EN_2022oct_int8.onnx"
     # Opt-in final filter: an encounter is a target only when it is shiny, its exact IV triplet
     # matches, AND it carries a Special/Location Background. Detection uses PGSharp semantics
     # when available and the badge frame otherwise, so event artwork need not be configured.
@@ -375,6 +377,8 @@ class ShundoRoutine:
         self._ui_feed_slot: tuple[int, int] | None = None
         self._ui_nearby_verified_at = 0.0
         self._encounter_ui_state = None
+        self._iv_ocr = None
+        self._iv_ocr_unavailable = False
         # Unlike _anchor_cache, this column survives one failed template search. A temporary
         # smeared frame must not erase the information needed to name Nearby in the view tree.
         self._nearby_column_x: int | None = None
@@ -934,10 +938,11 @@ class ShundoRoutine:
         return False
 
     def _read_iv_stats(self, frame) -> tuple[int, int, int] | None:
-        """Read PGSharp's exact three IV columns, with the old hundo vision fallback.
+        """Read PGSharp's exact three IV columns, with two local vision fallbacks.
 
-        A UI dump is paid for only after a shiny encounter is already open. It is slower
-        than vision but exposes the exact number needed for arbitrary user targets.
+        A UI dump is paid for only after a shiny encounter is already open. If PGSharp paints
+        the pill outside Android's accessibility tree, the narrowly scoped CRNN path reads its
+        three slash-delimited fields from pixels. The old template path remains for hundos.
         """
         state = uidump.parse(self.device.ui_dump() or "")
         # Reuse this same hierarchy for Background detection; an encounter must never pay for
@@ -945,6 +950,21 @@ class ShundoRoutine:
         self._encounter_ui_state = state
         if state is not None and state.iv_stats is not None:
             return state.iv_stats
+        if not getattr(self, "_iv_ocr_unavailable", False):
+            if getattr(self, "_iv_ocr", None) is None:
+                try:
+                    self._iv_ocr = IvOcr(_resolve(self.config.iv_ocr_model))
+                except (OSError, RuntimeError, ValueError):
+                    self._iv_ocr_unavailable = True
+            if self._iv_ocr is not None:
+                try:
+                    exact = self._iv_ocr.read(frame, self.config.pill_region)
+                except Exception:  # noqa: BLE001 - optional OCR must fail closed
+                    # The model is an optional fallback. A corrupt/missing runtime must retain
+                    # the existing safe behaviour: keep the encounter instead of fleeing it.
+                    exact = None
+                if exact is not None:
+                    return exact
         if tuple(self.config.target_ivs) == (15, 15, 15) and self._is_hundo(frame):
             return 15, 15, 15
         return None

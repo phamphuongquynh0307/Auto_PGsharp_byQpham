@@ -52,6 +52,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ('templates/*.png', 'templates'),
+        ('models/text_recognition_CRNN_EN_2022oct_int8.onnx', 'models'),
+        ('models/opencv_zoo_LICENSE', 'models'),
         # Ship the complete in-app guide with the one-file EXE.  The GUI still checks a
         # guide_images folder beside the EXE first, so a newer screenshot can override a
         # bundled one without rebuilding the application.
