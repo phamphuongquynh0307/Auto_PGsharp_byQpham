@@ -58,7 +58,7 @@ def bare_routine():
         enc_berry_min_fill=0.06,
         iv_read_tries=1,
         target_ivs=(15, 15, 15),
-        stop_on_background=False,
+        require_background=False,
         pill_region=(0, 0, 200, 80),
         layout=SimpleNamespace(s=1.0),
     )
@@ -326,10 +326,25 @@ class ShundoAnswerTests(unittest.TestCase):
         self.assertEqual("shiny", outcome)
         self.assertEqual((14, 15, 15), routine.stats.last_ivs)
 
-    def test_enabled_background_target_keeps_a_wrong_iv_shiny(self):
+    def test_background_filter_never_runs_until_the_exact_iv_matches(self):
         routine = bare_routine()
-        routine.config.stop_on_background = True
+        routine.config.require_background = True
         routine.config.iv_read_tries = 2
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: (12, 10, 11)
+        routine._background_evidence = lambda _frame: self.fail(
+            "Background must only be checked after the exact target IV")
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("shiny", outcome)
+        self.assertEqual(0, routine.stats.backgrounds)
+
+    def test_matching_iv_and_background_together_are_the_full_target(self):
+        routine = bare_routine()
+        routine.config.require_background = True
+        routine.config.iv_read_tries = 2
+        routine.config.target_ivs = (12, 10, 11)
         routine._encounter_visible = lambda _frame: True
         routine._read_iv_stats = lambda _frame: (12, 10, 11)
         routine._background_evidence = lambda _frame: "vision"
@@ -337,8 +352,25 @@ class ShundoAnswerTests(unittest.TestCase):
         outcome = routine._grade_encounter(confirmed_frame=object())
 
         self.assertEqual("background", outcome)
+        self.assertEqual(1, routine.stats.shundos)
         self.assertEqual(1, routine.stats.backgrounds)
         self.assertTrue(routine.stats.last_background)
+
+    def test_matching_iv_without_required_background_is_not_the_full_target(self):
+        routine = bare_routine()
+        routine.config.require_background = True
+        routine.config.iv_read_tries = 2
+        routine.config.target_ivs = (12, 10, 11)
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: (12, 10, 11)
+        routine._background_evidence = lambda _frame: None
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("shiny", outcome)
+        self.assertEqual(1, routine.stats.shundos)
+        self.assertEqual(0, routine.stats.backgrounds)
+        self.assertFalse(routine.stats.last_background)
 
     def test_background_badge_detector_accepts_different_art_inside_the_same_frame(self):
         import cv2

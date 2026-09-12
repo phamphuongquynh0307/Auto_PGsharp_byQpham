@@ -188,10 +188,10 @@ class ShundoConfig:
     glyph_threshold: float = 0.72
     glyph_max_gap: int = 45         # max px between consecutive glyph centers
     iv_read_tries: int = 3          # re-read the pill a few times before deciding
-    # Opt-in target: keep a shiny carrying any Special/Location Background, regardless of the
-    # configured IV triplet. Detection uses PGSharp semantics when available and the badge frame
-    # otherwise, so event-specific artwork does not have to be configured per phone.
-    stop_on_background: bool = False
+    # Opt-in final filter: an encounter is a target only when it is shiny, its exact IV triplet
+    # matches, AND it carries a Special/Location Background. Detection uses PGSharp semantics
+    # when available and the badge frame otherwise, so event artwork need not be configured.
+    require_background: bool = False
 
     # PGSharp's "blocked(non-shiny) IV:xx" toast: a light rounded pill at the bottom
     # centre, up for ~1s. The text frame is too fleeting to rely on (we usually catch the
@@ -1379,6 +1379,7 @@ class ShundoRoutine:
         self.stats.last_ivs = None
         self.stats.last_background = False
         background_hits = 0
+        target_iv_seen = False
         for attempt in range(cfg.iv_read_tries):
             if self.stop_event.is_set():
                 return "shiny"
@@ -1386,13 +1387,24 @@ class ShundoRoutine:
             # operation. A rare shiny gets a crisp one-shot frame for tiny IV glyphs.
             self._encounter_ui_state = None
             iv_stats = self._read_iv_stats(frame)
-            if iv_stats is not None:
+            # Once the exact target has been proven, do not let a later transitional/partial UI
+            # read overwrite that decisive value while we spend another frame confirming the
+            # Background badge.
+            if iv_stats is not None and (not target_iv_seen or iv_stats == tuple(cfg.target_ivs)):
                 self.stats.last_ivs = iv_stats
             if iv_stats == tuple(cfg.target_ivs):
-                self.stats.shundos += 1
-                self.stats.last_event = "shundo"
-                return "shundo"
-            if getattr(cfg, "stop_on_background", False):
+                if not target_iv_seen:
+                    self.stats.shundos += 1
+                    target_iv_seen = True
+                if not getattr(cfg, "require_background", False):
+                    self.stats.last_event = "shundo"
+                    return "shundo"
+            elif iv_stats is not None and not target_iv_seen:
+                # The ordered filter is shiny -> exact IV -> Background. A known IV mismatch
+                # never reaches the Background detector, regardless of what artwork is present.
+                self.stats.last_event = "shiny"
+                return "shiny"
+            if getattr(cfg, "require_background", False) and target_iv_seen:
                 evidence = self._background_evidence(frame)
                 if evidence == "semantic":
                     background_hits = 2
@@ -1403,13 +1415,11 @@ class ShundoRoutine:
                     self.stats.last_background = True
                     self.stats.last_event = "background"
                     return "background"
-            if iv_stats is not None and not getattr(cfg, "stop_on_background", False):
-                self.stats.last_event = "shiny"
-                return "shiny"
             if attempt + 1 < cfg.iv_read_tries:
                 self._interruptible_sleep(0.4)
                 frame = self.device.screenshot(fresh=True)
         if self.stats.last_ivs is not None:
+            # This includes an exact-IV shiny that failed the optional final Background filter.
             self.stats.last_event = "shiny"
             return "shiny"
         # Never flee a shiny whose IV could not be read: it might be the requested target.

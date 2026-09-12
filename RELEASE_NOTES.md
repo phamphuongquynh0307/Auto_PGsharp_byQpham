@@ -1,3 +1,35 @@
+# v1.4.12
+
+## Tiếng Việt
+
+### Background là điều kiện cuối sau Shiny và đúng IV
+
+- Sửa đúng thứ tự lọc theo yêu cầu: **Shiny → đúng cả ba IV mục tiêu → có Special Background**.
+- Khi bật **Yêu cầu đúng IV phải có Special Background**, bot chỉ soi icon Background sau khi đã
+  xác nhận IV khớp. Shiny sai IV không chạy detector Background.
+- Shiny đúng IV nhưng thiếu Background được xem là chưa đạt đủ mục tiêu và xử lý theo lựa chọn
+  Thoát/Tạm dừng dành cho shiny chưa đạt; log và Discord nói rõ lý do thiếu Background.
+- Giữ khả năng nhận mọi artwork Background khác nhau giữa máy/sự kiện và tự chuyển setting đã
+  lưu từ v1.4.11 sang ngữ nghĩa mới.
+
+### Kiểm chứng
+
+- Có test riêng cho ba nhánh: sai IV không soi Background, đúng IV + Background thì giữ, và đúng
+  IV nhưng thiếu Background thì không xem là đạt đủ mục tiêu.
+
+---
+
+## English
+
+### Background is the final condition after shiny and exact IV
+
+- Corrects the filter order to **Shiny → exact three-stat target IV → Special Background**.
+- With the Background requirement enabled, its detector runs only after the IV target matches.
+- A matching-IV shiny without a Background follows the configured non-target shiny action, with
+  explicit local and Discord messages; v1.4.11's saved checkbox value migrates automatically.
+
+---
+
 # v1.4.11
 
 ## Tiếng Việt

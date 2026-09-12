@@ -154,7 +154,7 @@ class HiddenPersistenceTests(unittest.TestCase):
             app.target_iv_atk.set(15)
             app.target_iv_def.set(14)
             app.target_iv_sta.set(13)
-            app.stop_on_background.set(True)
+            app.require_background.set(True)
             app.mode = "shundo"          # hides the whole catching group
             app._sync_settings_visibility()
             app.save_settings()
@@ -166,7 +166,7 @@ class HiddenPersistenceTests(unittest.TestCase):
             self.assertTrue(saved["no_balls_spin"])
             self.assertEqual((15, 14, 13), (
                 saved["target_iv_atk"], saved["target_iv_def"], saved["target_iv_sta"]))
-            self.assertTrue(saved["stop_on_background"])
+            self.assertTrue(saved["require_background"])
 
             root = tk.Tk()
             reloaded = gui.App(root)
@@ -175,7 +175,7 @@ class HiddenPersistenceTests(unittest.TestCase):
             self.assertEqual((15, 14, 13), (
                 reloaded.target_iv_atk.get(), reloaded.target_iv_def.get(),
                 reloaded.target_iv_sta.get()))
-            self.assertTrue(reloaded.stop_on_background.get())
+            self.assertTrue(reloaded.require_background.get())
             root.destroy()
         finally:
             gui._settings_path = real_path
