@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import ANY, patch
 
-from avc.shundo import KEEP_PENDING, ShundoRoutine, ShundoStats
+from avc.shundo import KEEP_PENDING, ShundoRoutine, ShundoStats, background_badge_visible
 
 
 class FakeDevice:
@@ -58,6 +58,8 @@ def bare_routine():
         enc_berry_min_fill=0.06,
         iv_read_tries=1,
         target_ivs=(15, 15, 15),
+        stop_on_background=False,
+        pill_region=(0, 0, 200, 80),
         layout=SimpleNamespace(s=1.0),
     )
     routine.stats = ShundoStats()
@@ -323,6 +325,40 @@ class ShundoAnswerTests(unittest.TestCase):
 
         self.assertEqual("shiny", outcome)
         self.assertEqual((14, 15, 15), routine.stats.last_ivs)
+
+    def test_enabled_background_target_keeps_a_wrong_iv_shiny(self):
+        routine = bare_routine()
+        routine.config.stop_on_background = True
+        routine.config.iv_read_tries = 2
+        routine._encounter_visible = lambda _frame: True
+        routine._read_iv_stats = lambda _frame: (12, 10, 11)
+        routine._background_evidence = lambda _frame: "vision"
+
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("background", outcome)
+        self.assertEqual(1, routine.stats.backgrounds)
+        self.assertTrue(routine.stats.last_background)
+
+    def test_background_badge_detector_accepts_different_art_inside_the_same_frame(self):
+        import cv2
+        import numpy as np
+
+        for colour in ((255, 200, 20), (20, 210, 255)):
+            frame = np.full((80, 200, 3), 55, dtype=np.uint8)
+            cv2.rectangle(frame, (150, 28), (169, 47), (235, 235, 235), 2)
+            cv2.circle(frame, (159, 37), 6, colour, -1)
+            self.assertTrue(background_badge_visible(frame, (0, 0, 200, 80)))
+
+    def test_background_badge_detector_rejects_an_unframed_shiny_sparkle(self):
+        import cv2
+        import numpy as np
+
+        frame = np.full((80, 200, 3), 55, dtype=np.uint8)
+        cv2.line(frame, (158, 25), (158, 51), (255, 255, 255), 2)
+        cv2.line(frame, (145, 38), (171, 38), (255, 255, 255), 2)
+
+        self.assertFalse(background_badge_visible(frame, (0, 0, 200, 80)))
 
     def test_unreadable_iv_is_not_fled_as_a_mismatch(self):
         routine = bare_routine()

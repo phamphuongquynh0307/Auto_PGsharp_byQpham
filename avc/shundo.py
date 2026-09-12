@@ -38,6 +38,62 @@ from .vision import (
 )
 
 
+def background_badge_visible(frame, region: tuple[int, int, int, int]) -> bool:
+    """Find PGSharp's final square Background badge without matching its event artwork.
+
+    Special/Location Background art changes frequently. What stays consistent in Encounter IV
+    is the small, bright, framed square after the text/shiny glyph. We therefore look for a
+    compact square whose four borders are present in the right-hand part of the pill. Text and
+    the shiny sparkle fail the border test, while different artwork inside the frame is allowed.
+    """
+    import cv2
+    import numpy as np
+
+    if frame is None or not hasattr(frame, "shape") or len(frame.shape) < 2:
+        return False
+    x, y, w, h = region
+    frame_h, frame_w = frame.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(frame_w, x + w), min(frame_h, y + h)
+    if x1 - x0 < 12 or y1 - y0 < 12:
+        return False
+    roi = frame[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    value = hsv[..., 2]
+    # The badge has a pale/bright frame. Requiring brightness rather than a specific hue keeps
+    # blue, gold, green and future event icons equivalent.
+    mask = (value >= 170).astype(np.uint8)
+    roi_h, roi_w = mask.shape
+    min_side = max(6, int(round(roi_h * 0.07)))
+    max_side = max(min_side + 1, int(round(roi_h * 0.34)))
+    count, _labels, stats, _centres = cv2.connectedComponentsWithStats(mask, 8)
+    for index in range(1, count):
+        cx, cy, cw, ch, area = (int(v) for v in stats[index])
+        if not (min_side <= cw <= max_side and min_side <= ch <= max_side):
+            continue
+        if not 0.68 <= cw / max(1, ch) <= 1.45:
+            continue
+        if cx + cw / 2 < roi_w * 0.52:
+            continue
+        patch = mask[cy:cy + ch, cx:cx + cw]
+        band = max(1, min(cw, ch) // 7)
+        border_support = (
+            float(patch[:band, :].mean()),
+            float(patch[-band:, :].mean()),
+            float(patch[:, :band].mean()),
+            float(patch[:, -band:].mean()),
+        )
+        fill = area / max(1, cw * ch)
+        # Downscaling can erase one one-pixel side of the frame (the supplied 176x43 crop loses
+        # its left edge) while leaving the badge itself densely filled. Accept that compressed
+        # form only when three sides remain strong and the component is far denser than text.
+        strong_sides = sum(support >= 0.45 for support in border_support)
+        if ((min(border_support) >= 0.30 and fill >= 0.22)
+                or (strong_sides >= 3 and fill >= 0.62)):
+            return True
+    return False
+
+
 @dataclass
 class ShundoConfig:
     # Exact attack / defence / stamina columns to keep. Shared by both source modes.
@@ -132,6 +188,10 @@ class ShundoConfig:
     glyph_threshold: float = 0.72
     glyph_max_gap: int = 45         # max px between consecutive glyph centers
     iv_read_tries: int = 3          # re-read the pill a few times before deciding
+    # Opt-in target: keep a shiny carrying any Special/Location Background, regardless of the
+    # configured IV triplet. Detection uses PGSharp semantics when available and the badge frame
+    # otherwise, so event-specific artwork does not have to be configured per phone.
+    stop_on_background: bool = False
 
     # PGSharp's "blocked(non-shiny) IV:xx" toast: a light rounded pill at the bottom
     # centre, up for ~1s. The text frame is too fleeting to rely on (we usually catch the
@@ -269,8 +329,10 @@ class ShundoStats:
     checked: int = 0    # encounter attempts (double-taps that got an answer)
     shinies: int = 0    # encounters that actually opened
     shundos: int = 0
+    backgrounds: int = 0
     last_ivs: tuple[int, int, int] | None = None
-    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "iv_unknown" | "miss" | "recheck" | "lost"
+    last_background: bool = False
+    last_event: str = ""  # "blocked" | "shiny" | "shundo" | "background" | "iv_unknown" | "miss" | "recheck" | "lost"
                           # | "nospawn" | "idle" | "popup"
 
 
@@ -312,6 +374,7 @@ class ShundoRoutine:
         self._ui_nearby_slot: tuple[int, int] | None = None
         self._ui_feed_slot: tuple[int, int] | None = None
         self._ui_nearby_verified_at = 0.0
+        self._encounter_ui_state = None
         # Unlike _anchor_cache, this column survives one failed template search. A temporary
         # smeared frame must not erase the information needed to name Nearby in the view tree.
         self._nearby_column_x: int | None = None
@@ -877,10 +940,22 @@ class ShundoRoutine:
         than vision but exposes the exact number needed for arbitrary user targets.
         """
         state = uidump.parse(self.device.ui_dump() or "")
+        # Reuse this same hierarchy for Background detection; an encounter must never pay for
+        # two consecutive UI dumps just because both IV and the final badge are requested.
+        self._encounter_ui_state = state
         if state is not None and state.iv_stats is not None:
             return state.iv_stats
         if tuple(self.config.target_ivs) == (15, 15, 15) and self._is_hundo(frame):
             return 15, 15, 15
+        return None
+
+    def _background_evidence(self, frame) -> str | None:
+        """Return semantic/vision evidence for any Background badge in the IV pill."""
+        state = getattr(self, "_encounter_ui_state", None)
+        if state is not None and state.special_background:
+            return "semantic"
+        if background_badge_visible(frame, self.config.pill_region):
+            return "vision"
         return None
 
     # -- pending Nearby entry ---------------------------------------------------------
@@ -1302,11 +1377,14 @@ class ShundoRoutine:
         self.stats.checked += 1
         self.stats.shinies += 1
         self.stats.last_ivs = None
+        self.stats.last_background = False
+        background_hits = 0
         for attempt in range(cfg.iv_read_tries):
             if self.stop_event.is_set():
                 return "shiny"
             # The normal stream is intentionally half-resolution for smooth MuMu
             # operation. A rare shiny gets a crisp one-shot frame for tiny IV glyphs.
+            self._encounter_ui_state = None
             iv_stats = self._read_iv_stats(frame)
             if iv_stats is not None:
                 self.stats.last_ivs = iv_stats
@@ -1314,12 +1392,26 @@ class ShundoRoutine:
                 self.stats.shundos += 1
                 self.stats.last_event = "shundo"
                 return "shundo"
-            if iv_stats is not None:
+            if getattr(cfg, "stop_on_background", False):
+                evidence = self._background_evidence(frame)
+                if evidence == "semantic":
+                    background_hits = 2
+                elif evidence == "vision":
+                    background_hits += 1
+                if background_hits >= 2:
+                    self.stats.backgrounds += 1
+                    self.stats.last_background = True
+                    self.stats.last_event = "background"
+                    return "background"
+            if iv_stats is not None and not getattr(cfg, "stop_on_background", False):
                 self.stats.last_event = "shiny"
                 return "shiny"
             if attempt + 1 < cfg.iv_read_tries:
                 self._interruptible_sleep(0.4)
                 frame = self.device.screenshot(fresh=True)
+        if self.stats.last_ivs is not None:
+            self.stats.last_event = "shiny"
+            return "shiny"
         # Never flee a shiny whose IV could not be read: it might be the requested target.
         self.stats.last_event = "iv_unknown"
         return "iv_unknown"
@@ -1340,8 +1432,9 @@ class ShundoRoutine:
                 # them. There is nothing to fall back on, so end the run instead of looping
                 # tap -> warning -> CANCEL; the caller reports why.
                 break
-            if outcome == "shundo":
-                # Full shundo: hand it to the user. "pause" waits for Resume; "stop" ends the loop.
+            if outcome in ("shundo", "background"):
+                # A requested target stays open for the user. "pause" waits for Resume;
+                # "stop" ends the loop.
                 if cfg.shundo_action == "stop":
                     break
                 self.pause_event.set()

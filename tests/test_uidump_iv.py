@@ -12,6 +12,16 @@ def encounter_xml(resource_suffix: str, text: str) -> str:
 
 
 class EncounterIvTests(unittest.TestCase):
+    def test_reads_semantic_special_background_icon_without_caring_about_artwork(self):
+        xml = encounter_xml("stats", "12/10/11").replace(
+            "</hierarchy>",
+            '<node resource-id="com.nianticlabs.pokemongo:id/hl_ec_sum_special_bg" '
+            'class="android.widget.ImageView" bounds="[700,500][740,540]" />'
+            "</hierarchy>",
+        )
+
+        self.assertTrue(uidump.parse(xml).special_background)
+
     def test_reads_bare_percentage_from_iv_field(self):
         state = uidump.parse(encounter_xml("iv", "98%"))
         self.assertEqual(98, state.iv_percent)

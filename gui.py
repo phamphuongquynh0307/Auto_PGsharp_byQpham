@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.10"
+APP_VERSION = "1.4.11"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -347,8 +347,10 @@ LANG = {
                       "en": "Wait for the Feed's Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
     "alert_shiny":   {"vi": "Báo Discord khi shiny khác IV mục tiêu", "en": "Discord alert on shiny with another IV"},
-    "shundo_action": {"vi": "Khi đúng IV mục tiêu:", "en": "On target IV match:"},
+    "shundo_action": {"vi": "Khi tìm thấy mục tiêu:", "en": "On target match:"},
     "shiny_action":  {"vi": "Khi shiny khác IV mục tiêu:", "en": "On shiny with another IV:"},
+    "stop_background": {"vi": "Dừng khi shiny có Special Background (mọi icon)",
+                          "en": "Stop on a shiny with any Special Background icon"},
     "act_pause":     {"vi": "Tạm dừng chờ tôi bắt", "en": "Pause and wait for me"},
     "act_stop":      {"vi": "Dừng hẳn bot", "en": "Stop the bot"},
     "act_skip":      {"vi": "Thoát, soi con khác", "en": "Flee and keep hunting"},
@@ -360,7 +362,8 @@ LANG = {
                            "en": "⛔ Flee did not return to the map; stopped before tapping the next Pokémon."},
     "dc_shiny_skip": {"vi": "✨ SHINY IV {} (mục tiêu IV {}) — đã bỏ qua, soi tiếp. (đã soi {} con)",
                        "en": "✨ SHINY IV {} (target IV {}) — skipped, still hunting. ({} checked)"},
-    "s_counts":      {"vi": "Soi: {} | shiny: {} | đúng IV: {}", "en": "Checked: {} | shiny: {} | target IV: {}"},
+    "s_counts":      {"vi": "Soi: {} | shiny: {} | đúng IV: {} | Background: {}",
+                       "en": "Checked: {} | shiny: {} | target IV: {} | Background: {}"},
     "msg_s_blocked": {"vi": "soi {}: không shiny (bị chặn) | shiny {} | đúng IV {}",
                        "en": "check {}: not shiny (blocked) | shiny {} | target IV {}"},
     "msg_s_shiny":   {"vi": "✨ SHINY IV {} (mục tiêu IV {})! Bot {} — vào máy xử lý!",
@@ -368,6 +371,8 @@ LANG = {
     "st_shiny":      {"vi": "✨ SHINY — chờ bạn xử lý!", "en": "✨ SHINY — waiting for you!"},
     "msg_s_shundo":  {"vi": "🌟 SHINY IV {} ĐÚNG MỤC TIÊU! Bot {} — vào máy bắt ngay!",
                        "en": "🌟 SHINY IV {} MATCHED! Bot {} — go catch it now!"},
+    "msg_s_background": {"vi": "🖼️ SHINY IV {} CÓ SPECIAL BACKGROUND! Bot {} — vào máy bắt ngay!",
+                           "en": "🖼️ SHINY IV {} HAS A SPECIAL BACKGROUND! Bot {} — go catch it now!"},
     "msg_s_iv_unknown": {"vi": "⚠️ Không đọc được IV — đã giữ encounter và tạm dừng để không bỏ nhầm Pokémon.",
                           "en": "⚠️ Could not read IV — kept the encounter open and paused to avoid skipping the target."},
     "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
@@ -396,6 +401,8 @@ LANG = {
     "st_shundo":     {"vi": "🌟 ĐÚNG IV — chờ bạn xử lý!", "en": "🌟 TARGET IV — waiting for you!"},
     "dc_shundo":     {"vi": "🌟 SHINY IV {} đúng mục tiêu! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
                        "en": "🌟 SHINY IV {} matched! Bot {} — go catch it! ({} checked, {} shiny)"},
+    "dc_background": {"vi": "🖼️ SHINY IV {} có Special Background! Bot {} — vào bắt ngay! (đã soi {} con, shiny {})",
+                       "en": "🖼️ SHINY IV {} has a Special Background! Bot {} — go catch it! ({} checked, {} shiny)"},
     "dc_shundo_pause": {"vi": "tạm dừng, encounter đang mở", "en": "paused with the encounter open"},
     "dc_shundo_stop":  {"vi": "đã dừng hẳn, encounter đang mở", "en": "stopped with the encounter open"},
     "dc_shiny":      {"vi": "✨ SHINY IV {} (mục tiêu IV {})! Bot {} — vào xử lý! (đã soi {} con)",
@@ -653,6 +660,8 @@ Quick Catch here is the app's own touch gesture and does not require PGSharp Qui
 4. Giữ Chờ máy ảnh hiện = 3 giây.
 5. Khi đúng IV: chọn Tạm dừng chờ tôi bắt cho lần thử đầu.
 6. Shiny khác IV: chọn Thoát, soi con khác hoặc Tạm dừng theo nhu cầu.
+7. Muốn giữ shiny có bất kỳ Special Background nào, bật **Dừng khi shiny có Special Background
+   (mọi icon)**. Không cần chọn ảnh mẫu riêng cho từng máy/sự kiện.
 
 ## C. Luồng đúng
 Feed item → teleport → chờ Nearby tải Pokémon → double-tap → non-shiny bị PGSharp chặn hoặc shiny mở encounter → đọc IV. App chỉ lấy Feed item tiếp theo sau khi kết quả hiện tại đã rõ.
@@ -663,6 +672,9 @@ Feed item → teleport → chờ Nearby tải Pokémon → double-tap → non-sh
 """, "en": """# 4. SHINY CHECK FROM FEED
 
 Enable Block Non-Shiny, Encounter IV and preferably Quick Load Map. Show Quick Sniper Feed plus the Nearby @ bar. Disconnect Virtual Go Plus.
+
+Enable **Stop on a shiny with any Special Background icon** to keep any Background artwork; no
+per-phone or per-event image set is required.
 Enter exact Attack/Defence/HP targets; 15/15/15 is the traditional Shundo target. Spawn wait 0 waits indefinitely.
 [[IMAGE:10-shundo-feed|Block Non-Shiny, Encounter IV, Feed/RSS and Nearby layout.]]
 [[IMAGE:11-shundo-calibration|Feed, IV pill, toast and Flee alignment.]]
@@ -1145,18 +1157,26 @@ class App:
         self.target_iv_sta = self._spin(sh_grp, "target_iv_sta", 3, 0, 15, 15)
         self.tp_wait = self._spin(sh_grp, "tp_wait", 4, 0, 3600, 0.0, is_float=True)
         self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 5, 2, 12, 3.0, is_float=True)
-        self._label(sh_grp, "shundo_action", row=6, column=0, sticky="w", padx=6, pady=2)
+        self.stop_on_background = tk.BooleanVar(value=False)
+        background_chk = ttk.Checkbutton(
+            sh_grp, text=self.tr("stop_background"), variable=self.stop_on_background,
+            command=self.save_settings,
+        )
+        background_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=2)
+        self._i18n.append((background_chk, "stop_background"))
+        self._register_row("stop_background", background_chk)
+        self._label(sh_grp, "shundo_action", row=7, column=0, sticky="w", padx=6, pady=2)
         self.shundo_action = "pause"   # "pause" | "stop"
         self.action_var = tk.StringVar()
         self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
-        self.action_combo.grid(row=6, column=1, sticky="e", padx=6, pady=2)
+        self.action_combo.grid(row=7, column=1, sticky="e", padx=6, pady=2)
         self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
-        self._label(sh_grp, "shiny_action", row=7, column=0, sticky="w", padx=6, pady=2)
+        self._label(sh_grp, "shiny_action", row=8, column=0, sticky="w", padx=6, pady=2)
         self.shiny_action = "skip"     # "skip" | "pause"
         self.shiny_action_var = tk.StringVar()
         self.shiny_action_combo = ttk.Combobox(sh_grp, textvariable=self.shiny_action_var,
                                                 state="readonly", width=22)
-        self.shiny_action_combo.grid(row=7, column=1, sticky="e", padx=6, pady=2)
+        self.shiny_action_combo.grid(row=8, column=1, sticky="e", padx=6, pady=2)
         self.shiny_action_combo.bind("<<ComboboxSelected>>", self._on_shiny_action_change)
         # A skipped shiny still alerts Discord (with screenshot), it just isn't waited on.
         self.alert_shiny = tk.BooleanVar(value=True)
@@ -1563,6 +1583,7 @@ class App:
         self.target_iv_atk.set(max(0, min(15, int(data.get("target_iv_atk", self.target_iv_atk.get())))))
         self.target_iv_def.set(max(0, min(15, int(data.get("target_iv_def", self.target_iv_def.get())))))
         self.target_iv_sta.set(max(0, min(15, int(data.get("target_iv_sta", self.target_iv_sta.get())))))
+        self.stop_on_background.set(bool(data.get("stop_on_background", False)))
         if data.get("shundo_action") in ("pause", "stop"):
             self.shundo_action = data["shundo_action"]
         if data.get("shiny_action") in ("skip", "pause"):
@@ -1614,6 +1635,7 @@ class App:
             "target_iv_atk": max(0, min(15, int(self.target_iv_atk.get()))),
             "target_iv_def": max(0, min(15, int(self.target_iv_def.get()))),
             "target_iv_sta": max(0, min(15, int(self.target_iv_sta.get()))),
+            "stop_on_background": bool(self.stop_on_background.get()),
             "shundo_action": self.shundo_action,
             "shiny_action": self.shiny_action,
             "alert_shiny": bool(self.alert_shiny.get()),
@@ -3023,6 +3045,7 @@ class App:
                     ),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
+                    stop_on_background=bool(self.stop_on_background.get()),
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     use_ui_dump=bool(self.use_ui_dump.get()),
@@ -3160,14 +3183,15 @@ class App:
             self._tick_alerts(stats, threw)
 
         def on_shundo_event(stats, outcome):
-            self.log_queue.put("__countstr__" + self.tr("s_counts").format(stats.checked, stats.shinies, stats.shundos))
+            self.log_queue.put("__countstr__" + self.tr("s_counts").format(
+                stats.checked, stats.shinies, stats.shundos, stats.backgrounds))
             if outcome != "coord_idle":
                 self._coord_idle_logged = False
-            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo"):
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background"):
                 # A confirmed result releases exactly one new-coordinate credit to Edge.
                 # Ambiguous miss/recheck cycles keep the same item and release nothing.
                 self.coord_queue.mark_completed()
-            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "nospawn", "lost"):
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background", "nospawn", "lost"):
                 item = getattr(self.routine, "current_coord", None)
                 if item is not None:
                     name = f" ({item.pokemon})" if item.pokemon else ""
@@ -3181,6 +3205,15 @@ class App:
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
                 self.log_queue.put(self.tr("msg_s_shundo").format(actual_iv, how))
                 self._send_discord(self.tr("dc_shundo").format(actual_iv, how, stats.checked, stats.shinies), shot=True)
+                if self.shundo_action == "pause":
+                    self.log_queue.put("__paused_shundo__")
+            elif outcome == "background":
+                actual_iv = ("/".join(str(value) for value in stats.last_ivs)
+                             if stats.last_ivs is not None else "?")
+                how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
+                self.log_queue.put(self.tr("msg_s_background").format(actual_iv, how))
+                self._send_discord(self.tr("dc_background").format(
+                    actual_iv, how, stats.checked, stats.shinies), shot=True)
                 if self.shundo_action == "pause":
                     self.log_queue.put("__paused_shundo__")
             elif outcome == "shiny":

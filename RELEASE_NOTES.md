@@ -1,3 +1,35 @@
+# v1.4.11
+
+## Tiếng Việt
+
+### Dừng khi shiny có Special Background
+
+- Thêm tùy chọn **Dừng khi shiny có Special Background (mọi icon)** trong chế độ Chấm shiny theo
+  IV, áp dụng cho cả nguồn Feed và Discord Coord. Tùy chọn mặc định tắt để giữ nguyên hành vi cũ.
+- Background là một mục tiêu độc lập với bộ IV: khi thấy icon ở cuối dòng Encounter IV, bot giữ
+  encounter và Tạm dừng/Dừng hẳn theo lựa chọn đang dùng cho IV mục tiêu.
+- Không đóng đinh artwork của một sự kiện. App ưu tiên tên view của PGSharp, rồi nhận diện khung
+  vuông của badge; vì vậy các máy săn những bộ icon Background khác nhau không cần cài ảnh mẫu.
+- Tín hiệu ảnh phải lặp lại trên hai ảnh nét trước khi được chấp nhận, tránh nhầm dấu shiny hoặc
+  chữ số thành Background. Thông báo Discord kèm ảnh ghi rõ kết quả Special Background.
+
+---
+
+## English
+
+### Stop on a shiny with any Special Background
+
+- Adds an opt-in **Stop on a shiny with any Special Background icon** setting to both Feed and
+  Discord-coordinate shiny modes. It defaults off, preserving existing behaviour.
+- A Background is a target independently of the selected IV triplet and obeys the existing
+  pause/stop action while keeping the encounter open.
+- Detection uses PGSharp's semantic view hint first, then the badge's framed-square geometry,
+  so phones hunting different event artwork do not need separate image templates.
+- Vision evidence must agree on two crisp frames to reject shiny glyphs and text, and Discord
+  alerts identify the Special Background result explicitly.
+
+---
+
 # v1.4.10
 
 ## Tiếng Việt

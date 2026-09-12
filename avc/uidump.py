@@ -111,6 +111,10 @@ class UiState:
     # bounds across emulator DPI, font rendering, language and light/dark themes.
     dialog_buttons: list[tuple[str, tuple[int, int]]] = field(default_factory=list)
     encounter: dict[str, str] = field(default_factory=dict)       # hl_ec_sum_* suffix -> text
+    # Resource ids / descriptions of image-like encounter-summary children. Background artwork
+    # changes between events (and therefore between phones), but PGSharp's semantic view name is
+    # stable when the build exposes one. Keep the metadata rather than matching one event image.
+    encounter_icons: list[str] = field(default_factory=list)
     # Text/content descriptions found below an encounter overlay container. Some PGSharp builds
     # put the id on the parent and leave its three stat TextViews anonymous.
     encounter_texts: list[str] = field(default_factory=list)
@@ -157,6 +161,28 @@ class UiState:
     def in_encounter(self) -> bool:
         """PGSharp only renders its encounter summary while an encounter is open."""
         return bool(self.encounter or self.encounter_texts)
+
+    @property
+    def special_background(self) -> bool:
+        """Whether PGSharp explicitly names a Special/Location Background marker.
+
+        Not every PGSharp build exposes an accessibility name for the small final icon, so a
+        false result is deliberately not authoritative; Shundo keeps a geometry-based vision
+        fallback. These hints cover the resource names seen across Android naming conventions
+        without depending on the icon artwork for a particular event.
+        """
+        hints = ("background", "special_bg", "specialbg", "location_bg", "locationbg",
+                 "catch_card", "catchcard", "bg_icon", "bgicon")
+        for metadata in self.encounter_icons:
+            lowered = metadata.lower().replace("-", "_").replace(" ", "_")
+            if any(hint in lowered for hint in hints):
+                return True
+            # A compact PGSharp resource such as hl_ec_sum_bg should still count, while an
+            # unrelated word containing the letters "bg" should not.
+            parts = [part for part in re.split(r"[^a-z0-9]+", lowered) if part]
+            if "bg" in parts:
+                return True
+        return False
 
     @property
     def iv_stats(self) -> tuple[int, int, int] | None:
@@ -302,6 +328,17 @@ def parse(xml_text: str) -> UiState | None:
         if name.startswith("hl_ec"):
             descendant_values: list[str] = []
             for descendant in node.iter("node"):
+                descendant_id = (descendant.get("resource-id") or "").rsplit("/", 1)[-1]
+                descendant_desc = (descendant.get("content-desc") or "").strip()
+                descendant_class = descendant.get("class") or ""
+                icon_metadata = " ".join(value for value in (descendant_id, descendant_desc)
+                                         if value)
+                if icon_metadata and (descendant_class.endswith("ImageView") or any(
+                    token in icon_metadata.lower()
+                    for token in ("background", "special_bg", "specialbg", "location_bg",
+                                  "locationbg", "catch_card", "catchcard", "bg_icon", "bgicon")
+                )) and icon_metadata not in state.encounter_icons:
+                    state.encounter_icons.append(icon_metadata)
                 for attr in ("text", "content-desc"):
                     value = (descendant.get(attr) or "").strip()
                     if value and value not in descendant_values:
