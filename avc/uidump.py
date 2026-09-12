@@ -40,7 +40,16 @@ _COOLDOWN_TEXT = "hl_cd_text"
 _CLOCK = re.compile(r"^(\d+):([0-5]\d):([0-5]\d)$")
 _IV_EXPLICIT = re.compile(r"\bIV\s*:?\s*(100|\d{1,2})(?:\s*%)?\b", re.I)
 _IV_BARE = re.compile(r"^\s*(100|\d{1,2})(?:\s*%)?\s*$")
-_IV_STATS = re.compile(r"\b(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})\b")
+# Slash glyphs and separators vary between PGSharp/Android builds. The lookahead makes matches
+# overlap, so an unrelated leading number cannot hide a later valid stat triplet.
+_IV_STATS = re.compile(
+    r"(?<!\d)(?=(\d{1,2})\s*[/／∕|•·]\s*(\d{1,2})\s*[/／∕|•·]\s*(\d{1,2})(?!\d))"
+)
+_STAT_LABELS = {
+    "attack": re.compile(r"\b(?:atk|att|attack)\b\s*[:=]?\s*(\d{1,2})\b", re.I),
+    "defence": re.compile(r"\b(?:def|defence|defense)\b\s*[:=]?\s*(\d{1,2})\b", re.I),
+    "stamina": re.compile(r"\b(?:sta|stamina|hp)\b\s*[:=]?\s*(\d{1,2})\b", re.I),
+}
 
 _BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
@@ -94,11 +103,17 @@ class UiState:
     # top-down. `nearby` merges them and so cannot be trusted to describe one bar -- see
     # `_columns`, and CatchRoutine._ui_nearby_bar for the one that picks Nearby out of these.
     bars: list[list[tuple[int, int]]] = field(default_factory=list)
+    # Bounds of the narrow PGSharp ListViews, including an empty sidebar. Icon nodes alone
+    # cannot represent an empty Nearby bar, but its ListView still exists in the hierarchy.
+    sidebar_bounds: list[tuple[int, int, int, int]] = field(default_factory=list)
     menu: dict[str, tuple[int, int]] = field(default_factory=dict)  # row text -> centre
     # Native Android dialog actions. Unlike image templates these retain their text and exact
     # bounds across emulator DPI, font rendering, language and light/dark themes.
     dialog_buttons: list[tuple[str, tuple[int, int]]] = field(default_factory=list)
     encounter: dict[str, str] = field(default_factory=dict)       # hl_ec_sum_* suffix -> text
+    # Text/content descriptions found below an encounter overlay container. Some PGSharp builds
+    # put the id on the parent and leave its three stat TextViews anonymous.
+    encounter_texts: list[str] = field(default_factory=list)
     cooldown: float = 0.0        # seconds left on PGSharp's jump cooldown, 0 when clear
 
     @property
@@ -141,7 +156,7 @@ class UiState:
     @property
     def in_encounter(self) -> bool:
         """PGSharp only renders its encounter summary while an encounter is open."""
-        return bool(self.encounter)
+        return bool(self.encounter or self.encounter_texts)
 
     @property
     def iv_stats(self) -> tuple[int, int, int] | None:
@@ -150,25 +165,37 @@ class UiState:
         These values must stay separate: ``15/15/14`` and ``14/15/15`` have the same
         percentage but are different targets to the user.
         """
-        for text in self.encounter.values():
-            stats = _IV_STATS.search(text)
-            if not stats:
-                continue
-            values = tuple(int(value) for value in stats.groups())
-            if all(0 <= value <= 15 for value in values):
-                return values
+        texts = list(self.encounter.values()) + list(self.encounter_texts)
+        for text in texts:
+            for stats in _IV_STATS.finditer(text):
+                values = tuple(int(value) for value in stats.groups())
+                if all(0 <= value <= 15 for value in values):
+                    return values
+
+        # A few versions render "ATK 15 DEF 14 HP 13" rather than a slash-separated value.
+        # Read labels instead of assuming the visual left-to-right order of anonymous numbers.
+        labelled: dict[str, int] = {}
+        for text in texts:
+            for stat, pattern in _STAT_LABELS.items():
+                match = pattern.search(text)
+                if match and 0 <= int(match.group(1)) <= 15:
+                    labelled[stat] = int(match.group(1))
+        if len(labelled) == 3:
+            return labelled["attack"], labelled["defence"], labelled["stamina"]
 
         # Some PGSharp builds expose the three stats as separate views instead of one
         # ``15/15/14`` string. Resource suffixes vary slightly, so accept their common
         # abbreviated and full names but never treat an unrelated bare number as a stat.
         individual: dict[str, int] = {}
         aliases = {
-            "attack": ("atk", "attack"),
-            "defence": ("def", "defence", "defense"),
-            "stamina": ("sta", "stamina", "hp"),
+            "attack": ("atk", "att", "attack", "atkiv", "attackiv", "ivattack"),
+            "defence": ("def", "defence", "defense", "defiv", "defenceiv",
+                        "defenseiv", "ivdefence", "ivdefense"),
+            "stamina": ("sta", "stamina", "hp", "staiv", "staminaiv", "hpiv",
+                        "ivstamina", "ivhp"),
         }
         for name, text in self.encounter.items():
-            suffix = name.lower().strip("_-")
+            suffix = re.sub(r"[^a-z0-9]", "", name.lower())
             bare = _IV_BARE.match(text)
             if not bare:
                 continue
@@ -176,7 +203,7 @@ class UiState:
             if not 0 <= value <= 15:
                 continue
             for stat, names in aliases.items():
-                if suffix in names or any(suffix.endswith(f"_{alias}") for alias in names):
+                if suffix in names or any(suffix.endswith(alias) for alias in names):
                     individual[stat] = value
                     break
         if len(individual) == 3:
@@ -218,14 +245,25 @@ def parse(xml_text: str) -> UiState | None:
 
     state = UiState()
     nearby: list[tuple[int, int]] = []
+    root_box = _box(root.get("bounds") or "")
+    screen_width = (root_box[2] - root_box[0]) if root_box is not None else 0
     for node in root.iter("node"):
         rid = node.get("resource-id") or ""
         centre = _centre(node.get("bounds") or "")
         if centre is None:
             continue
         text = (node.get("text") or "").strip()
+        description = (node.get("content-desc") or "").strip()
         class_name = node.get("class") or ""
         clickable = (node.get("clickable") or "").lower() == "true"
+        box = _box(node.get("bounds") or "")
+        if class_name.endswith("ListView") and box is not None:
+            width, height = box[2] - box[0], box[3] - box[1]
+            # PGSharp sidebars are tall, narrow ListViews. Keeping the width relative to the
+            # display excludes ordinary full-screen settings/dialog lists.
+            max_width = max(80, screen_width // 4) if screen_width else 320
+            if width > 0 and height >= width * 2 and width <= max_width:
+                state.sidebar_bounds.append(box)
         # Stock AlertDialog actions normally have android:id/button1..3, but several Android
         # skins omit that id while keeping a clickable Button node. Keep both representations.
         if text and ("android:id/button" in rid or (clickable and class_name.endswith("Button"))):
@@ -248,10 +286,42 @@ def parse(xml_text: str) -> UiState | None:
                 h, mi, sec = (int(v) for v in m.groups())
                 state.cooldown = float(h * 3600 + mi * 60 + sec)
         elif name.startswith(_ENCOUNTER_PREFIX):
-            text = (node.get("text") or "").strip()
-            if text:
-                state.encounter[name[len(_ENCOUNTER_PREFIX):]] = text
+            visible = text or description
+            if visible:
+                state.encounter[name[len(_ENCOUNTER_PREFIX):]] = visible
+        elif name.startswith("hl_ec"):
+            # Newer/older PGSharp builds have used both hl_ec_sum_atk and hl_ec_atk.
+            # Preserve the suffix either way so the per-stat alias reader can name it.
+            visible = text or description
+            if visible:
+                state.encounter[name[len("hl_ec"):].strip("_-")] = visible
+
+        # Resource names moved between PGSharp releases. Treat any hl_ec* node as an encounter
+        # overlay container and inspect its descendants. This also recovers content-desc-only
+        # values and three anonymous child TextViews without accepting arbitrary game text.
+        if name.startswith("hl_ec"):
+            descendant_values: list[str] = []
+            for descendant in node.iter("node"):
+                for attr in ("text", "content-desc"):
+                    value = (descendant.get(attr) or "").strip()
+                    if value and value not in descendant_values:
+                        descendant_values.append(value)
+            for value in descendant_values:
+                if any(True for _ in _IV_STATS.finditer(value)) or any(
+                    pattern.search(value) for pattern in _STAT_LABELS.values()
+                ):
+                    if value not in state.encounter_texts:
+                        state.encounter_texts.append(value)
+            bare_stats = [
+                value for value in descendant_values
+                if _IV_BARE.match(value) and 0 <= int(_IV_BARE.match(value).group(1)) <= 15
+            ]
+            if len(bare_stats) == 3:
+                combined = "/".join(bare_stats)
+                if combined not in state.encounter_texts:
+                    state.encounter_texts.append(combined)
     # The bar reads top-down, and so does every caller.
     state.bars = _columns(nearby)
     state.nearby = sorted(nearby, key=lambda c: c[1])
+    state.sidebar_bounds = sorted(set(state.sidebar_bounds), key=lambda b: (b[0], b[1]))
     return state

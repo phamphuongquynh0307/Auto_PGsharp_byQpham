@@ -432,15 +432,32 @@ class Device:
         one-off, never as something to poll. uiautomator also refuses outright while the UI is
         animating, which is a normal outcome here rather than an error — hence None instead of
         an exception, so callers fall back to their pixel path without special-casing.
+
+        Ask uiautomator to write to ``/dev/tty`` so the hierarchy comes back in the same ADB
+        command. The old two-command path wrote a fixed file on ``/sdcard`` and then read it;
+        on Android builds where a failed dump exits successfully without replacing that file,
+        the caller unknowingly received a stale map hierarchy while an encounter was open.
+        That was especially damaging to the exact-IV reader: all retries could keep parsing the
+        same pre-encounter tree and report that IV was unreadable.
         """
-        remote = "/sdcard/avc-ui.xml"
         try:
-            self._run(["shell", "uiautomator", "dump", remote], timeout=timeout)
-            xml = self._run(["exec-out", "cat", remote], binary=True, timeout=timeout)
+            xml = self._run(
+                ["exec-out", "uiautomator", "dump", "/dev/tty"],
+                binary=True,
+                timeout=timeout,
+            )
         except Exception:
             return None
         text = xml.decode("utf-8", "replace")
-        return text if "<node" in text else None
+        # Vendors disagree on whether the success banner is sent to stdout or stderr. Slice the
+        # actual XML document out either way so ElementTree never sees trailing status text.
+        start = text.find("<?xml")
+        if start < 0:
+            start = text.find("<hierarchy")
+        end = text.rfind("</hierarchy>")
+        if start < 0 or end < start or "<node" not in text[start:end]:
+            return None
+        return text[start:end + len("</hierarchy>")]
 
     def adb_tap(self, x: int, y: int) -> None:
         """Send an independent Android input tap without reusing scrcpy touch state."""

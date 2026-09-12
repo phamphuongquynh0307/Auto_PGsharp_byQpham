@@ -47,6 +47,23 @@ class ColumnSplitTests(unittest.TestCase):
         self.assertEqual(1, len(state.bars))
         self.assertEqual(3, len(state.bars[0]))
 
+    def test_listview_bounds_keep_an_empty_sidebar_visible(self):
+        xml = (
+            '<hierarchy bounds="[0,0][1220,2712]">'
+            '<node class="android.widget.ListView" bounds="[49,318][175,1074]">'
+            f'{icon(*FEED_ICONS[0])}'
+            '</node>'
+            '<node class="android.widget.ListView" bounds="[991,275][1117,1031]" />'
+            '</hierarchy>'
+        )
+        state = uidump.parse(xml)
+
+        self.assertEqual(
+            [(49, 318, 175, 1074), (991, 275, 1117, 1031)],
+            state.sidebar_bounds,
+        )
+        self.assertEqual([1], [len(bar) for bar in state.bars])
+
 
 class PortableControlTests(unittest.TestCase):
     def test_unabbreviated_autowalk_label_is_recognised(self):

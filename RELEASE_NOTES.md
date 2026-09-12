@@ -1,3 +1,62 @@
+# v1.4.10
+
+## Tiếng Việt
+
+### Đọc IV Shiny ổn định hơn
+
+- Cây giao diện Android giờ được đọc thẳng trong một lệnh ADB, không còn dùng lại file tạm cũ
+  khi lần đọc mới thất bại giữa lúc encounter đang chuyển động.
+- Bộ đọc IV nhận thêm nhiều cách PGSharp hiển thị ba chỉ số: dấu phân cách khác nhau, nhãn
+  ATK/DEF/HP, `content-desc`, ba ô text không có id và các tên resource ở phiên bản PGSharp cũ/mới.
+- Nếu vẫn không đọc chắc chắn, app tiếp tục giữ encounter và tạm dừng; không bỏ nhầm Pokémon.
+
+### Feed và Nearby tự phục hồi khi nhận diện ảnh hụt
+
+- Nhận diện ảnh vẫn là đường nhanh. Khi stream bị nhòe hoặc nền xuyên qua sidebar làm mất mẫu
+  RSS/@, app dùng chính ListView Android của PGSharp để lấy tọa độ hàng đang có Pokémon.
+- App nhận ra cả một sidebar đang trống, phân biệt Feed với Nearby theo đúng cột và từ chối bấm
+  nếu chỉ có một thanh không xác định — tránh đổi độ ổn định lấy rủi ro teleport/bấm nhầm.
+- Tùy chọn **Đọc overlay PGSharp** giờ áp dụng cho cả chế độ Chấm shiny theo IV.
+
+### Kiểm chứng
+
+- **283 test đạt**, không có lỗi; 19 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+- Đã đối chiếu trực tiếp trên thiết bị 1220×2712: đường UI nhận đúng Feed có 6 mục và Nearby trống
+  ở hai phía khác nhau.
+
+---
+
+## English
+
+### More reliable shiny IV reads
+
+- The Android hierarchy is now returned directly by one ADB command, preventing a failed dump
+  during an encounter transition from serving an old temporary map hierarchy.
+- The IV parser accepts more PGSharp representations: alternate separators, ATK/DEF/HP labels,
+  content descriptions, three anonymous text children, and resource names used by older/newer
+  PGSharp builds.
+- An IV that still cannot be proven keeps the encounter open and pauses as before; the app never
+  risks fleeing the requested Pokémon.
+
+### Feed and Nearby recover from missed image matches
+
+- Image detection remains the fast path. If stream smear or a translucent map background hides
+  the small RSS/@ templates, the app falls back to PGSharp's native Android ListViews and uses
+  their exact occupied-row coordinates.
+- Empty sidebars are represented too. Feed and Nearby are selected by the correct column, and an
+  ambiguous lone sidebar is never tapped.
+- **Read PGSharp overlay** now controls this fallback in the exact-IV shiny mode as well.
+
+### Verification
+
+- **283 tests pass** with no failures; 19 GUI tests are skipped as expected when no Tk desktop is
+  available.
+- A live 1220×2712 device check correctly separated a six-entry Feed from an empty Nearby bar on
+  opposite sides of the screen.
+
+---
+
 # v1.4.9
 
 ## Tiếng Việt

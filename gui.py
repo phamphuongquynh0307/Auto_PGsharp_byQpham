@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.9"
+APP_VERSION = "1.4.10"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -3025,6 +3025,7 @@ class App:
                     shiny_action=self.shiny_action,
                     flee_taps=max(1, int(self.flee_taps.get())),
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
+                    use_ui_dump=bool(self.use_ui_dump.get()),
                 )
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)

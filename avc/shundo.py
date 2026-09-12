@@ -168,6 +168,12 @@ class ShundoConfig:
     poll_interval: float = 0.08
     idle_poll: float = 1.5          # pause between cycles when the feed bar is missing
 
+    # PGSharp draws Feed/Nearby as native Android ListViews. Image matching stays the fast
+    # path, but one rate-limited hierarchy read is the decisive fallback when compression,
+    # transparency or a moved bar makes the tiny RSS/@ templates disappear.
+    use_ui_dump: bool = True
+    ui_dump_cooldown: float = 1.5
+
     # What to do when a shundo is found: "pause" (default) or "stop".
     shundo_action: str = "pause"
     # What to do on a shiny whose three IV columns do not equal target_ivs:
@@ -300,6 +306,15 @@ class ShundoRoutine:
         self._nearby_last_y: int | None = None
         self._feed_presence_streak = 0
         self._enc_berry_at: tuple[int, int] | None = None
+        self._ui_dump_at = float("-inf")
+        self._ui_state_cache = None
+        self._ui_state_cache_at = 0.0
+        self._ui_nearby_slot: tuple[int, int] | None = None
+        self._ui_feed_slot: tuple[int, int] | None = None
+        self._ui_nearby_verified_at = 0.0
+        # Unlike _anchor_cache, this column survives one failed template search. A temporary
+        # smeared frame must not erase the information needed to name Nearby in the view tree.
+        self._nearby_column_x: int | None = None
         # A teleported Nearby entry stays pending until PGSharp gives a real answer, or
         # until a bounded number of confirmed map double-taps produce no encounter. The
         # latter covers builds that silently block non-shiny Pokémon without a toast.
@@ -384,6 +399,7 @@ class ShundoRoutine:
         if not m:
             return None
         self._anchor_cache = m[0].center
+        self._nearby_column_x = self._anchor_cache[0]
         return self._anchor_cache
 
     def _nearby_slot(self, frame, anchor: tuple[int, int]) -> tuple[int, int]:
@@ -498,6 +514,155 @@ class ShundoRoutine:
                 return occupied(rx, ry, slot)
         self._feed_presence_streak = 0
         return None
+
+    # -- native PGSharp sidebar fallback ---------------------------------------------
+    def _ui_state(self, *, force: bool = False):
+        """One rate-limited PGSharp hierarchy read.
+
+        This is intentionally reached only after image matching misses. A dump is slower than
+        a stream frame but contains the sidebar widgets' exact bounds and is immune to H.264
+        smear and a translucent map background.
+        """
+        cfg = self.config
+        if not getattr(cfg, "use_ui_dump", True):
+            return None
+        dump = getattr(self.device, "ui_dump", None)
+        if not callable(dump):
+            return None
+        now = time.monotonic()
+        cooldown = max(0.0, float(getattr(cfg, "ui_dump_cooldown", 1.5)))
+        if not force and now - getattr(self, "_ui_dump_at", float("-inf")) < cooldown:
+            return None
+        self._ui_dump_at = now
+        state = uidump.parse(dump() or "")
+        if state is not None:
+            self._ui_state_cache = state
+            self._ui_state_cache_at = time.monotonic()
+        return state
+
+    def _recent_ui_state(self, max_age: float = 2.0):
+        state = getattr(self, "_ui_state_cache", None)
+        seen_at = getattr(self, "_ui_state_cache_at", 0.0)
+        return state if state is not None and time.monotonic() - seen_at <= max_age else None
+
+    @staticmethod
+    def _ui_sidebar_candidates(state) -> list[tuple[int, list[tuple[int, int]]]]:
+        """Return ``(column_x, occupied_slots)`` for every native PGSharp sidebar.
+
+        Newer dumps expose their narrow ListView even when empty. Older recorded dumps only
+        contain icon nodes, so retain a grouped-icon fallback for compatibility.
+        """
+        slots = list(getattr(state, "nearby", ()) or ())
+        bounds = list(getattr(state, "sidebar_bounds", ()) or ())
+        candidates: list[tuple[int, list[tuple[int, int]]]] = []
+        for x0, y0, x1, y1 in bounds:
+            inside = sorted(
+                ((x, y) for x, y in slots if x0 <= x <= x1 and y0 <= y <= y1),
+                key=lambda point: point[1],
+            )
+            candidates.append(((x0 + x1) // 2, inside))
+        if candidates:
+            return candidates
+        for bar in getattr(state, "bars", ()) or ():
+            if bar:
+                candidates.append((bar[0][0], list(bar)))
+        return candidates
+
+    def _nearby_reference_x(self) -> tuple[int, bool]:
+        """Nearby column reference and whether it is only the default right-edge estimate."""
+        remembered = getattr(self, "_nearby_column_x", None)
+        if remembered is not None:
+            return int(remembered), False
+        anchor = getattr(self, "_anchor_cache", None)
+        if anchor is not None:
+            return int(anchor[0]), False
+        ui_slot = getattr(self, "_ui_nearby_slot", None)
+        if ui_slot is not None:
+            return int(ui_slot[0]), False
+        x, _y, w, _h = self.config.anchor_region
+        return int(x + w - self.config.s(100)), True
+
+    def _ui_nearby_bar(self, state) -> list[tuple[int, int]] | None:
+        """Pick Nearby (never Feed) from PGSharp's otherwise identical sidebar widgets."""
+        candidates = self._ui_sidebar_candidates(state)
+        if not candidates:
+            return None
+        ref, estimated = self._nearby_reference_x()
+        column, bar = min(candidates, key=lambda candidate: abs(candidate[0] - ref))
+        tolerance = max(self.config.handle_column_tol * 2, self.config.s(140))
+        if abs(column - ref) > tolerance:
+            # In particular, do not call one far-left occupied Feed bar "Nearby" just because
+            # the actual (empty) Nearby ListView was omitted by an older PGSharp build.
+            return None
+        self._nearby_column_x = column
+        anchor = getattr(self, "_anchor_cache", None)
+        if anchor is not None and not estimated:
+            bar = [slot for slot in bar if slot[1] < anchor[1]]
+        return list(bar)
+
+    def _ui_feed_bar(self, state) -> list[tuple[int, int]] | None:
+        """Pick Feed by its remembered RSS column or as the sidebar opposite Nearby."""
+        candidates = self._ui_sidebar_candidates(state)
+        if not candidates:
+            return None
+        cache = getattr(self, "_feed_cache", None)
+        remembered = getattr(self, "_ui_feed_slot", None)
+        feed_ref = cache[0][0] if cache is not None else (remembered[0] if remembered else None)
+        tolerance = max(self.config.handle_column_tol * 2, self.config.s(140))
+        if feed_ref is not None:
+            column, bar = min(candidates, key=lambda candidate: abs(candidate[0] - feed_ref))
+            return list(bar) if abs(column - feed_ref) <= tolerance else None
+
+        # Establish Nearby from the '@' cache (or the normal right-edge layout), then take a
+        # different column. With only an unlabelled column, declining to tap is safer than
+        # consuming what may actually be a Nearby entry.
+        self._ui_nearby_bar(state)
+        nearby_x = getattr(self, "_nearby_column_x", None)
+        if nearby_x is None:
+            return None
+        other = [candidate for candidate in candidates if abs(candidate[0] - nearby_x) > tolerance]
+        if not other:
+            return None
+        column, bar = max(other, key=lambda candidate: abs(candidate[0] - nearby_x))
+        if bar:
+            self._ui_feed_slot = bar[0]
+        return list(bar)
+
+    def _ui_nearby_target(self, *, force: bool = False,
+                          allow_recent: bool = False) -> tuple[int, int] | None:
+        state = self._recent_ui_state() if allow_recent else None
+        if state is None:
+            state = self._ui_state(force=force)
+        if state is None:
+            return None
+        bar = self._ui_nearby_bar(state)
+        if not bar:
+            return None
+        self._ui_nearby_slot = bar[0]
+        self._nearby_column_x = bar[0][0]
+        self._ui_nearby_verified_at = time.monotonic()
+        return bar[0]
+
+    def _ui_feed_target(self, *, force: bool = False,
+                        allow_recent: bool = False) -> tuple[int, int] | None:
+        state = self._recent_ui_state() if allow_recent else None
+        if state is None:
+            state = self._ui_state(force=force)
+        if state is None:
+            return None
+        bar = self._ui_feed_bar(state)
+        if not bar:
+            return None
+        self._ui_feed_slot = bar[0]
+        return bar[0]
+
+    def _ui_map_visible(self, *, force: bool = False) -> bool:
+        # A hierarchy just read earlier in this same no-action cycle is still authoritative
+        # about whether the map sidebars exist; do not pay for the same 1-4s dump twice.
+        state = self._recent_ui_state()
+        if state is None:
+            state = self._ui_state(force=force)
+        return state is not None and self._ui_nearby_bar(state) is not None
 
     def _encounter_visible(self, frame) -> bool:
         """True when an encounter is open, which for Shundo means the Pokémon is shiny.
@@ -747,6 +912,15 @@ class ShundoRoutine:
         # move or collapse while loading; confirm the occupied slot again on this frame.
         current = self._raw_target_in_bar(frame)
         if current is None:
+            # The crisp image can still lose a dark sprite against a detailed translucent bar.
+            # PGSharp's own occupied ListView row is an exact replacement coordinate.
+            verified = getattr(self, "_ui_nearby_slot", None)
+            verified_at = getattr(self, "_ui_nearby_verified_at", 0.0)
+            if verified == target and time.monotonic() - verified_at <= 1.0:
+                current = verified
+            else:
+                current = self._ui_nearby_target(force=True)
+        if current is None:
             # Not an answer about this Pokémon — we simply cannot see it — so look again
             # rather than spending the next QuickSniper item. Bounded, because an entry that
             # despawned never comes back and the run has to move on. See nearby_recheck_*.
@@ -763,6 +937,11 @@ class ShundoRoutine:
             return "recheck"
         self._pending_no_target = 0
         self.device.double_tap(*current)
+        # Any hierarchy taken before the double-tap describes the pre-answer map. Never reuse it
+        # to validate a retry or an encounter transition.
+        self._ui_nearby_verified_at = 0.0
+        self._ui_state_cache = None
+        self._ui_state_cache_at = 0.0
 
         def encounter_answer(f):
             if self._encounter_visible(f):
@@ -833,6 +1012,8 @@ class ShundoRoutine:
         slot = self._feed_slot_in(frame)
         if slot is None:
             slot = self._feed_slot_in(self.device.screenshot(fresh=True))
+        if slot is None:
+            slot = self._ui_feed_target(force=True, allow_recent=True)
         if slot is None:
             self._interruptible_sleep(cfg.idle_poll)
             self.stats.last_event = "idle"
@@ -1003,6 +1184,8 @@ class ShundoRoutine:
             self._target_in_bar(frame)
             fresh = self.device.screenshot(fresh=True)
             initial_target = self._target_in_bar(fresh)
+            if initial_target is None:
+                initial_target = self._ui_nearby_target(force=True)
             if initial_target is not None:
                 self._queue_pending(initial_target)
                 outcome = self._attempt_nearby(initial_target)
@@ -1014,7 +1197,7 @@ class ShundoRoutine:
         # until the Nearby '@' anchor confirms that the map itself is ready.
         if self._anchor_in(frame) is None:
             frame = self.device.screenshot(fresh=True)
-            if self._anchor_in(frame) is None:
+            if self._anchor_in(frame) is None and not self._ui_map_visible(force=True):
                 self._interruptible_sleep(cfg.poll_interval)
                 self.stats.last_event = "miss"
                 return "miss"
@@ -1080,6 +1263,8 @@ class ShundoRoutine:
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
             target = self._target_in_bar(frame)
+            if target is None:
+                target = self._ui_nearby_target()
             if target:
                 loaded = target
                 break
