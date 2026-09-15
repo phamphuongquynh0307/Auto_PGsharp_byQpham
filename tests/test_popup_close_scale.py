@@ -20,6 +20,36 @@ def _popup_config():
 
 
 class PopupCloseScaleTests(unittest.TestCase):
+    def test_known_map_rate_limits_the_heavy_popup_scan(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
+        routine._popup_full_scan_at = 95.0
+        routine._in_encounter = lambda _frame: False
+        routine._bar_visible = lambda _frame: True
+
+        with patch("avc.catch.time.monotonic", return_value=100.0):
+            self.assertFalse(routine._needs_full_popup_scan(object()))
+
+    def test_unknown_screen_still_gets_an_immediate_popup_scan(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
+        routine._popup_full_scan_at = 95.0
+        routine._in_encounter = lambda _frame: False
+        routine._bar_visible = lambda _frame: False
+
+        with patch("avc.catch.time.monotonic", return_value=100.0):
+            self.assertTrue(routine._needs_full_popup_scan(object()))
+
+    def test_known_screen_gets_periodic_popup_safety_scan(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
+        routine._popup_full_scan_at = 91.0
+        routine._in_encounter = lambda _frame: self.fail("interval check should win first")
+        routine._bar_visible = lambda _frame: self.fail("interval check should win first")
+
+        with patch("avc.catch.time.monotonic", return_value=100.0):
+            self.assertTrue(routine._needs_full_popup_scan(object()))
+
     def test_catch_geometry_is_confirmed_by_exact_android_cancel_node(self):
         taps = []
         routine = object.__new__(CatchRoutine)

@@ -113,6 +113,21 @@ class VisibilityTests(unittest.TestCase):
 
         self.assertTrue(self._shown("feed_wait"))
 
+    def test_cooldown_control_is_disabled_while_feed_is_off(self):
+        self._configure("catch", "normal")
+        self.app.catch_use_feed.set(False)
+        self.app._sync_settings_visibility()
+
+        self.assertEqual("disabled", str(self.app._cd_chk.cget("state")))
+
+    def test_enabling_feed_enables_its_cooldown_control(self):
+        self._configure("catch", "normal")
+        self.app.use_ui_dump.set(True)
+        self.app.catch_use_feed.set(True)
+        self.app._sync_settings_visibility()
+
+        self.assertEqual("normal", str(self.app._cd_chk.cget("state")))
+
     def test_spinning_to_refill_is_offered_without_a_key(self):
         """Spinning stops is the refill path that needs no PGSharp key, so Quick Catch — the
         no-key style — must still offer it, or that user has no refill path at all."""

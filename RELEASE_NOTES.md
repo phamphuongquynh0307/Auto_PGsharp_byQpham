@@ -1,3 +1,149 @@
+# v1.4.19
+
+## Tiếng Việt
+
+### Tap Nearby bị mất: thử lại sau 2 giây thay vì ~6 giây
+
+- Quay màn hình lúc bot chạy cho thấy: sau khi bắt, PGSharp có thể xếp lại danh sách Nearby thêm
+  một đợt khoảng 0,7 giây sau khi map hiện lại. Double-tap rơi đúng lúc đó thì mất, map đứng yên.
+  Bot cũ chờ hết ~5,8 giây mới thử lại.
+- Mỗi cú tap mở được encounter đều làm màn hình loé trắng trong khoảng 1 giây. Giờ bot so độ sáng
+  với frame ngay trước tap: sau 2 giây mà map vẫn y nguyên, không loé, thì tap lại luôn.
+- Không tap Nearby khi màn hình đang loé trắng, để không chạm vào encounter vừa mở muộn.
+- **309 test đạt**.
+
+---
+
+## English
+
+### Lost Nearby taps retried after 2s instead of ~6s
+
+- A screen recording showed PGSharp re-sorting the Nearby list a second time ~0.7s after the map
+  returns; a double-tap landing on that re-sort is lost while the map stays unchanged.
+- Every accepted tap flashes white within about a second. A map whose brightness has not changed
+  2s after the tap is now retried immediately, and no Nearby tap is sent during the flash.
+- **309 tests pass**.
+
+---
+
+# v1.4.18
+
+## Tiếng Việt
+
+### Hết "chậm 1 nhịp" khi chuyển sang con kế tiếp
+
+- Đo trên `timing.log` thật: tap Nearby gửi chưa tới 0,3 giây sau khi thoát encounter thì ~70%
+  không mở được gì, và mỗi lần hụt mất trọn ~6 giây chờ encounter rồi mới thử lại. Từ 0,6 giây trở
+  lên chỉ còn ~15%, ngang một cú tap bình thường.
+- Chốt chờ Nearby làm mới sau khi bắt được áp dụng cho **cả** chế độ chỉ Nearby, và mức sàn tăng
+  từ 0,25 lên 0,6 giây. Vẫn đi tiếp ngay khi 2 frame cho thấy slot đã đổi; trần 1,2 giây giữ nguyên.
+- Tốn thêm ~0,4 giây mỗi con nhưng bỏ được phần lớn các lần hụt 6 giây.
+- **307 test đạt**, không có lỗi.
+
+---
+
+## English
+
+### Fix the "one beat late" start on the next Pokémon
+
+- Measured from the live `timing.log`: a Nearby tap sent <0.3s after the encounter closed opened
+  nothing ~70% of the time, each miss paying the full ~6s encounter timeout; at >=0.6s the miss
+  rate falls to ~15%, the same as an ordinary tap.
+- The post-catch Nearby refresh guard now runs in Nearby-only mode too, with its floor raised from
+  0.25s to 0.6s. It still proceeds as soon as two frames show the row changed; the 1.2s ceiling
+  is unchanged.
+- **307 tests pass**.
+
+---
+
+# v1.4.17
+
+## Tiếng Việt
+
+- Chế độ chỉ Nearby bỏ bước chờ Nearby làm mới sau khi bắt. Bản này làm tap con kế tiếp hụt
+  nhiều hơn và đã được thay bằng v1.4.18.
+
+---
+
+## English
+
+- Nearby-only mode skipped the post-catch refresh wait. This raised the miss rate of the next
+  tap and is superseded by v1.4.18.
+
+---
+
+# v1.4.16
+
+## Tiếng Việt
+
+### Chỉ kiểm tra cooldown khi bật nguồn Feed
+
+- Khi **Nearby hết Pokémon: lấy 1 con từ Feed** đang tắt, vòng bắt bỏ hẳn bước kiểm tra cooldown:
+  không UI dump định kỳ, không chờ deadline cũ và tiếp tục bắt Nearby liên tục.
+- Khi Feed được bật, bảo vệ cooldown vẫn hoạt động đầy đủ sau teleport. Tùy chọn cooldown trên giao
+  diện được ghi rõ là của Feed và tự khóa khi Feed đang tắt.
+- Hạ ngưỡng nhận diện `0:00:00` từ `0.94` xuống `0.88` để chịu được frame stream nửa độ phân giải;
+  kiểm tra riêng lòng của cả năm số 0 vẫn chặn timer khác 0 như `0:00:08`.
+
+### Kiểm chứng
+
+- **306 test đạt**, không có lỗi; 21 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+- Có test hồi quy xác nhận Nearby-only trả về ngay cả khi routine đang giữ một deadline cooldown.
+
+---
+
+## English
+
+### Cooldown checks belong only to the optional Feed source
+
+- Nearby-only catching no longer performs periodic cooldown dumps or waits on a stale deadline.
+- Enabling Feed retains full post-teleport cooldown protection; the UI now exposes that dependency.
+- The exact-zero visual threshold tolerates half-resolution stream frames while retaining the
+  five-hole guard against non-zero timers.
+- **306 tests pass** (21 desktop-only tests skipped).
+
+---
+
+# v1.4.15
+
+## Tiếng Việt
+
+### Bắt nhanh hơn nhưng vẫn giữ chốt an toàn cooldown
+
+- Khi màn hình đã chắc chắn là map hoặc encounter, quét popup nặng được giới hạn còn một lần mỗi
+  8 giây; màn hình không xác định vẫn được quét ngay để không bỏ sót hộp thoại chặn.
+- Nhận diện riêng đúng chuỗi cooldown `0:00:00` từ frame hiện tại trong khoảng 2 ms, tránh UI dump
+  Android vốn mất 2–7 giây. Timer khác 0, thiếu nét hoặc ảnh không đủ rõ vẫn quay về UI dump cũ.
+- Bộ nhận diện zero kiểm tra cả năm lòng số `0`, nên timer gần giống như `0:00:08` không thể được
+  xem nhầm là đã hết cooldown chỉ vì điểm tương quan toàn chuỗi còn cao.
+- Cú tap Nearby bị bỏ qua được xác nhận bằng ba frame có cùng fingerprint sau cửa sổ chuyển màn
+  hình 3 giây, thay vì luôn chờ hết timeout và chụp ADB chậm. Lần thử lại dùng một primer ADB độc
+  lập và tăng nhẹ khoảng nghỉ để giảm khả năng scrcpy tiếp tục làm rơi tap.
+
+### Kiểm chứng
+
+- **303 test đạt**, không có lỗi; 19 test giao diện được bỏ qua đúng điều kiện khi môi trường test
+  không có desktop Tk.
+- Fast-path cooldown đạt khoảng **1,8 ms** trên ảnh thật 1220×2712; ảnh nén quá mờ bị từ chối và
+  tự động dùng đường đọc an toàn cũ.
+
+---
+
+## English
+
+### Faster catch loop with cooldown safety preserved
+
+- Heavy popup recognition is rate-limited on known map/encounter frames while unknown screens are
+  still checked immediately.
+- An exact visual `0:00:00` fast path avoids the 2–7 second Android hierarchy dump. Any non-zero,
+  incomplete, or uncertain timer falls back to the existing authoritative reader.
+- Rejected Nearby taps are confirmed from three unchanged slot fingerprints after the measured
+  transition window; retries use an independent ADB primer with a small adaptive delay.
+- **303 tests pass** (19 desktop-only tests skipped).
+
+---
+
 # v1.4.14
 
 ## Tiếng Việt

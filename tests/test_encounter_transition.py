@@ -30,13 +30,17 @@ class EncounterTransitionWaitTests(unittest.TestCase):
             encounter_transition_grace=0.0,
             engage_miss_grace=0.0,
             engage_miss_frames=2,
+            engage_retry_delay_step=0.08,
+            engage_retry_delay_max=0.24,
             pre_tap_delay=configured_delay,
             pre_tap_min_delay=0.12,
             settle_after_catch=1.0,
+            use_feed_bar=True,
         )
         routine.stop_event = threading.Event()
         routine.device = SimpleNamespace(taps=[])
         routine.device.tap = lambda x, y: routine.device.taps.append((x, y))
+        routine._engage_retry_streak = 0
         routine._jitter = lambda x, y: (x, y)
         routine.double_taps = []
         routine._double_tap = lambda x, y: routine.double_taps.append((x, y))
@@ -45,6 +49,25 @@ class EncounterTransitionWaitTests(unittest.TestCase):
         routine._ball_in = lambda _frame: self.BALL
         routine._trace = lambda *_args, **_kwargs: None
         return routine
+
+    def test_nearby_only_mode_keeps_the_post_catch_refresh_floor(self):
+        # Tapping the next row straight after the encounter closes mostly opens nothing and
+        # costs the whole encounter timeout; Nearby-only runs need the floor as much as Feed.
+        routine = self._routine()
+        routine.config.use_feed_bar = False
+        routine.config.settle_after_catch = 0.0
+        routine._nearby_last_seen_at = 123.0
+        clock = self.Clock()
+        routine._interruptible_sleep = lambda seconds: (
+            routine.sleeps.append(seconds), clock.advance(seconds)
+        )
+
+        with patch("avc.catch.time.monotonic", side_effect=clock):
+            routine._settle_after_encounter()
+
+        self.assertEqual([MIN_POST_CATCH_REFRESH], routine.sleeps)
+        self.assertGreaterEqual(MIN_POST_CATCH_REFRESH, 0.6)
+        self.assertIsNone(routine._nearby_last_seen_at)
 
     def test_zero_setting_keeps_a_short_priming_tap(self):
         routine = self._routine(configured_delay=0.0)
@@ -61,6 +84,19 @@ class EncounterTransitionWaitTests(unittest.TestCase):
         routine._engage_nearby(self.SLOT)
 
         self.assertEqual([0.4], routine.sleeps)
+
+    def test_retry_uses_independent_adb_primer_and_a_slightly_longer_gap(self):
+        routine = self._routine(configured_delay=0.0)
+        routine._engage_retry_streak = 1
+        routine.device.adb_taps = []
+        routine.device.adb_tap = lambda x, y: routine.device.adb_taps.append((x, y))
+
+        routine._engage_nearby(self.SLOT)
+
+        self.assertEqual([], routine.device.taps)
+        self.assertEqual([self.SLOT], routine.device.adb_taps)
+        self.assertEqual([0.20], routine.sleeps)
+        self.assertEqual([self.SLOT], routine.double_taps)
 
     def test_wait_uses_fresh_stream_frames_and_returns_as_soon_as_ball_appears(self):
         routine = self._routine()
@@ -118,6 +154,84 @@ class EncounterTransitionWaitTests(unittest.TestCase):
         self.assertEqual(self.BALL, found)
         self.assertFalse(routine._engage_still_nearby)
         self.assertEqual([{"next_frame": True}] * 3, calls)
+
+    def test_unchanged_occupied_slot_rejects_early_without_slow_fresh_capture(self):
+        routine = self._routine(encounter_timeout=8.0)
+        routine.config.engage_miss_grace = 3.0
+        routine.config.engage_miss_frames = 3
+        routine._engaged_slot_signature = np.array([1.0, 0.0], dtype=np.float32)
+        clock = self.Clock()
+        calls = []
+
+        def screenshot(**kwargs):
+            calls.append(kwargs)
+            self.assertFalse(kwargs.get("fresh", False))
+            clock.advance(1.0)
+            return "same-map"
+
+        routine.device.screenshot = screenshot
+        routine._ball_in = lambda _frame: None
+        routine._bar_visible = lambda _frame: True
+        routine._scan_slots = lambda _frame: self.SLOT
+        routine._slot_visual_signature = lambda _frame, _slot: np.array(
+            [1.0, 0.0], dtype=np.float32,
+        )
+        routine._wait_if_paused = lambda: None
+
+        with patch("avc.catch.time.monotonic", side_effect=clock):
+            found = routine._wait_for_engaged_encounter()
+
+        self.assertIsNone(found)
+        self.assertTrue(routine._engage_still_nearby)
+        self.assertEqual([{"next_frame": True}] * 5, calls)
+        self.assertLess(clock.value, routine.config.encounter_timeout)
+
+    def _quick_miss_routine(self, frames, balls):
+        routine = self._routine(encounter_timeout=4.0)
+        routine.config.engage_miss_grace = 99.0   # isolate the brightness rule
+        routine.config.engage_quick_miss = 2.0
+        routine.config.engage_transition_delta = 30.0
+        routine._engaged_frame_level = 100.0
+        clock = self.Clock()
+        shots = iter(frames)
+        seen = iter(balls)
+
+        def screenshot(**kwargs):
+            self.assertFalse(kwargs.get("fresh", False))
+            clock.advance(0.25)
+            return next(shots)
+
+        routine.device.screenshot = screenshot
+        routine._ball_in = lambda _frame: next(seen)
+        routine._bar_visible = lambda _frame: True
+        routine._scan_slots = lambda _frame: self.SLOT
+        routine._wait_if_paused = lambda: None
+        return routine, clock
+
+    def test_map_that_never_flashes_is_a_lost_tap_retried_after_two_seconds(self):
+        map_frame = np.full((64, 32, 3), 104, dtype=np.uint8)
+        routine, clock = self._quick_miss_routine([map_frame] * 20, [None] * 20)
+
+        with patch("avc.catch.time.monotonic", side_effect=clock):
+            found = routine._wait_for_engaged_encounter()
+
+        self.assertIsNone(found)
+        self.assertTrue(routine._engage_still_nearby)
+        self.assertGreaterEqual(clock.value, 2.0)
+        self.assertLess(clock.value, 2.5)
+
+    def test_white_flash_keeps_waiting_for_a_slow_encounter(self):
+        map_frame = np.full((64, 32, 3), 104, dtype=np.uint8)
+        flash = np.full((64, 32, 3), 240, dtype=np.uint8)
+        frames = [map_frame] * 4 + [flash] * 2 + [map_frame] * 8
+        balls = [None] * 13 + [self.BALL]
+        routine, clock = self._quick_miss_routine(frames, balls)
+
+        with patch("avc.catch.time.monotonic", side_effect=clock):
+            found = routine._wait_for_engaged_encounter()
+
+        self.assertEqual(self.BALL, found)
+        self.assertGreater(clock.value, 3.0)
 
     def test_ball_on_final_fresh_capture_is_caught_in_the_same_cycle(self):
         routine = self._routine(encounter_timeout=0.0)

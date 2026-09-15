@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.14"
+APP_VERSION = "1.4.19"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -103,7 +103,7 @@ LANG = {
         "② AUTO BẮT POKÉMON\n"
         "• PGSharp ở màn hình map, thanh Nearby bên phải phải nhìn thấy Pokémon.\n"
         "• Lần thử đầu: giới hạn 1 con, lực ném 700, chờ encounter 3 giây, tối đa 3 bóng.\n"
-        "• Giữ bật đọc overlay PGSharp và nghỉ theo cooldown. Feed mở rộng nên để tắt lúc thử đầu.\n"
+        "• Feed tắt: bot không quét cooldown và bắt Nearby liên tục. Feed bật: giữ đọc overlay + nghỉ cooldown.\n"
         "• Quick Catch chỉ cần chỉnh Flick/Chờ sau ném nếu Berry hoặc Flee chưa ăn.\n\n"
         "③ CHẤM SHINY THEO IV TỪ FEED\n"
         "• PGSharp phải bật chặn non-shiny; để Feed/RSS và thanh Nearby có dấu @ cùng hiển thị.\n"
@@ -134,7 +134,7 @@ LANG = {
         "② AUTO CATCH\n"
         "• Stay on the map with a Pokémon visible in PGSharp's right-side Nearby bar.\n"
         "• First test: limit 1, throw power 700, encounter wait 3 s, maximum 3 balls.\n"
-        "• Keep PGSharp overlay reading and cooldown protection enabled. Leave optional Feed off first.\n"
+        "• Feed off: Nearby catches skip cooldown scans. Feed on: keep overlay reading and cooldown protection enabled.\n"
         "• For Quick Catch, tune Flick/After-throw wait only if Berry or Flee is missed.\n\n"
         "③ SHINY IV CHECK FROM FEED\n"
         "• Enable PGSharp non-shiny blocking; show the Feed/RSS bar and the Nearby @ bar.\n"
@@ -238,8 +238,8 @@ LANG = {
                       "en": "Slow down: at least this long between catches (s, 0=off):"},
     "pre_tap":       {"vi": "Chờ giữa tap đơn và tap đôi (giây):",
                       "en": "Gap between single tap and double tap (s):"},
-    "cooldown":      {"vi": "Nghỉ khi PGSharp báo cooldown (tránh khoá tài khoản)",
-                      "en": "Pause while PGSharp reports a cooldown (avoids soft bans)"},
+    "cooldown":      {"vi": "Khi dùng Feed: nghỉ theo cooldown PGSharp",
+                      "en": "When using Feed: pause for PGSharp cooldown"},
     "ui_dump":       {"vi": "Đọc overlay PGSharp để soi Nearby chính xác hơn",
                       "en": "Read the PGSharp overlay for a surer Nearby check"},
     "catch_feed":    {"vi": "Nearby hết Pokémon: lấy 1 con từ Feed (mặc định tắt)",
@@ -589,7 +589,7 @@ Tên tính năng bên dưới theo tài liệu PGSharp hiện tại. Bố cục 
 
 ## C. Thiết lập chung khuyên dùng
 • Nearby Radar = bật; thanh Nearby bên phải phải hiện. Muốn bắt tất cả thì không lọc chỉ shiny.
-• Cooldown Timer = bật. Trong app cũng giữ bật Đọc overlay PGSharp và Nghỉ khi PGSharp báo cooldown.
+• Cooldown Timer chỉ cần cho Feed/teleport. Bắt Nearby thuần không quét cooldown.
 • Spawn Booster = có thể bật để tăng phạm vi spawn quanh nhân vật.
 • Quick Load Map = nên bật cho chế độ teleport nhiều.
 • Encounter IV = bật cho hai chế độ chấm shiny để app có dữ liệu IV rõ hơn.
@@ -604,7 +604,7 @@ Tên tính năng bên dưới theo tài liệu PGSharp hiện tại. Bố cục 
 ## Shared settings
 • Keep PGSharp visible; Hide PGSharp must be off while the bot runs.
 • Add AutoWalk, Teleport, Virtual Go Plus and Settings to Custom Shortcuts as needed.
-• Enable Nearby Radar and Cooldown Timer. Quick Load Map is useful for teleport modes.
+• Enable Nearby Radar. Cooldown Timer is only needed for Feed/teleport modes; Nearby-only catching does not scan it.
 • Enable Encounter IV for shiny-checking modes.
 [[IMAGE:05-pgsharp-install|PGSharp install and loaded map.]]
 [[IMAGE:06-pgsharp-shortcuts|Custom Shortcuts and expanded shortcut menu.]]
@@ -629,7 +629,7 @@ Tên tính năng bên dưới theo tài liệu PGSharp hiện tại. Bố cục 
 2. Chọn Auto bắt thường hoặc Auto bắt nhanh (không cần PGSharp key).
 3. Đặt Giới hạn số con = 1 để thử.
 4. Giữ Lực ném = 700, Chờ mở encounter = 3 giây, Số bóng tối đa mỗi con = 3.
-5. Giữ bật Đọc overlay PGSharp và Nghỉ khi PGSharp báo cooldown.
+5. Nếu Feed tắt, bot bỏ qua cooldown và bắt Nearby liên tục. Nếu Feed bật, giữ bật Đọc overlay và Nghỉ cooldown.
 6. Bấm Chạy và theo dõi đủ một lượt từ Nearby → encounter → ném → về map.
 
 ## C. Quick Catch của app
@@ -649,7 +649,7 @@ Stay on the map with Nearby Radar visible and Block Non-Shiny off. Leave optiona
 [[IMAGE:08-catch-layout|Correct map and Nearby layout.]]
 
 ## First app test
-Choose Auto catch, limit 1, throw power 700, encounter wait 3 seconds and up to 3 balls. Keep overlay reading and cooldown protection enabled.
+Choose Auto catch, limit 1, throw power 700, encounter wait 3 seconds and up to 3 balls. Nearby-only catching skips cooldown scans; Feed catching keeps overlay reading and cooldown protection enabled.
 Quick Catch here is the app's own touch gesture and does not require PGSharp Quick Catch.
 [[IMAGE:09-catch-preview|Live view markers for Nearby, ball, Berry and Flee.]]
 """},
@@ -1106,12 +1106,14 @@ class App:
         cd_chk = ttk.Checkbutton(pace_grp, text=self.tr("cooldown"), variable=self.respect_cd)
         cd_chk.grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=4)
         self._i18n.append((cd_chk, "cooldown"))
+        self._cd_chk = cd_chk
         self.use_ui_dump = tk.BooleanVar(value=True)
-        # The cooldown is read out of the PGSharp overlay, so without the dump there is nothing
-        # to read it from. The routine already refuses that combination; grey the box out so the
-        # setting cannot look enabled while doing nothing.
+        # Only a Feed jump activates cooldown handling, and its value comes from the PGSharp
+        # overlay. Grey the control out unless both prerequisites are on so the UI mirrors the
+        # runtime invariant instead of appearing active during a Nearby-only run.
         self._sync_cd_state = lambda: cd_chk.config(
-            state="normal" if self.use_ui_dump.get() else "disabled")
+            state="normal" if self.use_ui_dump.get() and self.catch_use_feed.get()
+            else "disabled")
         ud_chk = ttk.Checkbutton(pace_grp, text=self.tr("ui_dump"), variable=self.use_ui_dump,
                                  command=lambda: self._sync_cd_state())
         ud_chk.grid(row=3, column=0, columnspan=2, sticky="w", padx=6, pady=4)
@@ -1453,6 +1455,7 @@ class App:
         for key in ("throw_power", "max_catches", "idle_aw", "wait_enc", "wait_catch",
                     "settle", "touch_delay", "max_throws", "min_gap", "pre_tap", "trace"):
             self._set_row_visible(key, catching)
+        self._sync_cd_state()
 
     def _on_advanced_toggle(self) -> None:
         self._sync_settings_visibility()
@@ -1554,7 +1557,7 @@ class App:
         saved_settle = float(data.get("settle", self.settle.get()))
         # Old builds stored 0 to mean "no wait". Under adaptive refresh that would also remove
         # the safety ceiling, so migrate it to the normal ceiling; the actual common wait is now
-        # about 0.25-0.5s and ends as soon as two changed frames arrive.
+        # about 0.6-0.8s and ends as soon as two changed frames arrive.
         self.settle.set(
             DEFAULT_POST_CATCH_REFRESH_TIMEOUT
             if saved_settle < MIN_POST_CATCH_REFRESH else saved_settle
@@ -3117,7 +3120,10 @@ class App:
                     feed_nearby_timeout=max(0.0, float(self.feed_wait.get())),
                     min_catch_interval=max(0.0, float(self.min_gap.get())),
                     pre_tap_delay=max(0.0, float(self.pre_tap.get())),
-                    respect_cooldown=bool(self.respect_cd.get()),
+                    # Nearby-only catching never activates cooldown scans. Preserve the saved
+                    # preference so enabling Feed later restores its safety choice.
+                    respect_cooldown=(bool(self.respect_cd.get())
+                                      and bool(self.catch_use_feed.get())),
                     use_ui_dump=bool(self.use_ui_dump.get()),
                     trace_timing=bool(self.trace_timing.get()),
                     stuck_back=bool(self.stuck_back.get()),

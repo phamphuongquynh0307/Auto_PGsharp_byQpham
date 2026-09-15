@@ -49,6 +49,12 @@ def _to_gray(img: np.ndarray) -> np.ndarray:
 POKESTOP_HSV_LO = (88, 150, 200)
 POKESTOP_HSV_HI = (122, 255, 255)
 
+# PGSharp renders its cooldown text in a saturated green. The exact-zero fast path below uses a
+# binary glyph template rather than the source pixels, so the translucent panel and whatever map
+# scenery happens to sit behind it cannot affect the match.
+COOLDOWN_GREEN_LO = (35, 80, 120)
+COOLDOWN_GREEN_HI = (95, 255, 255)
+
 
 def find_pokestops(
     scene: np.ndarray,
@@ -120,6 +126,85 @@ def find_pokestops(
         found.append((area, Match(x0 + bx, y0 + by, bw, bh, area / float(bw * bh))))
     found.sort(key=lambda item: -item[0])
     return [m for _area, m in found]
+
+
+def cooldown_zero_visible(
+    scene: np.ndarray,
+    template: np.ndarray | None,
+    region: tuple[int, int, int, int],
+    *,
+    scales: tuple[float, ...] = (1.0,),
+    threshold: float = 0.88,
+) -> bool:
+    """Whether PGSharp's cooldown display visibly reads exactly ``0:00:00``.
+
+    This deliberately has one positive answer: a strong exact-zero match may avoid an expensive
+    Android hierarchy dump, while every non-zero or unreadable image returns False and keeps the
+    existing authoritative fallback. Matching the complete five-zero/two-colon word at a high
+    threshold prevents a partially-zero positive countdown from being accepted.
+    """
+    if (template is None or scene is None or scene.ndim != 3
+            or scene.shape[2] < 3):
+        return False
+    x, y, w, h = region
+    x0, y0 = max(0, int(x)), max(0, int(y))
+    x1 = min(scene.shape[1], int(x + w))
+    y1 = min(scene.shape[0], int(y + h))
+    if x1 <= x0 or y1 <= y0:
+        return False
+    roi = scene[y0:y1, x0:x1]
+    mask = cv2.inRange(
+        cv2.cvtColor(roi, cv2.COLOR_BGR2HSV),
+        np.array(COOLDOWN_GREEN_LO, np.uint8),
+        np.array(COOLDOWN_GREEN_HI, np.uint8),
+    )
+    matches = find(
+        mask,
+        template,
+        threshold=threshold,
+        scales=scales,
+        max_matches=1,
+    )
+    if not matches:
+        return False
+
+    # Correlation alone is not enough here: changing one of five zeroes into an 8 alters only a
+    # small part of the complete word and can still score above 0.97. Each zero in the template
+    # encloses one dark hole. Require those same holes to stay empty in the live green mask; the
+    # middle stroke of 2/3/4/5/6/8/9 is then rejected explicitly, while 1/7 already fail the
+    # whole-word score. Eroding the holes by one pixel tolerates H.264/resize edge shimmer.
+    template_gray = _to_gray(template)
+    for match in matches:
+        resized = (cv2.resize(template_gray, (match.width, match.height))
+                   if template_gray.shape[:2] != (match.height, match.width)
+                   else template_gray)
+        foreground = resized >= 128
+        count, labels, stats, _centres = cv2.connectedComponentsWithStats(
+            (~foreground).astype(np.uint8),
+        )
+        holes_checked = 0
+        candidate = mask[
+            match.y:match.y + match.height,
+            match.x:match.x + match.width,
+        ]
+        if candidate.shape != resized.shape:
+            continue
+        for label in range(1, count):
+            hx, hy, hw, hh, area = (int(value) for value in stats[label])
+            if (hx == 0 or hy == 0 or hx + hw == match.width
+                    or hy + hh == match.height or area < 12):
+                continue
+            hole = (labels == label).astype(np.uint8)
+            inner = cv2.erode(hole, np.ones((3, 3), np.uint8), iterations=1).astype(bool)
+            if np.count_nonzero(inner) < 5:
+                inner = hole.astype(bool)
+            holes_checked += 1
+            if np.count_nonzero(candidate[inner]) / np.count_nonzero(inner) > 0.08:
+                break
+        else:
+            if holes_checked >= 5:
+                return True
+    return False
 
 
 def find(

@@ -37,7 +37,8 @@ from .layout import (
 from . import diag, uidump
 from .resources import resource_path
 from .vision import (
-    best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
+    best_matching_scale, cooldown_zero_visible, find, find_berry_button, find_enc_ball,
+    find_fast, find_popup_close,
     find_throw_ball_hub,
     find_dialog_buttons, find_pokestops, load_template,
     slot_has_pokemon,
@@ -72,7 +73,11 @@ CURRENT_OUT_OF_BALLS_REGION = (350, 2400, 600, 312)
 # floor, the routine compares the old slot's visual fingerprint with fresh Nearby frames and can
 # proceed as soon as the row really changed. The longer value is only a fallback ceiling for an
 # identical next sprite or an unreadable transition, not a fixed sleep on every catch.
-MIN_POST_CATCH_REFRESH = 0.25
+# Measured over ~100 catches on the live phone: a Nearby tap sent <0.3s after the encounter closed
+# failed ~70% of the time (each miss costs ~6s of encounter timeout), 0.3-0.6s ~43%, >=0.6s ~15%
+# — the same as an ordinary tap. During the fade the row's fingerprint also "changes", so the
+# refresh check alone cannot stand in for this floor.
+MIN_POST_CATCH_REFRESH = 0.6
 DEFAULT_POST_CATCH_REFRESH_TIMEOUT = 1.2
 SLOT_REFRESH_HIST_DISTANCE = 0.30
 
@@ -143,15 +148,18 @@ class CatchConfig:
     # sitting out the cooldown it prevents. 0 disables the floor.
     min_catch_interval: float = 3.0
 
-    # Tapping a distant Nearby entry makes PGSharp jump the player there, and a long jump earns a
-    # Niantic cooldown: catching through it is what gets an account soft-banned, and the implied
-    # speed also stops fresh spawns appearing. The distance itself is not readable — the Nearby
-    # nodes are bare ImageViews — but PGSharp publishes the *consequence*, counting the cooldown
-    # down as text in its own overlay. Reading that verdict beats estimating distance, because it
-    # is computed from Niantic's real cooldown table rather than guessed. Needs use_ui_dump.
+    # Only the optional Feed source owns cooldown protection. With Feed off the user's Nearby
+    # loop must catch continuously and never pay a periodic hierarchy dump. With Feed on,
+    # PGSharp's own countdown is authoritative after a jump. Needs use_ui_dump.
     respect_cooldown: bool = True
     cooldown_check_interval: float = 25.0   # how often to spend a dump purely on the cooldown
     cooldown_margin: float = 5.0            # extra seconds waited past PGSharp's countdown
+    # A high-confidence exact-zero image avoids a 2-7 second Android hierarchy dump. Every
+    # non-zero or uncertain frame still uses the authoritative dump, so this is a clear-only
+    # performance shortcut rather than a second cooldown parser.
+    cooldown_zero_template: str = "templates/cooldown_zero.png"
+    cooldown_region: tuple[int, int, int, int] = (420, 225, 380, 120)
+    cooldown_zero_threshold: float = 0.88
 
     # Diagnostics: append a per-cycle phase breakdown to timing_log so a slow cycle can be
     # attributed to a step instead of guessed at. Off by default — it writes a line per cycle.
@@ -292,11 +300,25 @@ class CatchConfig:
     # so a normal fast opening does not pay any of the extra budget.
     encounter_transition_grace: float = 2.0
     # A rejected Nearby gesture leaves both the bar and its Pokemon visibly in place. Do not
-    # spend the entire encounter timeout waiting for a transition that never started: after a
-    # short grace, two fresh frames proving that state return control to the next retry.
-    engage_miss_grace: float = 0.8
-    engage_miss_frames: int = 2
-    catch_timeout: float = 6.0      # max wait per throw for the encounter to end (ball gone)
+    # spend the entire encounter timeout waiting for a transition that never started. After the
+    # measured transition window, several fresh frames proving that state return control to the
+    # next retry.
+    # An accepted touch can leave the old row visible for almost three seconds. Beyond that
+    # observed window, several unchanged fingerprints prove a rejected tap without paying for
+    # the final slow ADB screenshot. Ambiguous transitions retain the complete timeout.
+    engage_miss_grace: float = 3.0
+    engage_miss_frames: int = 3
+    engage_retry_delay_step: float = 0.08
+    engage_retry_delay_max: float = 0.24
+    # Every accepted Nearby tap plays the game's white zoom flash well before the Berry button is
+    # ready (screen recording: flash ~0.6s after the tap, ball ~1.3s after the flash; tap-to-ball
+    # is 1.9s median, 3.1s p99 over ~5000 catches). A frame whose brightness never moved from the
+    # pre-tap map for engage_quick_miss seconds is therefore a lost touch — on the recording one
+    # sent while PGSharp re-sorted the list — and is retried instead of paying the ~6s timeout.
+    engage_quick_miss: float = 2.0          # 0 disables the shortcut
+    engage_transition_delta: float = 30.0   # mean-brightness change that counts as a transition
+    transition_flash_level: float = 200.0   # map never gets this bright; the flash peaks ~240
+    catch_timeout: float = 6.0     # max wait per throw for the encounter to end (ball gone)
     settle_after_catch: float = DEFAULT_POST_CATCH_REFRESH_TIMEOUT  # adaptive refresh ceiling
     poll_interval: float = 0.08     # pause between polls; cheap now that frames come from the stream
     idle_poll: float = 0.3          # pause between cycles when the nearby bar isn't visible
@@ -340,6 +362,10 @@ class CatchConfig:
     cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
     popup_threshold: float = 0.7
     popup_debounce: float = 0.75  # ignore stale stream frames after one popup tap
+    # Full popup recognition costs roughly half a second on the target phone. A screen already
+    # proven to be the map or an encounter gets a bounded periodic sweep; unknown screens are
+    # still checked immediately.
+    popup_known_screen_interval: float = 8.0
     # Every popup handler above recognises its dialog by a template cropped from one phone
     # running one PGSharp/Pokemon GO build. A build that draws a modal differently — another
     # language, theme, game version, emulator — leaves the routine staring at something it has
@@ -518,6 +544,7 @@ class CatchConfig:
             nearby_slot=L.point(self.nearby_slot, "TR"),
             dialog_region=L.region(self.dialog_region, "MC"),  # centred Android AlertDialog
             cancel_btn_region=L.region(self.cancel_btn_region, "MC"),  # centred system dialog
+            cooldown_region=L.region(self.cooldown_region, "TC"),
             slot_offset_y=L.scale(self.slot_offset_y),
             slot_pitch=L.scale(self.slot_pitch),
             feed_slot_dy=L.scale(self.feed_slot_dy),
@@ -621,6 +648,7 @@ class CatchRoutine:
         # post-catch wait finish when the list visibly advances rather than sleeping a fixed
         # 1.2 seconds after every encounter.
         self._engaged_slot_signature: np.ndarray | None = None
+        self._engaged_frame_level: float | None = None  # map brightness just before the tap
         # Manual calibration is only a starting estimate. PGSharp's UI hierarchy supplies the
         # real centre of slot 1; once observed it wins for the rest of the run. This prevents a
         # stale manual y-coordinate from repeatedly tapping below a lone Pokemon.
@@ -629,6 +657,7 @@ class CatchRoutine:
         # empty. That is a definite answer, so the ~2.85s crisp capture behind it is skipped.
         self._ui_empty_confirmed = False
         self._engage_still_nearby = False
+        self._engage_retry_streak = 0
         # Classification for the current run_once result. A tap retry or an encounter
         # transition is active Pokémon work, not an empty Nearby cycle; run() uses this to keep
         # AutoWalk and dry-spell alerts out of the middle of an encounter.
@@ -640,6 +669,8 @@ class CatchRoutine:
         self._phase_t0 = 0.0
         self._cooldown_until = 0.0      # monotonic deadline; 0 means clear
         self._cooldown_checked_at = 0.0
+        self._cooldown_probe_frame = None
+        self._popup_full_scan_at = 0.0
         self._last_engage_at = 0.0      # when the last encounter was engaged, for pacing
         # Feed sidebar: cached (rss, handle, slot) positions, a presence streak matching the
         # Nearby one, and whether the bar has ever been located (so a user without the feed
@@ -688,6 +719,7 @@ class CatchRoutine:
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
         self._claim_rewards = load_opt(self.config.claim_rewards_template)
+        self._cooldown_zero = load_opt(self.config.cooldown_zero_template)
         self._close_btn = load_opt(self.config.close_btn_template)
         self._close_btn_blue = load_opt(self.config.close_btn_blue_template)
         self._close_btn_white = load_opt(self.config.close_btn_white_template)
@@ -1231,6 +1263,13 @@ class CatchRoutine:
     def _slot_signature_changed(before: np.ndarray, after: np.ndarray) -> bool:
         return bool(np.abs(before - after).sum() >= SLOT_REFRESH_HIST_DISTANCE)
 
+    @staticmethod
+    def _frame_level(frame) -> float | None:
+        """Mean brightness of a sparse pixel grid — enough to see the encounter's white flash."""
+        if not isinstance(frame, np.ndarray) or frame.ndim != 3:
+            return None
+        return float(frame[::8, ::8].mean())
+
     def _occupied_slot_in(self, frame) -> tuple[int, int] | None:
         """A Nearby slot to engage — a sighting that a second one has corroborated.
 
@@ -1538,15 +1577,42 @@ class CatchRoutine:
         Spends a dump on the question only every cooldown_check_interval — while a cooldown is
         already known the deadline counts itself down, and no dump is needed at all."""
         cfg = self.config
-        if not cfg.respect_cooldown or not cfg.use_ui_dump:
+        frame = getattr(self, "_cooldown_probe_frame", None)
+        # Feed is the only source allowed to activate this guard. On the live phone each needless
+        # hierarchy probe stalls an otherwise continuous Nearby loop for 3-6 seconds.
+        if (not getattr(cfg, "use_feed_bar", False)
+                or not cfg.respect_cooldown or not cfg.use_ui_dump):
             return 0.0
         now = time.monotonic()
         if self._cooldown_until > now:
             return self._cooldown_until - now
         if now - self._cooldown_checked_at >= cfg.cooldown_check_interval:
-            self._ui_state()        # refreshes the deadline through _note_cooldown
+            if (frame is not None and cooldown_zero_visible(
+                    frame,
+                    getattr(self, "_cooldown_zero", None),
+                    cfg.cooldown_region,
+                    scales=getattr(self, "_popup_scales", (1.0,)),
+                    threshold=cfg.cooldown_zero_threshold,
+            )):
+                # The screenshot already supplied PGSharp's clear verdict. Refresh the same
+                # deadline/cache timestamps as a hierarchy read so the next cycle does not repay
+                # the check. A failed match deliberately falls through to the old slow path.
+                self._note_cooldown(0.0)
+            else:
+                self._ui_state()    # refreshes the deadline through _note_cooldown
             self._cooldown_checked_at = now
         return max(0.0, self._cooldown_until - time.monotonic())
+
+    def _needs_full_popup_scan(self, frame) -> bool:
+        """Keep unknown screens immediate while rate-limiting scans on proven game states."""
+        interval = max(0.0, getattr(self.config, "popup_known_screen_interval", 0.0))
+        last = getattr(self, "_popup_full_scan_at", 0.0)
+        if interval <= 0 or time.monotonic() - last >= interval:
+            return True
+        # If a popup hides both stable anchors it is checked immediately. A modal that happens to
+        # preserve one behind its dim layer is still bounded by the periodic pass; all throws are
+        # independently encounter-gated, so the skipped heavy scan cannot produce a blind swipe.
+        return not (self._in_encounter(frame) or self._bar_visible(frame))
 
     def _bar_visible(self, frame) -> bool:
         """True when the Nearby bar's '@' is on screen — i.e. we are back on the map.
@@ -2510,11 +2576,24 @@ class CatchRoutine:
         """Prime a Nearby row, then send the double-tap that opens its encounter."""
         cfg = self.config
         self._engaged_slot_signature = None
+        self._engaged_frame_level = None
         screenshot = getattr(self.device, "screenshot", None)
         if screenshot is not None:
-            self._engaged_slot_signature = self._slot_visual_signature(screenshot(), slot)
-        self.device.tap(*self._jitter(*slot))
-        delay = max(cfg.pre_tap_min_delay, cfg.pre_tap_delay)
+            before = screenshot()
+            self._engaged_slot_signature = self._slot_visual_signature(before, slot)
+            self._engaged_frame_level = self._frame_level(before)
+        retry_streak = max(0, int(getattr(self, "_engage_retry_streak", 0)))
+        # A rejected scrcpy gesture can leave its persistent socket healthy enough to send yet
+        # still ignored by Android. Use one independent ADB primer on retries; the actual double
+        # tap stays on the low-latency socket so its two touches remain inside Android's window.
+        primer = (getattr(self.device, "adb_tap", None)
+                  if retry_streak else None) or self.device.tap
+        primer(*self._jitter(*slot))
+        retry_extra = min(
+            max(0.0, getattr(cfg, "engage_retry_delay_max", 0.0)),
+            retry_streak * max(0.0, getattr(cfg, "engage_retry_delay_step", 0.0)),
+        )
+        delay = max(cfg.pre_tap_min_delay, cfg.pre_tap_delay) + retry_extra
         self._trace("nearby_pre_tap",
                     f"Tap mở đầu tại {slot}; chờ {delay:.2f}s rồi double-tap.", 0.0)
         self._interruptible_sleep(delay)
@@ -2533,14 +2612,44 @@ class CatchRoutine:
         started = time.monotonic()
         deadline = started + timeout
         self._engage_still_nearby = False
+        unchanged_frames = 0
+        previous = getattr(self, "_engaged_slot_signature", None)
+        base_level = getattr(self, "_engaged_frame_level", None)
+        quick_miss = max(0.0, getattr(cfg, "engage_quick_miss", 0.0))
+        transition_seen = False
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
             ball = self._ball_in(frame)
             if ball is not None:
+                self._engage_retry_streak = 0
                 return ball
 
             now = time.monotonic()
+            level = self._frame_level(frame)
+            if base_level is not None and level is not None and (
+                    abs(level - base_level) >= getattr(cfg, "engage_transition_delta", 30.0)):
+                transition_seen = True
+            if (quick_miss and base_level is not None and not transition_seen
+                    and now - started >= quick_miss and self._bar_visible(frame)):
+                # Still the same map, never flashed: the touch was lost. Only a bar that still
+                # holds a Pokémon is retried at once; an emptied one goes back to scanning.
+                self._engage_still_nearby = self._scan_slots(frame) is not None
+                return None
+            if previous is not None and now - started >= max(0.0, cfg.engage_miss_grace):
+                unchanged = False
+                if self._bar_visible(frame):
+                    slot = self._scan_slots(frame)
+                    if slot is not None:
+                        current = self._slot_visual_signature(frame, slot)
+                        unchanged = (
+                            current is not None
+                            and not self._slot_signature_changed(previous, current)
+                        )
+                unchanged_frames = unchanged_frames + 1 if unchanged else 0
+                if unchanged_frames >= max(1, int(cfg.engage_miss_frames)):
+                    self._engage_still_nearby = True
+                    return None
             if now >= deadline:
                 # Do not retry from an early Nearby frame. On the live phone the game can accept
                 # the touch immediately yet leave the row rendered for another 2-3 seconds; a
@@ -2550,6 +2659,7 @@ class CatchRoutine:
                 fresh = self.device.screenshot(fresh=True)
                 ball = self._ball_in(fresh)
                 if ball is not None:
+                    self._engage_retry_streak = 0
                     return ball
                 self._engage_still_nearby = (
                     self._bar_visible(fresh) and self._scan_slots(fresh) is not None
@@ -2560,8 +2670,12 @@ class CatchRoutine:
     def _settle_after_encounter(self) -> None:
         """Wait only until PGSharp visibly replaces the consumed Nearby row.
 
+        Applies to Nearby-only mode too: skipping it there (v1.4.17) raised the share of
+        post-catch taps that opened nothing from ~28% to ~65%, each one paying the full ~6s
+        encounter timeout before the retry — the "one beat late" on every other Pokémon.
+
         A blind zero-delay retry targeted the stale row and lost roughly six seconds, while a
-        fixed 1.2-second sleep made every healthy catch unnecessarily slow. Keep a 250ms
+        fixed 1.2-second sleep made every healthy catch unnecessarily slow. Keep a short
         transition floor, then accept two fresh frames showing either an empty bar or a sprite
         fingerprint different from the one just engaged. Unreadable/identical rows use the
         configured value as a conservative maximum.
@@ -2986,15 +3100,24 @@ class CatchRoutine:
         self._mark("chup")
 
         # Step 0: clear any blocking popup (speed warning, AutoWalk dialog) before doing anything.
-        if self._drain_popups(frame):
-            self._mark("popup"); self._flush_phases("popup")
-            return False
+        if self._needs_full_popup_scan(frame):
+            self._popup_full_scan_at = time.monotonic()
+            if self._drain_popups(frame):
+                self._mark("popup"); self._flush_phases("popup")
+                return False
         self._mark("popup")
 
         # Step 0.25: is PGSharp still counting down a jump cooldown? Catching through one is
         # exactly what gets an account soft-banned, so sit the rest of it out. AutoWalk keeps
         # running via the dry-spell path in run(), which is safe at normal walking speed.
-        left = self._cooldown_left()
+        self._cooldown_probe_frame = frame
+        try:
+            left = self._cooldown_left()
+        finally:
+            # Do not retain a full-resolution frame between cycles merely for the clear-timer
+            # shortcut; feed callers that explicitly force a post-teleport check still get the
+            # authoritative no-frame UI-dump path.
+            self._cooldown_probe_frame = None
         self._mark("cooldown")
         if left > 0:
             self._flush_phases("cooldown")
@@ -3048,6 +3171,7 @@ class CatchRoutine:
         ball_xy = self._ball_in(frame, strict=True)
         self._mark("check-enc")
         if ball_xy is not None:
+            self._engage_retry_streak = 0
             if self._is_out_of_balls(frame):
                 self._mark("het-bong")
                 self._flag_no_balls()
@@ -3149,11 +3273,23 @@ class CatchRoutine:
         # "Tap to Walk/Teleport — Stop AutoWalk?" dialog, which stops the walk and blocks
         # everything until dismissed. Read on a current frame, not the one the cycle opened with,
         # because the slot may have been found several frames later.
-        if not self._bar_visible(self.device.screenshot()):
+        check = self.device.screenshot()
+        if not self._bar_visible(check):
             self._trace("nearby_bar_gone",
                         "Thanh Nearby không còn trên màn hình; bỏ tap để khỏi chạm vào map.", 0.0)
             self._mark("chan-tap")
             self._flush_phases("BAR-KHONG-HIEN")
+            self._interruptible_sleep(cfg.idle_poll)
+            return False
+        # PGSharp's bar stays drawn over the encounter's white flash. A quick-miss retry that
+        # races a late-opening encounter must not tap into it; the next cycle finds the ball.
+        level = self._frame_level(check)
+        if level is not None and level >= cfg.transition_flash_level:
+            self._trace("encounter_flash",
+                        "Màn hình đang loé trắng mở encounter; không tap Nearby.", 0.0)
+            self._cycle_result = "encounter_wait"   # not a dry map: keep AutoWalk out of it
+            self._mark("chan-tap")
+            self._flush_phases("DANG-MO-ENCOUNTER")
             self._interruptible_sleep(cfg.idle_poll)
             return False
 
@@ -3184,6 +3320,7 @@ class CatchRoutine:
             # a fallback swipe on the map just drags the camera and burns the cycle. If it was
             # merely slow to open, step 0.75 of the next cycle picks it up within idle_poll.
             if self._engage_still_nearby:
+                self._engage_retry_streak += 1
                 self._cycle_result = "engage_retry"
                 self._trace(
                     "encounter_tap_rejected",
@@ -3191,6 +3328,7 @@ class CatchRoutine:
                     0.0,
                 )
             else:
+                self._engage_retry_streak = 0
                 self._cycle_result = "encounter_wait"
                 self._trace(
                     "encounter_initial_miss",
