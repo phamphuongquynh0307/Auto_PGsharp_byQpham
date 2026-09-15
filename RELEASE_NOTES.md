@@ -1,3 +1,35 @@
+# v1.4.21
+
+## Tiếng Việt
+
+### Không còn báo "Hết Poké Ball" khi túi vẫn còn bóng
+
+- Bot từng báo hết bóng, thoát encounter và đi nạp 10 phút trong khi túi còn 199 Poké Ball,
+  532 Great Ball và 186 Ultra Ball.
+- Nguyên nhân: quả bóng ở chỗ ném thỉnh thoảng tự nghiêng, che mất nút tròn xám ở giữa hơn
+  1 giây (3/15 ảnh chụp thật). Bot cũ chờ 2 giây không thấy nút đó là kết luận hết bóng.
+- Giờ trước khi báo hết bóng, bot bấm nút chọn bóng ở góc phải dưới. Còn loại bóng nào thì chọn
+  loại đó và ném tiếp, nên hết bóng đỏ sẽ tự dùng Great/Ultra. Chỉ báo hết bóng khi bảng chọn
+  không còn gì.
+- Mỗi lần báo hết bóng, bot lưu ảnh `no-balls.png` cạnh `timing.log` để dễ kiểm tra.
+- **317 test đạt**.
+
+---
+
+## English
+
+### No more "out of Poké Balls" with a full bag
+
+- The routine fled and paused to refill with 199 Poké, 532 Great and 186 Ultra Balls in hand.
+- The resting ball periodically tilts and hides its grey centre hub for over a second (3 of 15
+  live captures), and a 2s missing hub was treated as an empty bag.
+- Before declaring the bag empty, the bottom-right ball picker is now opened and the first
+  offered ball type is loaded, so running out of one type moves on to the next.
+- Each empty-bag decision saves `no-balls.png` next to `timing.log`.
+- **317 tests pass**.
+
+---
+
 # v1.4.19
 
 ## Tiếng Việt

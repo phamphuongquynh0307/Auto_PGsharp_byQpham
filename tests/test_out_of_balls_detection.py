@@ -1,6 +1,7 @@
 """Out-of-balls detection supports both the old x0 badge and the missing selector UI."""
 import threading
 import unittest
+import unittest.mock
 from types import SimpleNamespace
 
 import cv2
@@ -9,7 +10,7 @@ import numpy as np
 from avc.catch import (
     CURRENT_OUT_OF_BALLS_REGION, LEGACY_OUT_OF_BALLS_REGION, CatchConfig, CatchRoutine,
 )
-from avc.vision import find_throw_ball_hub
+from avc.vision import find_ball_picker_choices, find_throw_ball_hub
 
 
 class FrameDevice:
@@ -39,6 +40,7 @@ def bare_routine(frames):
     # The live empty-bag screen still contains the bottom-right selector button. Only ``ball``
     # models the large throwable ball resting at the throw point.
     routine._ball_selector_present = lambda frame: frame in ("selector", "ball")
+    routine._pick_another_ball = lambda _frame: "empty"
     return routine
 
 
@@ -161,6 +163,102 @@ class MissingBallDetectionTests(unittest.TestCase):
         routine = bare_routine(["missing", "missing", "missing", "ball"])
 
         self.assertEqual("ready", routine._wait_for_ball_state(0.0))
+
+    def test_bare_throw_spot_with_stock_in_the_picker_is_ready(self):
+        routine = bare_routine(["missing", "missing", "missing", "missing"])
+        routine._pick_another_ball = lambda _frame: "ready"
+
+        self.assertEqual("ready", routine._wait_for_ball_state(0.0))
+
+    def test_x0_badge_with_another_type_in_the_picker_is_ready(self):
+        routine = bare_routine(["x0"])
+        routine._pick_another_ball = lambda _frame: "ready"
+
+        self.assertEqual("ready", routine._wait_for_ball_state(99.0))
+
+
+def picker_frame(balls=3):
+    """Base-resolution encounter with the ball picker sheet open, as measured on a live phone."""
+    frame = np.full((2712, 1220, 3), GRASS, dtype=np.uint8)
+    frame[2040:] = (208, 208, 206)                                   # light sheet
+    for i in range(balls):
+        px, py = 156 + 381 * i, 2359
+        cv2.circle(frame, (px + 72, py - 95), 80, (40, 40, 220), -1)  # ball sprite
+        cv2.rectangle(frame, (px - 69, py - 34), (px + 69, py + 34), (120, 99, 38), -1)  # pill
+        cv2.putText(frame, "x199", (px - 55, py + 14), cv2.FONT_HERSHEY_SIMPLEX, 1.2,
+                    (244, 242, 237), 3)
+    return frame
+
+
+class BallPickerTests(unittest.TestCase):
+    def test_picker_offers_each_owned_type_left_to_right(self):
+        choices = find_ball_picker_choices(picker_frame())
+
+        self.assertEqual(3, len(choices))
+        self.assertLessEqual(abs(choices[0][0] - 228), 3)
+        self.assertLessEqual(abs(choices[0][1] - 2264), 3)
+        self.assertEqual(sorted(choices), choices)
+
+    def test_picker_follows_a_scaled_down_device(self):
+        frame = cv2.resize(picker_frame(), None, fx=0.59, fy=0.59, interpolation=cv2.INTER_AREA)
+
+        choices = find_ball_picker_choices(frame, scale=0.59)
+
+        self.assertEqual(3, len(choices))
+        self.assertLessEqual(abs(choices[0][0] - 228 * 0.59), 4)
+
+    def test_no_picker_on_encounter_or_snow(self):
+        for name, frame in (("encounter", encounter_frame((200, 90, 40))),
+                            ("snow", encounter_frame(background=(235, 235, 235))),
+                            ("empty sheet", picker_frame(balls=0))):
+            with self.subTest(frame=name):
+                self.assertEqual([], find_ball_picker_choices(frame))
+
+    def _routine(self, frames):
+        routine = object.__new__(CatchRoutine)
+        routine.config = CatchConfig()
+        routine.stop_event = threading.Event()
+        routine._wait_if_paused = lambda: None
+        routine._trace = lambda *_args: None
+        # Synthetic frames carry no Berry button; "map" stands for a closed encounter.
+        routine._in_encounter = lambda frame, **_kwargs: frame is not None
+        taps = []
+        frames = iter(frames)
+        routine.device = SimpleNamespace(
+            screenshot=lambda **_kwargs: next(frames),
+            adb_tap=lambda *point: taps.append(point),
+        )
+        return routine, taps
+
+    def test_switches_to_the_first_offered_ball_when_the_spot_is_bare(self):
+        routine, taps = self._routine([picker_frame(), encounter_frame((25, 25, 25))])
+
+        with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)):
+            self.assertEqual("ready", routine._pick_another_ball(encounter_frame()))
+
+        self.assertEqual((1067, 2440), taps[0])
+        self.assertLessEqual(abs(taps[1][0] - 228), 3)
+
+    def test_no_picker_and_no_ball_means_the_bag_really_is_empty(self):
+        bare = encounter_frame()
+        routine, taps = self._routine([bare] * 50)
+
+        with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)), \
+                unittest.mock.patch("avc.catch.cv2.imwrite") as imwrite, \
+                unittest.mock.patch("avc.catch.time.monotonic", side_effect=range(10000)):
+            self.assertEqual("empty", routine._pick_another_ball(bare))
+
+        self.assertEqual([(1067, 2440)], taps)
+        imwrite.assert_called_once()
+
+    def test_encounter_that_closed_meanwhile_is_not_an_empty_bag(self):
+        bare = encounter_frame()
+        routine, _taps = self._routine([])
+        routine.device.screenshot = lambda fresh=False, **_kwargs: None if fresh else bare
+
+        with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)), \
+                unittest.mock.patch("avc.catch.time.monotonic", side_effect=range(10000)):
+            self.assertEqual("closed", routine._pick_another_ball(bare))
 
 
 class CurrentCountBadgeLocationTests(unittest.TestCase):

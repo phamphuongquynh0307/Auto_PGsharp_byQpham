@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 import os
+import cv2
 import numpy as np
 
 from .device import Device
@@ -37,8 +38,8 @@ from .layout import (
 from . import diag, uidump
 from .resources import resource_path
 from .vision import (
-    best_matching_scale, cooldown_zero_visible, find, find_berry_button, find_enc_ball,
-    find_fast, find_popup_close,
+    best_matching_scale, cooldown_zero_visible, find, find_ball_picker_choices,
+    find_berry_button, find_enc_ball, find_fast, find_popup_close,
     find_throw_ball_hub,
     find_dialog_buttons, find_pokestops, load_template,
     slot_has_pokemon,
@@ -1000,7 +1001,7 @@ class CatchRoutine:
             if not self._in_encounter(frame, strict=True):
                 return "closed"
             if self._is_out_of_balls(frame):
-                return "empty"
+                return self._pick_another_ball(frame)
             if self._ball_ready(frame):
                 # The actual throwable ball is the only positive inventory signal. The live
                 # empty-bag UI still draws the bottom-right Poké Ball selector, so treating that
@@ -1024,10 +1025,44 @@ class CatchRoutine:
                 fresh = self.device.screenshot(fresh=True)
                 if not self._in_encounter(fresh, strict=True):
                     return "closed"
-                if self._is_out_of_balls(fresh):
-                    return "empty"
-                return "ready" if self._ball_ready(fresh) else "empty"
+                if not self._is_out_of_balls(fresh) and self._ball_ready(fresh):
+                    return "ready"
+                return self._pick_another_ball(fresh)
         return "closed"
+
+    def _pick_another_ball(self, frame) -> str:
+        """Ask the game's ball picker for stock before calling the bag empty.
+
+        A bare throw spot is not an empty bag. With 199 Poké, 532 Great and 186 Ultra Balls in
+        hand the routine still fled to refill: the resting ball periodically tilts until its
+        centre hub is out of sight for over a second (3 of 15 live captures), and the old x0
+        badge only ever counted the loaded type. The picker the bottom-right selector opens is
+        the game's own inventory, and choosing from it also brings a ball back upright. Returns
+        ``ready``, ``closed`` or ``empty`` like ``_wait_for_ball_state``.
+        """
+        cfg = self.config
+        scale = cfg.game_scale or (frame.shape[1] / BASE_RESOLUTION[0])
+        selector = find_enc_ball(frame, scale=scale)
+        if selector is not None:
+            tap = getattr(self.device, "adb_tap", None) or self.device.tap
+            tap(int(selector[0]), int(selector[1]))
+            choices = self._poll(lambda f: find_ball_picker_choices(f, scale=scale), 2.0)
+            if choices:
+                tap(*choices[0])
+            # The sheet hides the Berry button while it slides away, so only a ball counts here.
+            if self._poll(lambda f: True if self._ball_ready(f) else None, 3.0):
+                self._trace("ball_switched",
+                            "Chỗ ném trống nhưng túi còn bóng; đã chọn lại bóng từ bảng chọn.",
+                            0.0)
+                return "ready"
+            if not self._in_encounter(self.device.screenshot(fresh=True), strict=True):
+                return "closed"
+        # Keep what the routine saw, so the next false alarm can be read off a real frame.
+        try:
+            cv2.imwrite("no-balls.png", frame)
+        except Exception:  # noqa: BLE001
+            pass
+        return "empty"
 
     def _flag_no_balls(self) -> None:
         """Reliably leave the empty encounter, then hand refill work to ``run``."""
@@ -3172,9 +3207,11 @@ class CatchRoutine:
         self._mark("check-enc")
         if ball_xy is not None:
             self._engage_retry_streak = 0
-            if self._is_out_of_balls(frame):
+            ball_state = self._pick_another_ball(frame) if self._is_out_of_balls(frame) else "ready"
+            if ball_state != "ready":
                 self._mark("het-bong")
-                self._flag_no_balls()
+                if ball_state == "empty":
+                    self._flag_no_balls()
                 return False
             self._mark("het-bong")
             self._flush_phases("dang-trong-encounter")

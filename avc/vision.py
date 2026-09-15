@@ -667,6 +667,51 @@ def find_throw_ball_hub(
     return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
 
+def find_ball_picker_choices(
+    scene: np.ndarray,
+    *,
+    scale: float = 1.0,
+) -> list[tuple[int, int]]:
+    """Tap points of the ball types offered by the open encounter ball picker, left to right.
+
+    The picker is the light sheet the bottom-right selector raises over the lower screen. Each
+    ball type the bag still holds is drawn above a dark teal count pill ("x199"); types with no
+    stock are not drawn. Returns an empty list when no picker is open, so it doubles as the
+    "did the picker open?" test. Measured on a 1220x2712 device: pills 139x69 at y 2358, each
+    ball sprite centred 72px right of and 95px above its pill.
+    """
+    height, width = scene.shape[:2]
+    scale = max(0.2, float(scale))
+    y0 = int(height * 0.78)
+    hsv = cv2.cvtColor(scene[y0:], cv2.COLOR_BGR2HSV)
+    hue, sat, value = cv2.split(hsv)
+    # The sheet spans the full width; an encounter's own lower screen is grass, water or the
+    # ball, measured at 5-8% light here against 80% with the picker open.
+    if float(((sat < 40) & (value > 190)).mean()) < 0.45:
+        return []
+    pills = ((hue >= 80) & (hue <= 105) & (sat >= 60) & (value >= 40) & (value <= 150))
+    count, _labels, stats, centres = cv2.connectedComponentsWithStats(pills.astype(np.uint8), 8)
+    found: list[tuple[int, int, int]] = []
+    for i in range(1, count):
+        _bx, _by, bw, bh, area = stats[i]
+        if not (100 * scale <= bw <= 180 * scale and 50 * scale <= bh <= 90 * scale):
+            continue
+        if not (1.6 <= bw / max(1, bh) <= 2.6) or area < 0.35 * bw * bh:
+            continue
+        px, py = int(round(centres[i][0])), int(round(centres[i][1])) + y0
+        # A count pill sits on the sheet itself: the band just under it is plain light panel.
+        below = hsv[py - y0 + int(bh * 0.7):py - y0 + int(bh * 1.2), px - bw // 2:px + bw // 2]
+        if below.size == 0 or float(((below[..., 1] < 40) & (below[..., 2] > 190)).mean()) < 0.7:
+            continue
+        found.append((py, px, i))
+    if not found:
+        return []
+    # Only the first row is visible without scrolling the sheet.
+    top = min(py for py, _px, _i in found)
+    row = sorted((px, py) for py, px, _i in found if py - top <= 30 * scale)
+    return [(int(px + 72 * scale), int(py - 95 * scale)) for px, py in row]
+
+
 def berry_button_visible(
     scene: np.ndarray,
     *,
