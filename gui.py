@@ -40,7 +40,7 @@ from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
 
 
-APP_VERSION = "1.4.21"
+APP_VERSION = "1.4.22"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -341,8 +341,14 @@ LANG = {
     "target_iv_atk": {"vi": "IV Công mục tiêu (0–15):", "en": "Target Attack IV (0–15):"},
     "target_iv_def": {"vi": "IV Thủ mục tiêu (0–15):", "en": "Target Defence IV (0–15):"},
     "target_iv_sta": {"vi": "IV HP mục tiêu (0–15):", "en": "Target HP IV (0–15):"},
-    "tp_wait":       {"vi": "Chờ Pokémon xuất hiện trên Nearby (giây, 0 = mãi):",
-                      "en": "Wait for Pokémon on Nearby (s, 0 = forever):"},
+    "msg_s_spawn_restarting": {"vi": "↻ Đã chờ Pokémon trên thanh @ quá {} giây — đang mở lại game.",
+                                "en": "↻ Waited over {} seconds for Nearby — relaunching the game."},
+    "msg_s_restarted": {"vi": "✓ Game đã vào lại bản đồ — tiếp tục soi.",
+                         "en": "✓ Game is back on the map — resuming checks."},
+    "msg_s_restart_failed": {"vi": "⚠ Không thấy bản đồ sau khi mở lại game — đã dừng soi.",
+                              "en": "⚠ Map did not appear after relaunch — checks stopped."},
+    "tp_wait":       {"vi": "Chờ Pokémon trên Nearby trước khi mở lại game (giây, 0 = mãi):",
+                      "en": "Wait for Nearby before relaunching game (s, 0 = forever):"},
     "feed_wait":     {"vi": "Chờ Pokémon từ Feed hiện trên Nearby (giây, 0 = chờ mãi):",
                       "en": "Wait for the Feed's Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
@@ -398,8 +404,8 @@ LANG = {
                       "en": "(the crisp capture cannot see the Pokémon on the @ bar — looking again, no tap yet)"},
     "msg_s_lost":    {"vi": "(thanh @ không còn con này — bỏ qua, đi tiếp mục feed kế)",
                       "en": "(the @ bar no longer shows this one — giving it up, moving to the next feed entry)"},
-    "msg_s_nospawn": {"vi": "(pokemon chưa hiện lên thanh @ sau khi dịch chuyển — thử lại)",
-                      "en": "(pokémon never showed in the @ bar after teleport — retrying)"},
+    "msg_s_nospawn": {"vi": "(Pokémon chưa hiện lên thanh @ khi hết thời gian chờ)",
+                      "en": "(Pokémon did not appear on Nearby before the wait expired)"},
     "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
     "msg_s_goplus":  {"vi": "⛔ Dừng Shundo: Go Plus đang kết nối nên PGSharp chặn mọi lần dịch chuyển "
                             "(đã bấm CANCEL để tránh softban). Hãy ngắt Go Plus rồi chạy lại.",
@@ -669,12 +675,13 @@ Quick Catch here is the app's own touch gesture and does not require PGSharp Qui
 ## B. Cài trong app
 1. Chọn Chấm shiny theo IV.
 2. Nhập riêng IV Công/Thủ/HP từ 0 tới 15; 15/15/15 là Shundo truyền thống.
-3. Để Chờ Pokémon xuất hiện trên Nearby = 0 nếu muốn chờ vô hạn, không bỏ spawn chậm.
+3. Đặt thời gian chờ Pokémon trên Nearby; hết thời gian, app mở lại game rồi tiếp tục. Đặt 0 nếu muốn chờ vô hạn.
 4. Giữ Chờ máy ảnh hiện = 3 giây.
 5. Khi đúng IV: chọn Tạm dừng chờ tôi bắt cho lần thử đầu.
 6. Shiny khác IV: chọn Thoát, soi con khác hoặc Tạm dừng theo nhu cầu.
 7. Muốn mục tiêu bắt buộc đủ cả shiny + đúng IV + Background, bật **Yêu cầu đúng IV phải có
    Special Background (mọi icon)**. Không cần chọn ảnh mẫu riêng cho từng máy/sự kiện.
+App chỉ tiếp tục soi sau khi mở lại game và màn bản đồ đã tải xong.
 
 ## C. Luồng đúng
 Feed item → teleport → chờ Nearby tải Pokémon → double-tap → non-shiny bị PGSharp chặn hoặc shiny mở encounter → đọc IV. App chỉ lấy Feed item tiếp theo sau khi kết quả hiện tại đã rõ.
@@ -688,7 +695,8 @@ Enable Block Non-Shiny, Encounter IV and preferably Quick Load Map. Show Quick S
 
 Enable **Require matching IV to also have any Special Background** for the ordered shiny + exact
 IV + Background filter. No per-phone or per-event image set is required.
-Enter exact Attack/Defence/HP targets; 15/15/15 is the traditional Shundo target. Spawn wait 0 waits indefinitely.
+Enter exact Attack/Defence/HP targets; 15/15/15 is the traditional Shundo target. A positive spawn wait relaunches the game when it expires; 0 waits indefinitely.
+The app resumes only after the relaunched game has returned to the map.
 [[IMAGE:10-shundo-feed|Block Non-Shiny, Encounter IV, Feed/RSS and Nearby layout.]]
 [[IMAGE:11-shundo-calibration|Feed, IV pill, toast and Flee alignment.]]
 """},
@@ -3207,6 +3215,14 @@ class App:
         def on_shundo_event(stats, outcome):
             self.log_queue.put("__countstr__" + self.tr("s_counts").format(
                 stats.checked, stats.shinies, stats.shundos, stats.backgrounds))
+            if outcome == "spawn_restarting":
+                self.log_queue.put(self.tr("msg_s_spawn_restarting").format(
+                    int(self.routine.config.spawn_timeout)))
+                return
+            if outcome in ("restarted", "restart_failed"):
+                key = "msg_s_" + outcome
+                self.log_queue.put(self.tr(key).format(stats.checked))
+                return
             if outcome != "coord_idle":
                 self._coord_idle_logged = False
             if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background"):

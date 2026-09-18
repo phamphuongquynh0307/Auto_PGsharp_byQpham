@@ -322,6 +322,32 @@ def find_popup_close(
     return None
 
 
+def find_exit_game_cancel(scene: np.ndarray, template: np.ndarray | None) -> tuple[int, int] | None:
+    """Find the game-drawn CANCEL below Pokémon GO's exit confirmation.
+
+    This dialog is Unity artwork, absent from Android's view hierarchy. The reference is a
+    crop of its CANCEL label at a standard 341x756 screen size. Resize the whole frame once
+    so the label is matched in game coordinates regardless of capture resolution.
+    """
+    if template is None or scene is None or scene.size == 0:
+        return None
+    height, width = scene.shape[:2]
+    normal_w, normal_h = 341, 756
+    normal = cv2.resize(scene, (normal_w, normal_h), interpolation=cv2.INTER_AREA)
+    x0, x1 = int(normal_w * 0.20), int(normal_w * 0.80)
+    y0, y1 = int(normal_h * 0.43), int(normal_h * 0.70)
+    search = normal[y0:y1, x0:x1]
+    if search.shape[0] < template.shape[0] or search.shape[1] < template.shape[1]:
+        return None
+    _min, score, _min_at, at = cv2.minMaxLoc(
+        cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED))
+    if score < 0.80:
+        return None
+    cx = x0 + at[0] + template.shape[1] // 2
+    cy = y0 + at[1] + template.shape[0] // 2
+    return round(cx * width / normal_w), round(cy * height / normal_h)
+
+
 def find_fast(
     scene: np.ndarray,
     template: np.ndarray,

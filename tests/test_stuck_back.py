@@ -141,6 +141,21 @@ class StuckBackTests(unittest.TestCase):
         self._handle(routine, 1000.0)
         self.assertTrue(self._handle(routine, 1013.0))
 
+    def test_back_opening_exit_game_dialog_uses_android_cancel(self):
+        routine = _routine()
+        routine.config.use_ui_dump = True
+        reads = []
+        routine._ui_state = lambda force=False: (reads.append(force) or
+                                                  SimpleNamespace(cancel_button=(515, 1510)))
+        self._handle(routine, 1000.0)
+        self.assertTrue(self._handle(routine, 1013.0))
+        self.assertEqual(1, len(routine.backs))
+
+        self.assertTrue(self._handle(routine, 1014.0))
+        self.assertEqual([(515, 1510)], routine.taps)
+        self.assertEqual([True], reads)
+        self.assertEqual(0.0, routine._exit_dialog_until)
+
 
 class StuckBackDefaultTests(unittest.TestCase):
     def test_the_watchdog_is_on_out_of_the_box(self):

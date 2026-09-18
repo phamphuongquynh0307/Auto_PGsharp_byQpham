@@ -34,7 +34,8 @@ from .layout import (
     bracket_scales, scales_around,
 )
 from .vision import (
-    best_matching_scale, find, find_berry_button, find_enc_ball, find_fast, find_popup_close,
+    best_matching_scale, find, find_berry_button, find_enc_ball, find_exit_game_cancel,
+    find_fast, find_popup_close,
     find_dialog_buttons, load_template, slot_has_pokemon,
 )
 
@@ -143,10 +144,8 @@ class ShundoConfig:
     # mistaken for the new spawn (the icons all look alike on event days).
     bar_clear_timeout: float = 5.0
     # Loading can be slow (hot phone, teleport cooldown), so stay put and keep waiting
-    # for the spawn instead of teleporting away to another feed entry. 0 = wait until it
-    # loads or the user stops. The instant it shows in the bar the double-tap goes out.
-    # Zero means this is state-driven rather than time-driven: never skip a feed entry
-    # merely because loading is slow.
+    # for the spawn. A positive timeout relaunches the game when it expires; 0 waits
+    # until the spawn loads or the user stops.
     spawn_timeout: float = 0.0
     spawn_wait_log: float = 20.0    # log a "still waiting" heartbeat this often (s)
 
@@ -216,6 +215,7 @@ class ShundoConfig:
     # whether the mode can run at all. Same tight box as the catch routine's: it stops short
     # of the OK button so a stray match can never confirm the teleport.
     cancel_btn_template: str = "templates/cancel_btn.png"
+    exit_game_cancel_template: str = "templates/exit_game_cancel.png"
     dialog_region: tuple[int, int, int, int] = (150, 1150, 950, 500)
     cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
 
@@ -411,6 +411,7 @@ class ShundoRoutine:
         self._gs = load(self.config.glyph_slash_template)
         self._menu_star = load_opt(self.config.menu_star_template)
         self._cancel_btn = load_opt(self.config.cancel_btn_template)
+        self._exit_game_cancel = load_opt(self.config.exit_game_cancel_template)
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
         self._claim_rewards = load_opt(self.config.claim_rewards_template)
@@ -423,6 +424,8 @@ class ShundoRoutine:
         ]
         self.stats = ShundoStats()
         self._popup_block_until = 0.0
+        self._exit_dialog_until = 0.0
+        self._exit_dialog_checked_at = 0.0
         # Optional callback(seconds_waited) so the GUI can log a "still waiting for spawn"
         # heartbeat during a long load without the routine knowing about the UI.
         self._on_waiting = None
@@ -783,6 +786,27 @@ class ShundoRoutine:
         if frame is None:
             frame = self.device.screenshot()
         fast_cache = {}
+        target = find_exit_game_cancel(frame, getattr(self, "_exit_game_cancel", None))
+        if target is not None:
+            self.device.tap(*target)
+            self._exit_dialog_until = 0.0
+            self.stats.last_event = "popup"
+            return True
+        # A fallback BACK while fleeing can reach the map just as the encounter closes and
+        # raise the game's native quit prompt. Read its real CANCEL node; the rendered button
+        # can differ from the PGSharp teleport warning template and geometry.
+        now = time.monotonic()
+        ui_dump = getattr(self.device, "ui_dump", None)
+        if (callable(ui_dump) and now < getattr(self, "_exit_dialog_until", 0.0)
+                and now - getattr(self, "_exit_dialog_checked_at", 0.0) >= 0.8):
+            self._exit_dialog_checked_at = now
+            state = uidump.parse(ui_dump() or "")
+            target = state.cancel_button if state is not None else None
+            if target is not None:
+                self.device.tap(*target)
+                self._exit_dialog_until = 0.0
+                self.stats.last_event = "popup"
+                return True
         # PGSharp "Go Plus is connected, teleport may trigger a softban. Continue?" -> CANCEL.
         # First, because it is a modal that eats every other tap, and the answer is never OK:
         # confirming risks the account. Shundo teleports every cycle, so the run is over —
@@ -853,6 +877,25 @@ class ShundoRoutine:
                 cache=fast_cache,
             )
             if close is not None:
+                # Never re-tap an X seen only in a stale stream frame after the popup
+                # disappeared. The fresh map also rules out X-shaped artwork underneath.
+                fresh_capture = getattr(self.device, "screenshot", None)
+                if callable(fresh_capture):
+                    fresh = fresh_capture(fresh=True)
+                    if self._anchor_in(fresh) is not None:
+                        return False
+                    confirmed = find_popup_close(
+                        fresh,
+                        self._close_btns,
+                        threshold=max(0.82, self.config.popup_threshold),
+                        scales=self._popup_scales,
+                        fallback_scales=CALIBRATION_SWEEP if wide_sweep else (),
+                    )
+                    if (confirmed is None
+                            or abs(confirmed.center[0] - close.center[0]) > frame.shape[1] * 0.04
+                            or abs(confirmed.center[1] - close.center[1]) > frame.shape[0] * 0.04):
+                        return False
+                    close = confirmed
                 self.device.tap(*close.center)
                 self.stats.last_event = "popup"
                 return True
@@ -1168,6 +1211,8 @@ class ShundoRoutine:
                 # screen coordinate. This handles shifted layouts and taps silently dropped by
                 # MuMu while keeping the next action state-gated by a fresh Berry detection.
                 self.device.back()
+                self._exit_dialog_until = time.monotonic() + 5.0
+                self._exit_dialog_checked_at = 0.0
             else:
                 # Retry the visible button through the still-warm low-latency control socket.
                 self.device.tap(*cfg.flee_xy)
@@ -1353,7 +1398,7 @@ class ShundoRoutine:
         # Step 2b: wait until the game actually loads the spawn — the Pokémon shows up
         # in the bar's first slot. Stays put and waits (spawns can load slowly); it does
         # NOT teleport away. With spawn_timeout == 0 it waits until the spawn loads or the
-        # user stops; a positive value caps the wait and then moves to the next entry.
+        # user stops; a positive value caps the wait and then relaunches the game.
         # Popups that appear meanwhile (speed warning after the teleport) are cleared.
         start = time.monotonic()
         next_log = start + cfg.spawn_wait_log
@@ -1376,6 +1421,9 @@ class ShundoRoutine:
                 next_log = now + cfg.spawn_wait_log
                 self._on_waiting(int(now - start))
         if loaded is None:
+            if self.stop_event.is_set():
+                self.stats.last_event = "idle"
+                return "idle"
             self.stats.last_event = "nospawn"
             return "nospawn"
         # Step 3: keep this QuickSniper item pending through the bounded no-answer retry.
@@ -1466,6 +1514,16 @@ class ShundoRoutine:
                 # them. There is nothing to fall back on, so end the run instead of looping
                 # tap -> warning -> CANCEL; the caller reports why.
                 break
+            if outcome == "nospawn" and cfg.spawn_timeout > 0:
+                if on_event:
+                    on_event(self.stats, "spawn_restarting")
+                if not self._restart_game():
+                    if not self.stop_event.is_set() and on_event:
+                        on_event(self.stats, "restart_failed")
+                    break
+                if on_event:
+                    on_event(self.stats, "restarted")
+                continue
             if outcome in ("shundo", "background"):
                 # A requested target stays open for the user. "pause" waits for Resume;
                 # "stop" ends the loop.
@@ -1494,6 +1552,32 @@ class ShundoRoutine:
                     self.pause_event.set()
             elif outcome == "iv_unknown":
                 self.pause_event.set()
+
+    def _restart_game(self) -> bool:
+        """Relaunch Pokémon GO and wait for the Nearby bar before resuming checks."""
+        self.device._run(["shell", "am", "force-stop", "com.nianticlabs.pokemongo"])
+        if self.stop_event.is_set():
+            return False
+        self.device._run(["shell", "monkey", "-p", "com.nianticlabs.pokemongo",
+                          "-c", "android.intent.category.LAUNCHER", "1"])
+        self._anchor_cache = None
+        self._feed_cache = None
+        self._nearby_column_x = None
+        self._nearby_presence_streak = 0
+        self._nearby_last_y = None
+        self._ui_state_cache = None
+        self._ui_state_cache_at = 0.0
+        self._release_pending()
+        deadline = time.monotonic() + 120.0
+        while not self.stop_event.is_set() and time.monotonic() < deadline:
+            self._wait_if_paused()
+            if self.stop_event.is_set():
+                return False
+            frame = self.device.screenshot(fresh=True)
+            if self._anchor_in(frame) is not None:
+                return True
+            self._interruptible_sleep(2.0)
+        return False
 
     def stop(self) -> None:
         self.stop_event.set()

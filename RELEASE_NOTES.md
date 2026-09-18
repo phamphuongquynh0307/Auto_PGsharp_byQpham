@@ -1,3 +1,29 @@
+# v1.4.22
+
+## Tiếng Việt
+
+### Tự mở lại game khi chờ Pokémon quá lâu
+
+- Trong chế độ chấm shiny IV từ Feed, khi Pokémon không hiện trên thanh Nearby `@` trước khi hết thời gian chờ đã đặt, bot đóng/mở lại Pokémon GO và chỉ tiếp tục khi bản đồ hiện lại. Đặt thời gian chờ bằng 0 để chờ vô hạn.
+- Chỉ dùng mốc thời gian; đã bỏ tùy chọn mở lại theo số Pokémon đã soi. Cài đặt cũ vẫn giữ giá trị thời gian chờ.
+- Trước khi bấm dấu X đóng popup, bot xác nhận lại trên ảnh chụp mới để tránh bấm lần nữa lên màn hình đã đổi. Màn thưởng cũng không còn bấm thêm giữa màn hình ngay sau khi đóng bằng X.
+- Khi phím Back mở hộp thoại thoát game, bot nhận đúng nút CANCEL để ở lại game.
+- **326 test đạt** (21 test được bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Relaunch the game after a long Nearby wait
+
+- In Feed shiny IV mode, when a Pokémon does not appear on the Nearby `@` bar before the configured wait expires, the bot relaunches Pokémon GO and resumes only after the map returns. A zero wait remains unlimited.
+- Relaunching now uses only the time limit; the checked Pokémon count option has been removed. Existing wait settings are preserved.
+- Popup X taps are confirmed on a fresh capture to avoid tapping again after the screen changes. The reward flow no longer adds a centre tap immediately after closing with X.
+- If Back opens the game's exit dialog, the bot selects CANCEL to stay in the game.
+- **326 tests pass** (21 skipped by configuration).
+
+---
+
 # v1.4.21
 
 ## Tiếng Việt

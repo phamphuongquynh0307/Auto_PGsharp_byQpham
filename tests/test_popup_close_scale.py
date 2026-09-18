@@ -3,12 +3,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 from avc.catch import CatchConfig, CatchRoutine
 from avc.layout import CALIBRATION_SWEEP
 from avc.shundo import ShundoRoutine
-from avc.vision import Match, find_popup_close, load_template
+from avc.vision import Match, find_exit_game_cancel, find_popup_close, load_template
 
 
 def _popup_config():
@@ -20,6 +21,42 @@ def _popup_config():
 
 
 class PopupCloseScaleTests(unittest.TestCase):
+    def test_real_exit_game_popup_targets_cancel_and_ignores_map(self):
+        popup = cv2.imread("tests/fixtures/exit_game_popup.png")
+        template = load_template("templates/exit_game_cancel.png")
+        self.assertEqual((608, 1564), find_exit_game_cancel(
+            cv2.resize(popup, (1220, 2712)), template))
+        without_cancel = popup.copy()
+        without_cancel[420:455, 125:215] = 255
+        self.assertIsNone(find_exit_game_cancel(without_cancel, template))
+
+    def test_shundo_taps_game_drawn_cancel_without_android_button(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._exit_game_cancel = load_template("templates/exit_game_cancel.png")
+        frame = cv2.resize(cv2.imread("tests/fixtures/exit_game_popup.png"), (1220, 2712))
+
+        self.assertTrue(routine._handle_popups(frame))
+        self.assertEqual([(608, 1564)], taps)
+
+    def test_catch_taps_game_drawn_cancel_without_android_button(self):
+        taps = []
+        routine = object.__new__(CatchRoutine)
+        routine.config = _popup_config()
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._trace = lambda *_args: None
+        routine._popup_block_until = 0.0
+        routine._exit_game_cancel = load_template("templates/exit_game_cancel.png")
+        frame = cv2.resize(cv2.imread("tests/fixtures/exit_game_popup.png"), (1220, 2712))
+
+        self.assertTrue(routine._handle_popups(frame))
+        self.assertEqual([(608, 1564)], taps)
+
     def test_known_map_rate_limits_the_heavy_popup_scan(self):
         routine = object.__new__(CatchRoutine)
         routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
@@ -242,6 +279,26 @@ class PopupCloseScaleTests(unittest.TestCase):
         # Only the Go Plus warning's own template, matched in its own tight region, may do that.
         self.assertFalse(routine._teleport_blocked)
 
+    def test_shundo_cancels_exit_dialog_after_flee_back(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy),
+                                         ui_dump=lambda: '<hierarchy/>')
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._exit_dialog_until = 110.0
+        routine._exit_dialog_checked_at = 0.0
+        routine._cancel_btn = None
+
+        with patch("avc.shundo.time.monotonic", return_value=100.0), \
+             patch("avc.shundo.uidump.parse",
+                   return_value=SimpleNamespace(cancel_button=(515, 1510))):
+            self.assertTrue(routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8)))
+
+        self.assertEqual([(515, 1510)], taps)
+        self.assertEqual(0.0, routine._exit_dialog_until)
+
     def test_pokestop_uses_calibrated_close_point_when_x_template_misses(self):
         taps = []
         routine = object.__new__(CatchRoutine)
@@ -273,6 +330,87 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual([routine.config.pokestop_close_xy], taps)
+
+    def test_stale_popup_x_does_not_tap_the_returned_map(self):
+        stale = np.zeros((2712, 1220, 3), dtype=np.uint8)
+        fresh_map = np.ones_like(stale)
+        match = Match(580, 2480, 60, 60, 0.93)
+        for routine_type, module_name in (
+            (CatchRoutine, "avc.catch"),
+            (ShundoRoutine, "avc.shundo"),
+        ):
+            with self.subTest(mode=routine_type.__name__):
+                taps = []
+                routine = object.__new__(routine_type)
+                routine.config = _popup_config()
+                routine.device = SimpleNamespace(
+                    tap=lambda *xy: taps.append(xy),
+                    screenshot=lambda *, fresh=False: fresh_map,
+                )
+                routine.stats = SimpleNamespace(last_event="")
+                routine._popup_block_until = 0.0
+                routine._popup_scales = (0.66,)
+                routine._cancel_btn = None
+                routine._popup_weather = None
+                routine._popup_speed = None
+                routine._claim_rewards = None
+                if routine_type is CatchRoutine:
+                    routine._game_popup_scales = (0.66,)
+                    routine._close_btn = routine._close_btn_blue = routine._close_btn_white = object()
+                    routine._ball_in = lambda _frame: None
+                    routine._bar_visible = lambda frame: frame is fresh_map
+                    routine._trace = lambda *_args: None
+                else:
+                    routine._close_btns = (object(),)
+                    routine._encounter_visible = lambda _frame: False
+                    routine._anchor_in = lambda frame: (972, 1053) if frame is fresh_map else None
+                with patch(f"{module_name}.find_dialog_buttons", return_value=[]), \
+                        patch(f"{module_name}.find_popup_close", return_value=match):
+                    self.assertFalse(routine._handle_popups(stale))
+                self.assertEqual([], taps)
+
+    def test_claim_reward_close_does_not_also_tap_the_screen_center(self):
+        taps = []
+        first = np.zeros((2712, 1220, 3), dtype=np.uint8)
+        map_frame = np.ones_like(first)
+        captures = iter((first, first, map_frame))
+        claim, close = object(), object()
+        routine = object.__new__(CatchRoutine)
+        routine.config = CatchConfig()
+        routine.device = SimpleNamespace(
+            tap=lambda *xy: taps.append(xy),
+            screenshot=lambda **_kwargs: next(captures),
+        )
+        routine.stats = SimpleNamespace(last_event="")
+        routine.stop_event = threading.Event()
+        routine._popup_block_until = 0.0
+        routine._popup_scales = (1.0,)
+        routine._game_popup_scales = (1.0,)
+        routine._claim_scales = (1.0,)
+        routine._cancel_btn = None
+        routine._popup_weather = None
+        routine._popup_speed = None
+        routine._maybe_later = None
+        routine._popup_autowalk = None
+        routine._claim_rewards = claim
+        routine._close_btn = close
+        routine._close_btn_blue = routine._close_btn_white = None
+        routine._ball_in = lambda _frame: None
+        routine._bar_visible = lambda frame: frame is map_frame
+        routine._interruptible_sleep = lambda _seconds: None
+
+        def find_button(frame, template, **_kwargs):
+            if template is claim:
+                return [Match(500, 1500, 80, 50, 0.9)]
+            if template is close and frame is first:
+                return [Match(580, 2450, 60, 60, 0.9)]
+            return []
+
+        with patch("avc.catch.find_dialog_buttons", return_value=[]), \
+                patch("avc.catch.find_popup_close", return_value=None), \
+                patch("avc.catch.find_fast", side_effect=find_button):
+            self.assertTrue(routine._handle_popups(first))
+        self.assertEqual([(540, 1525), (610, 2480)], taps)
 
 
 if __name__ == "__main__":

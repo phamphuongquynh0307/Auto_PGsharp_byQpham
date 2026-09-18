@@ -39,7 +39,7 @@ from . import diag, uidump
 from .resources import resource_path
 from .vision import (
     best_matching_scale, cooldown_zero_visible, find, find_ball_picker_choices,
-    find_berry_button, find_enc_ball, find_fast, find_popup_close,
+    find_berry_button, find_enc_ball, find_exit_game_cancel, find_fast, find_popup_close,
     find_throw_ball_hub,
     find_dialog_buttons, find_pokestops, load_template,
     slot_has_pokemon,
@@ -361,6 +361,7 @@ class CatchConfig:
     # be able to land on OK and go through with the teleport.
     cancel_btn_template: str = "templates/cancel_btn.png"
     cancel_btn_region: tuple[int, int, int, int] = (620, 1480, 310, 220)
+    exit_game_cancel_template: str = "templates/exit_game_cancel.png"
     popup_threshold: float = 0.7
     popup_debounce: float = 0.75  # ignore stale stream frames after one popup tap
     # Full popup recognition costs roughly half a second on the target phone. A screen already
@@ -728,6 +729,7 @@ class CatchRoutine:
         self._caught_ok = load_opt(self.config.caught_ok_template)
         self._maybe_later = load_opt(self.config.maybe_later_template)
         self._cancel_btn = load_opt(self.config.cancel_btn_template)
+        self._exit_game_cancel = load_opt(self.config.exit_game_cancel_template)
         self._aw_paused = load_opt(self.config.autowalk_paused_template)
         self._aw_row = load_opt(self.config.autowalk_row_template)
         self._noball_tpl = load_opt(self.config.out_of_balls_template)
@@ -749,6 +751,8 @@ class CatchRoutine:
         # and when the (rate-limited) recognisability sample was last taken.
         self._stuck_since = 0.0
         self._stuck_back_at = 0.0
+        self._exit_dialog_until = 0.0
+        self._exit_dialog_checked_at = 0.0
         self._stuck_checked_at = 0.0
         # Called with the frame each time the watchdog fires, so the GUI can keep a picture of
         # what the bot could not read. Set by the GUI; ignored by the plain CLI loop.
@@ -1640,6 +1644,9 @@ class CatchRoutine:
 
     def _needs_full_popup_scan(self, frame) -> bool:
         """Keep unknown screens immediate while rate-limiting scans on proven game states."""
+        if (time.monotonic() < getattr(self, "_exit_dialog_until", 0.0)
+                and find_exit_game_cancel(frame, getattr(self, "_exit_game_cancel", None))):
+            return True
         interval = max(0.0, getattr(self.config, "popup_known_screen_interval", 0.0))
         last = getattr(self, "_popup_full_scan_at", 0.0)
         if interval <= 0 or time.monotonic() - last >= interval:
@@ -1992,6 +1999,33 @@ class CatchRoutine:
             frame = self.device.screenshot()
         fast_cache = {}
 
+        target = find_exit_game_cancel(frame, getattr(self, "_exit_game_cancel", None))
+        if target is not None:
+            self.device.tap(*target)
+            self._exit_dialog_until = 0.0
+            self.stats.last_event = "popup"
+            self._trace("exit_dialog_cancel", "Popup thoát Pokémon GO; đã bấm CANCEL.", 0.0)
+            return True
+
+        # BACK on an unrecognised screen can land on the map and open Pokémon GO's native
+        # "Exit game?" dialog. Its button artwork/position varies by Android skin, so read
+        # the exact CANCEL action from the hierarchy for a few seconds after our own BACK.
+        now = time.monotonic()
+        if (getattr(self.config, "use_ui_dump", False)
+                and now < getattr(self, "_exit_dialog_until", 0.0)
+                and now - getattr(self, "_exit_dialog_checked_at", 0.0) >= 0.8):
+            self._exit_dialog_checked_at = now
+            state = self._ui_state(force=True)
+            target = state.cancel_button if state is not None else None
+            if target is not None:
+                self.device.tap(*target)
+                self._exit_dialog_until = 0.0
+                self._ui_state_cache = None
+                self._ui_state_cache_at = 0.0
+                self.stats.last_event = "popup"
+                self._trace("exit_dialog_cancel", "Hộp thoại sau phím Back; đã bấm CANCEL.", 0.0)
+                return True
+
         # PGSharp "Go Plus is connected, teleport may trigger a softban. Continue?" -> CANCEL.
         # Handled before anything else: it is a modal that eats every other tap, and the answer
         # is never OK. Matched on the CANCEL word itself (colour, tight box that excludes OK).
@@ -2072,6 +2106,26 @@ class CatchRoutine:
                 cache=fast_cache,
             )
             if close is not None:
+                # The stream can keep the popup's last frame after it has closed. A second
+                # tap at that position then lands on the map and can open another screen.
+                # Confirm the X on a one-shot capture before issuing the tap.
+                fresh_capture = getattr(self.device, "screenshot", None)
+                if callable(fresh_capture):
+                    fresh = fresh_capture(fresh=True)
+                    if self._bar_visible(fresh):
+                        return False
+                    confirmed = find_popup_close(
+                        fresh,
+                        (self._close_btn, self._close_btn_blue, self._close_btn_white),
+                        threshold=max(0.82, self.config.popup_threshold),
+                        scales=self._game_popup_scales,
+                        fallback_scales=CALIBRATION_SWEEP if wide_sweep else (),
+                    )
+                    if (confirmed is None
+                            or abs(confirmed.center[0] - close.center[0]) > frame.shape[1] * 0.04
+                            or abs(confirmed.center[1] - close.center[1]) > frame.shape[0] * 0.04):
+                        return False
+                    close = confirmed
                 self.device.tap(*close.center)
                 self.stats.last_event = "popup"
                 return True
@@ -2152,15 +2206,27 @@ class CatchRoutine:
                     if self._bar_visible(f):
                         break
                     # If close button appears in the center bottom region, tap it immediately
+                    closed = False
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
                         if btn is not None:
                             m_close = find_fast(f, btn, threshold=0.7,
                                                 scales=self._game_popup_scales,
                                                 region=self.config.rect((400, 2000, 420, 712), "BC"))
                             if m_close:
-                                self.device.tap(*m_close[0].center)
-                                self._interruptible_sleep(0.5)
+                                fresh = self.device.screenshot(fresh=True)
+                                if self._bar_visible(fresh):
+                                    return True
+                                fresh_close = find_fast(
+                                    fresh, btn, threshold=0.7,
+                                    scales=self._game_popup_scales,
+                                    region=self.config.rect((400, 2000, 420, 712), "BC"))
+                                if fresh_close:
+                                    self.device.tap(*fresh_close[0].center)
+                                    closed = True
                                 break
+                    if closed:
+                        self._interruptible_sleep(0.5)
+                        continue
                     self.device.tap(cx, cy)
                 return True
         # Pokéstop photo-disc screen -> close it via its bottom-center 'X'. The X always sits
@@ -2214,6 +2280,8 @@ class CatchRoutine:
         # that needs no template at all — see CatchConfig.stuck_back.
         if getattr(self.config, "stuck_back", False) and self._stuck_back_due(frame):
             self.device.back()
+            self._exit_dialog_until = time.monotonic() + 5.0
+            self._exit_dialog_checked_at = 0.0
             self.stats.last_event = "popup"
             self._trace("stuck_back",
                         "Màn hình lạ quá lâu, không nhận ra popup nào; bấm phím Back để thoát.",
