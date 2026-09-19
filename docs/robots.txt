@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://phamphuongquynh0307.github.io/Auto_PGsharp_byQpham/sitemap.xml
