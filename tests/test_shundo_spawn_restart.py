@@ -8,7 +8,14 @@ from avc.shundo import ShundoConfig, ShundoRoutine, ShundoStats
 
 def _restart_waits_for_map_and_clears_stale_targets():
     routine = ShundoRoutine.__new__(ShundoRoutine)
-    routine.device = SimpleNamespace(_run=Mock(), screenshot=Mock(side_effect=["loading", "map"]))
+    routine.device = SimpleNamespace(
+        _run=Mock(side_effect=[
+            "",  # force-stop
+            "com.nianticlabs.pokemongo/com.nianticproject.holoholo.libholoholo.unity.UnityMainActivity\n",
+            "Starting: Intent ...",  # explicit activity launch
+        ]),
+        screenshot=Mock(side_effect=["loading", "map"]),
+    )
     routine.stop_event = threading.Event()
     routine.pause_event = threading.Event()
     routine._wait_if_paused = Mock()
@@ -22,7 +29,9 @@ def _restart_waits_for_map_and_clears_stale_targets():
 
     assert routine._restart_game() is True
     assert routine.device._run.call_args_list[0].args[0][:3] == ["shell", "am", "force-stop"]
-    assert routine.device._run.call_args_list[1].args[0][:3] == ["shell", "monkey", "-p"]
+    assert routine.device._run.call_args_list[1].args[0][:4] == [
+        "shell", "cmd", "package", "resolve-activity"]
+    assert routine.device._run.call_args_list[2].args[0][:3] == ["shell", "am", "start"]
     assert routine.device.screenshot.call_count == 2
     assert routine._feed_cache is None
     routine._release_pending.assert_called_once()
@@ -60,3 +69,11 @@ class SpawnRestartTests(unittest.TestCase):
 
     def test_spawn_timeout_relaunches(self):
         _spawn_timeout_relaunches_before_next_check()
+
+    def test_launcher_falls_back_to_monkey_when_activity_cannot_be_resolved(self):
+        routine = ShundoRoutine.__new__(ShundoRoutine)
+        routine.device = SimpleNamespace(_run=Mock(side_effect=["No activity found", "Events injected: 1"]))
+
+        self.assertTrue(routine._launch_game())
+        self.assertEqual(["shell", "monkey", "-p"],
+                         routine.device._run.call_args_list[1].args[0][:3])

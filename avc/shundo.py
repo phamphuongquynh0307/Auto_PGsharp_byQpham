@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from .catch import _load_optional, _resolve
-from .device import Device
+from .device import AdbError, Device
 from . import uidump
 from .ivocr import IvOcr
 from .layout import (
@@ -1558,8 +1558,12 @@ class ShundoRoutine:
         self.device._run(["shell", "am", "force-stop", "com.nianticlabs.pokemongo"])
         if self.stop_event.is_set():
             return False
-        self.device._run(["shell", "monkey", "-p", "com.nianticlabs.pokemongo",
-                          "-c", "android.intent.category.LAUNCHER", "1"])
+        # Give Android a moment to finish force-stopping the process. Launching immediately
+        # afterwards is occasionally acknowledged but discarded, leaving the emulator on its
+        # home screen for the whole two-minute wait below.
+        self._interruptible_sleep(0.5)
+        if self.stop_event.is_set() or not self._launch_game():
+            return False
         self._anchor_cache = None
         self._feed_cache = None
         self._nearby_column_x = None
@@ -1569,6 +1573,7 @@ class ShundoRoutine:
         self._ui_state_cache_at = 0.0
         self._release_pending()
         deadline = time.monotonic() + 120.0
+        next_launch_retry = time.monotonic() + 10.0
         while not self.stop_event.is_set() and time.monotonic() < deadline:
             self._wait_if_paused()
             if self.stop_event.is_set():
@@ -1576,8 +1581,37 @@ class ShundoRoutine:
             frame = self.device.screenshot(fresh=True)
             if self._anchor_in(frame) is not None:
                 return True
+            # Some Android builds report a successful start while keeping the launcher in
+            # front. Re-issuing an explicit start only brings the existing activity forward;
+            # it does not clear game data or consume another feed item.
+            if time.monotonic() >= next_launch_retry:
+                self._launch_game()
+                next_launch_retry = time.monotonic() + 10.0
             self._interruptible_sleep(2.0)
         return False
+
+    def _launch_game(self) -> bool:
+        """Bring Pokémon GO to the foreground, with ``monkey`` as a compatibility fallback."""
+        package = "com.nianticlabs.pokemongo"
+        try:
+            resolved = self.device._run([
+                "shell", "cmd", "package", "resolve-activity", "--brief",
+                "-c", "android.intent.category.LAUNCHER", package,
+            ])
+            if isinstance(resolved, str):
+                components = [line.strip() for line in resolved.splitlines()
+                              if "/" in line and " " not in line.strip()]
+                if components:
+                    self.device._run(["shell", "am", "start", "-W", "-n", components[-1]])
+                    return True
+        except (AdbError, OSError):
+            pass
+        try:
+            self.device._run(["shell", "monkey", "-p", package,
+                              "-c", "android.intent.category.LAUNCHER", "1"])
+            return True
+        except (AdbError, OSError):
+            return False
 
     def stop(self) -> None:
         self.stop_event.set()

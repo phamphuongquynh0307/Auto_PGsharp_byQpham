@@ -1,3 +1,27 @@
+# v1.4.23
+
+## Tiếng Việt
+
+### Sửa lỗi chấm IV thoát game nhưng không vào lại
+
+- Khi hết thời gian chờ Pokémon trên thanh Nearby `@`, bot giờ mở trực tiếp launcher activity của Pokémon GO thay vì chỉ phụ thuộc vào lệnh `monkey`.
+- Bot chờ Android hoàn tất việc dừng app trước khi mở lại. Nếu Android nhận lệnh nhưng vẫn để màn hình ở ngoài, bot tự động đưa game lên foreground lại mỗi 10 giây.
+- Vẫn giữ cách mở cũ làm dự phòng cho thiết bị Android không trả về launcher activity.
+- **327 test đạt** (21 test được bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Fix IV mode exiting the game without reopening it
+
+- After a Nearby `@` spawn timeout, the bot now starts Pokémon GO through its resolved launcher activity instead of relying only on `monkey`.
+- The bot lets Android finish stopping the app before relaunching it. If Android accepts the launch but leaves the home screen in front, the game is brought forward again every 10 seconds.
+- The previous launch method remains as a fallback for Android devices that do not expose a launcher activity.
+- **327 tests pass** (21 skipped by configuration).
+
+---
+
 # v1.4.22
 
 ## Tiếng Việt
