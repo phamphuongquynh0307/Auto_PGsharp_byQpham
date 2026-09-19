@@ -1583,6 +1583,21 @@ h2 {
   .download-card-main::before { display: none; }
   .download-card-main h3, .download-card-main strong { color: #fff; }
   .download-card-main .dl-label, .download-card-main .dl-text { color: #b5b5ba; }
+  .download-card-main .dl-steps-title { color: #f5f5f7; }
+  .download-card-main .dl-steps li { color: #d2d2d7; }
+  .download-card-main .dl-steps li::before,
+  .download-card-main .dl-steps-blue li::before {
+    color: #fff !important;
+    background: transparent !important;
+    border-color: #6e6e73 !important;
+  }
+  .download-card-main .tag-blue {
+    color: #fff;
+    background: #2c2c2e;
+    border-color: transparent;
+  }
+  .download-card-main .btn-primary { color: #fff; background: #0071e3; }
+  .download-card-main .btn-primary:hover { background: #0077ed; }
   .download-card-main .text-link { color: #2997ff; }
   .dl-icon { color: #fff; background: var(--blue); border: 0; border-radius: 50%; box-shadow: none; }
   .dl-icon-purple { background: #6e6e73; }
