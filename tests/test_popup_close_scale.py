@@ -369,6 +369,38 @@ class PopupCloseScaleTests(unittest.TestCase):
                     self.assertFalse(routine._handle_popups(stale))
                 self.assertEqual([], taps)
 
+    def test_shundo_false_claim_match_does_not_tap_a_fresh_map(self):
+        stale = np.zeros((2712, 1220, 3), dtype=np.uint8)
+        fresh_map = np.ones_like(stale)
+        claim = object()
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.device = SimpleNamespace(
+            tap=lambda *xy: taps.append(xy),
+            screenshot=lambda **_kwargs: fresh_map,
+        )
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._popup_scales = (1.0,)
+        routine._cancel_btn = None
+        routine._popup_weather = None
+        routine._popup_speed = None
+        routine._claim_rewards = claim
+        routine._close_btns = ()
+        routine._encounter_visible = lambda _frame: False
+        routine._anchor_in = lambda frame: (972, 1053) if frame is fresh_map else None
+
+        def find_button(_frame, template, **_kwargs):
+            return [Match(500, 1500, 80, 50, 0.9)] if template is claim else []
+
+        with patch("avc.shundo.find_dialog_buttons", return_value=[]), \
+                patch("avc.shundo.find_popup_close", return_value=None), \
+                patch("avc.shundo.find_fast", side_effect=find_button):
+            self.assertFalse(routine._handle_popups(stale))
+
+        self.assertEqual([], taps)
+
     def test_claim_reward_close_does_not_also_tap_the_screen_center(self):
         taps = []
         first = np.zeros((2712, 1220, 3), dtype=np.uint8)

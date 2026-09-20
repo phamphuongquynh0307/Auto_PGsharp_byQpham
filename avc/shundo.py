@@ -917,10 +917,30 @@ class ShundoRoutine:
                 self.stats.last_event = "popup"
                 return True
         if self._claim_rewards is not None:
-            m = find_fast(frame, self._claim_rewards, threshold=self.config.popup_threshold,
+            # This button is a large, low-detail green pill. At the generic 0.70 popup
+            # threshold, static map scenery can occasionally resemble it closely enough to
+            # start the reward-dismiss loop, whose centre taps are unsafe on an ordinary map.
+            # Require a stronger match on a separate fresh capture, and reject it outright
+            # when the Nearby anchor proves that the fresh screen is already the map.
+            claim_threshold = max(0.82, self.config.popup_threshold)
+            m = find_fast(frame, self._claim_rewards, threshold=claim_threshold,
                           scales=CALIBRATION_SWEEP, cache=fast_cache)
             if m:
-                self.device.tap(*m[0].center)
+                fresh = self.device.screenshot(fresh=True)
+                if self._anchor_in(fresh) is not None:
+                    return False
+                confirmed = find_fast(
+                    fresh, self._claim_rewards, threshold=claim_threshold,
+                    scales=CALIBRATION_SWEEP,
+                )
+                if not confirmed:
+                    return False
+                first = m[0].center
+                second = confirmed[0].center
+                tolerance = max(24, int(frame.shape[1] * 0.04))
+                if abs(first[0] - second[0]) > tolerance or abs(first[1] - second[1]) > tolerance:
+                    return False
+                self.device.tap(*second)
                 self.stats.last_event = "popup"
                 # Advance through the reward cards until the nearby bar returns.
                 cx, cy = self.config.pt((610, 1000), "TC")
