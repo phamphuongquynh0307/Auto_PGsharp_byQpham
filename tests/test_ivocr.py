@@ -29,19 +29,22 @@ class IvOcrTests(unittest.TestCase):
 
         self.assertIsNone(IvOcr(str(MODEL)).read(frame, (0, 0, 260, 80)))
 
-    def test_shundo_reader_falls_back_when_ui_dump_has_no_iv(self):
+    def test_shundo_reader_uses_ocr_without_paying_for_ui_dump(self):
+        dumps = []
         routine = object.__new__(ShundoRoutine)
-        routine.device = SimpleNamespace(ui_dump=lambda: "<hierarchy />")
+        routine.device = SimpleNamespace(ui_dump=lambda: dumps.append(True) or "<hierarchy />")
         routine.config = SimpleNamespace(
             iv_ocr_model=str(MODEL),
             pill_region=(0, 0, 260, 80),
             target_ivs=(11, 7, 15),
+            require_background=False,
         )
         frame = np.full((80, 260, 3), 30, dtype=np.uint8)
         reader = SimpleNamespace(read=lambda _frame, _region: (11, 7, 15))
 
         with patch("avc.shundo.IvOcr", return_value=reader):
             self.assertEqual((11, 7, 15), routine._read_iv_stats(frame))
+        self.assertEqual([], dumps)
 
 
 if __name__ == "__main__":

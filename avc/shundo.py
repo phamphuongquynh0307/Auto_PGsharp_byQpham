@@ -139,6 +139,10 @@ class ShundoConfig:
     slot_busy_std: float = 40.0
     slot_foreground_bright_fraction: float = 0.008
     nearby_presence_frames: int = 2
+    # Do not block the live-video path with a ~1.6s UIAutomator dump after its very first miss.
+    # A handful of native stream frames costs only a fraction of a second; the semantic fallback
+    # remains available for translucent/difficult sidebars once vision has had a fair chance.
+    nearby_ui_fallback_frames: int = 6
     # A far teleport makes the game reload spawns, which clears the nearby bar first.
     # Waiting for that clear keeps a stale entry from the previous location from being
     # mistaken for the new spawn (the icons all look alike on event days).
@@ -1005,18 +1009,14 @@ class ShundoRoutine:
         return False
 
     def _read_iv_stats(self, frame) -> tuple[int, int, int] | None:
-        """Read PGSharp's exact three IV columns, with two local vision fallbacks.
+        """Read exact IVs locally first; pay for UIAutomator only as a fallback.
 
-        A UI dump is paid for only after a shiny encounter is already open. If PGSharp paints
-        the pill outside Android's accessibility tree, the narrowly scoped CRNN path reads its
-        three slash-delimited fields from pixels. The old template path remains for hundos.
+        The narrowly scoped CRNN reader works on the already-confirmed encounter frame. A UI
+        dump costs roughly 1.6 seconds, so it is reserved for an unreadable image. The one rare
+        exception is an exact target that also requires a special Background: its hierarchy can
+        provide authoritative badge evidence and is reused by ``_background_evidence``.
         """
-        state = uidump.parse(self.device.ui_dump() or "")
-        # Reuse this same hierarchy for Background detection; an encounter must never pay for
-        # two consecutive UI dumps just because both IV and the final badge are requested.
-        self._encounter_ui_state = state
-        if state is not None and state.iv_stats is not None:
-            return state.iv_stats
+        exact = None
         if not getattr(self, "_iv_ocr_unavailable", False):
             if getattr(self, "_iv_ocr", None) is None:
                 try:
@@ -1027,13 +1027,20 @@ class ShundoRoutine:
                 try:
                     exact = self._iv_ocr.read(frame, self.config.pill_region)
                 except Exception:  # noqa: BLE001 - optional OCR must fail closed
-                    # The model is an optional fallback. A corrupt/missing runtime must retain
-                    # the existing safe behaviour: keep the encounter instead of fleeing it.
+                    # A corrupt/missing optional OCR runtime must retain the safe fallback.
                     exact = None
-                if exact is not None:
-                    return exact
+        if exact is not None:
+            if (getattr(self.config, "require_background", False)
+                    and exact == tuple(self.config.target_ivs)):
+                self._encounter_ui_state = uidump.parse(self.device.ui_dump() or "")
+            return exact
         if tuple(self.config.target_ivs) == (15, 15, 15) and self._is_hundo(frame):
             return 15, 15, 15
+        state = uidump.parse(self.device.ui_dump() or "")
+        # Reuse this hierarchy for Background detection; never pay for the same dump twice.
+        self._encounter_ui_state = state
+        if state is not None and state.iv_stats is not None:
+            return state.iv_stats
         return None
 
     def _background_evidence(self, frame) -> str | None:
@@ -1181,6 +1188,10 @@ class ShundoRoutine:
             self.stats.last_event = "idle"
             return "idle"
         self.device.tap(*slot)
+        # A hierarchy read before the teleport describes the old location. It must not be reused
+        # as evidence for a spawn that is about to load at the new one.
+        self._ui_state_cache = None
+        self._ui_state_cache_at = 0.0
         self._interruptible_sleep(min(0.75, cfg.teleport_wait))
         if self.stop_event.is_set():
             return "idle"
@@ -1423,12 +1434,22 @@ class ShundoRoutine:
         start = time.monotonic()
         next_log = start + cfg.spawn_wait_log
         loaded = None
+        vision_misses = 0
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
             target = self._target_in_bar(frame)
             if target is None:
-                target = self._ui_nearby_target()
+                vision_misses += 1
+                fallback_after = max(
+                    int(getattr(cfg, "nearby_presence_frames", 2)) + 1,
+                    int(getattr(cfg, "nearby_ui_fallback_frames", 6)),
+                )
+                if vision_misses >= fallback_after:
+                    target = self._ui_nearby_target()
+                    vision_misses = 0
+            else:
+                vision_misses = 0
             if target:
                 loaded = target
                 break

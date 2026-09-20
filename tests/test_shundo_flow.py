@@ -308,6 +308,7 @@ class ShundoAnswerTests(unittest.TestCase):
     def test_exact_iv_reader_uses_pgsharp_view_text(self):
         routine = bare_routine()
         routine.config.target_ivs = (15, 15, 14)
+        routine._iv_ocr_unavailable = True
         routine.device.ui_dump = lambda: (
             '<hierarchy><node resource-id="x:id/hl_ec_sum_stats" text="15/15/14" '
             'bounds="[0,0][100,50]" /></hierarchy>'
@@ -488,6 +489,28 @@ class ShundoAnswerTests(unittest.TestCase):
         self.assertEqual("blocked", outcome)
         self.assertEqual([(580, 364)], routine.device.regular_taps)
         self.assertEqual([0], streaks_at_load)
+
+    def test_nearby_vision_gets_a_second_frame_before_slow_ui_fallback(self):
+        routine = bare_routine()
+        routine._teleport_blocked = False
+        routine._pending_nearby = None
+        routine._on_waiting = None
+        routine.stats.checked = 1
+        routine._ensure_calibrated = lambda: None
+        routine._drain_popups = lambda _frame=None: False
+        routine._anchor_in = lambda _frame: (1100, 1166)
+        routine._feed_slot_in = lambda _frame: (580, 364)
+        routine._raw_target_in_bar = lambda _frame: None
+        targets = iter((None, (1100, 523)))
+        routine._target_in_bar = lambda _frame: next(targets)
+        routine._ui_nearby_target = lambda: self.fail(
+            "UI dump must not block before vision receives its second frame")
+        routine._attempt_nearby = lambda _target: "blocked"
+
+        outcome = routine.run_once()
+
+        self.assertEqual("blocked", outcome)
+        self.assertEqual([(580, 364)], routine.device.regular_taps)
 
 
 class ShundoFleeTests(unittest.TestCase):
