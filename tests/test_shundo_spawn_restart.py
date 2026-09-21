@@ -8,6 +8,7 @@ from avc.shundo import ShundoConfig, ShundoRoutine, ShundoStats
 
 def _restart_waits_for_map_and_clears_stale_targets():
     routine = ShundoRoutine.__new__(ShundoRoutine)
+    routine.config = ShundoConfig(restart_delay=7.5)
     routine.device = SimpleNamespace(
         _run=Mock(side_effect=[
             "",  # force-stop
@@ -33,6 +34,7 @@ def _restart_waits_for_map_and_clears_stale_targets():
         "shell", "cmd", "package", "resolve-activity"]
     assert routine.device._run.call_args_list[2].args[0][:3] == ["shell", "am", "start"]
     assert routine.device.screenshot.call_count == 2
+    routine._interruptible_sleep.assert_any_call(7.5)
     assert routine._feed_cache is None
     routine._release_pending.assert_called_once()
 

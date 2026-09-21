@@ -69,6 +69,7 @@ class Device:
         self._control_socket = None
         self._control_process = None
         self._control_port = None
+        self._ui_dump_supported: bool | None = None
 
     # -- realtime streaming ---------------------------------------------------
     def start_stream(self, half: bool = True, bitrate: str = "2M") -> None:
@@ -440,6 +441,14 @@ class Device:
         That was especially damaging to the exact-IV reader: all retries could keep parsing the
         same pre-encounter tree and report that IV was unreadable.
         """
+        # HyperOS 3 on Android 15 has a native framework bug while uiautomator walks a
+        # Unity view hierarchy.  It crashes the *target app* with SIGBUS in
+        # AssetManager2::FindEntryInternal -> AccessibilityNodePrefetcher, rather than
+        # merely failing the dump command.  Pokémon GO then appears to open and immediately
+        # close.  Keep the pixel/template fallback on affected Xiaomi builds instead of
+        # risking another game-process crash.
+        if not self._can_use_ui_dump():
+            return None
         try:
             xml = self._run(
                 ["exec-out", "uiautomator", "dump", "/dev/tty"],
@@ -458,6 +467,24 @@ class Device:
         if start < 0 or end < start or "<node" not in text[start:end]:
             return None
         return text[start:end + len("</hierarchy>")]
+
+    def _can_use_ui_dump(self) -> bool:
+        """Whether Android's accessibility hierarchy reader is safe on this device."""
+        cached = getattr(self, "_ui_dump_supported", None)
+        if cached is not None:
+            return cached
+        try:
+            manufacturer = self._run(["shell", "getprop", "ro.product.manufacturer"]).strip().lower()
+            sdk_text = self._run(["shell", "getprop", "ro.build.version.sdk"]).strip()
+            hyperos = self._run(["shell", "getprop", "ro.mi.os.version.name"]).strip().lower()
+            sdk = int(sdk_text or 0)
+            supported = not (manufacturer == "xiaomi" and sdk >= 35 and hyperos.startswith("os3"))
+        except (AdbError, OSError, ValueError):
+            # A property lookup failure is not evidence of the known crash. Preserve the
+            # existing behaviour on other devices and let ui_dump's own error handling apply.
+            supported = True
+        self._ui_dump_supported = supported
+        return supported
 
     def adb_tap(self, x: int, y: int) -> None:
         """Send an independent Android input tap without reusing scrcpy touch state."""

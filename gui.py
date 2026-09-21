@@ -343,12 +343,16 @@ LANG = {
     "target_iv_sta": {"vi": "IV HP mục tiêu (0–15):", "en": "Target HP IV (0–15):"},
     "msg_s_spawn_restarting": {"vi": "↻ Đã chờ Pokémon trên thanh @ quá {} giây — đang mở lại game.",
                                 "en": "↻ Waited over {} seconds for Nearby — relaunching the game."},
+    "msg_s_nomap_restarting": {"vi": "↻ Mất bản đồ quá lâu (game treo hoặc đang tải) — đang mở lại game.",
+                               "en": "↻ Map missing too long (game stuck or loading) — relaunching."},
     "msg_s_restarted": {"vi": "✓ Game đã vào lại bản đồ — tiếp tục soi.",
                          "en": "✓ Game is back on the map — resuming checks."},
     "msg_s_restart_failed": {"vi": "⚠ Không thấy bản đồ sau khi mở lại game — đã dừng soi.",
                               "en": "⚠ Map did not appear after relaunch — checks stopped."},
     "tp_wait":       {"vi": "Chờ Pokémon trên Nearby trước khi mở lại game (giây, 0 = mãi):",
-                      "en": "Wait for Nearby before relaunching game (s, 0 = forever):"},
+                       "en": "Wait for Nearby before relaunching game (s, 0 = forever):"},
+    "restart_delay": {"vi": "Sau khi thoát, chờ trước khi vào lại game (giây):",
+                       "en": "After exit, wait before reopening game (s):"},
     "feed_wait":     {"vi": "Chờ Pokémon từ Feed hiện trên Nearby (giây, 0 = chờ mãi):",
                       "en": "Wait for the Feed's Pokémon on Nearby (s, 0 = forever):"},
     "s_enc_wait":    {"vi": "Chờ máy ảnh hiện tối đa (giây):", "en": "Wait for camera icon (s):"},
@@ -404,6 +408,8 @@ LANG = {
                       "en": "(the crisp capture cannot see the Pokémon on the @ bar — looking again, no tap yet)"},
     "msg_s_lost":    {"vi": "(thanh @ không còn con này — bỏ qua, đi tiếp mục feed kế)",
                       "en": "(the @ bar no longer shows this one — giving it up, moving to the next feed entry)"},
+    "msg_s_nomap": {"vi": "(không thấy bản đồ — game có thể đang tải hoặc bị treo)",
+                    "en": "(no map on screen — the game may be loading or stuck)"},
     "msg_s_nospawn": {"vi": "(Pokémon chưa hiện lên thanh @ khi hết thời gian chờ)",
                       "en": "(Pokémon did not appear on Nearby before the wait expired)"},
     "msg_s_waiting": {"vi": "… đang chờ pokemon load ({}s)", "en": "… waiting for pokémon to load ({}s)"},
@@ -1179,27 +1185,29 @@ class App:
         self.target_iv_def = self._spin(sh_grp, "target_iv_def", 2, 0, 15, 15)
         self.target_iv_sta = self._spin(sh_grp, "target_iv_sta", 3, 0, 15, 15)
         self.tp_wait = self._spin(sh_grp, "tp_wait", 4, 0, 3600, 0.0, is_float=True)
-        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 5, 2, 12, 3.0, is_float=True)
+        self.restart_delay = self._spin(
+            sh_grp, "restart_delay", 5, 0, 300, 0.5, is_float=True)
+        self.s_enc_wait = self._spin(sh_grp, "s_enc_wait", 6, 2, 12, 3.0, is_float=True)
         self.require_background = tk.BooleanVar(value=False)
         background_chk = ttk.Checkbutton(
             sh_grp, text=self.tr("require_background"), variable=self.require_background,
             command=self.save_settings,
         )
-        background_chk.grid(row=6, column=0, columnspan=2, sticky="w", padx=6, pady=2)
+        background_chk.grid(row=7, column=0, columnspan=2, sticky="w", padx=6, pady=2)
         self._i18n.append((background_chk, "require_background"))
         self._register_row("require_background", background_chk)
-        self._label(sh_grp, "shundo_action", row=7, column=0, sticky="w", padx=6, pady=2)
+        self._label(sh_grp, "shundo_action", row=8, column=0, sticky="w", padx=6, pady=2)
         self.shundo_action = "pause"   # "pause" | "stop"
         self.action_var = tk.StringVar()
         self.action_combo = ttk.Combobox(sh_grp, textvariable=self.action_var, state="readonly", width=22)
-        self.action_combo.grid(row=7, column=1, sticky="e", padx=6, pady=2)
+        self.action_combo.grid(row=8, column=1, sticky="e", padx=6, pady=2)
         self.action_combo.bind("<<ComboboxSelected>>", self._on_action_change)
-        self._label(sh_grp, "shiny_action", row=8, column=0, sticky="w", padx=6, pady=2)
+        self._label(sh_grp, "shiny_action", row=9, column=0, sticky="w", padx=6, pady=2)
         self.shiny_action = "skip"     # "skip" | "pause"
         self.shiny_action_var = tk.StringVar()
         self.shiny_action_combo = ttk.Combobox(sh_grp, textvariable=self.shiny_action_var,
                                                 state="readonly", width=22)
-        self.shiny_action_combo.grid(row=8, column=1, sticky="e", padx=6, pady=2)
+        self.shiny_action_combo.grid(row=9, column=1, sticky="e", padx=6, pady=2)
         self.shiny_action_combo.bind("<<ComboboxSelected>>", self._on_shiny_action_change)
         # A skipped shiny still alerts Discord (with screenshot), it just isn't waited on.
         self.alert_shiny = tk.BooleanVar(value=True)
@@ -1603,6 +1611,8 @@ class App:
         if data.get("catch_style") in ("normal", "quick"):
             self.catch_style = data["catch_style"]
         self.tp_wait.set(max(0.0, float(data.get("tp_wait", self.tp_wait.get()))))
+        self.restart_delay.set(max(
+            0.0, min(300.0, float(data.get("restart_delay", self.restart_delay.get())))))
         self.s_enc_wait.set(max(2.0, float(data.get("s_enc_wait", self.s_enc_wait.get()))))
         self.target_iv_atk.set(max(0, min(15, int(data.get("target_iv_atk", self.target_iv_atk.get())))))
         self.target_iv_def.set(max(0, min(15, int(data.get("target_iv_def", self.target_iv_def.get())))))
@@ -1658,6 +1668,7 @@ class App:
             "mode": self.mode,
             "catch_style": self.catch_style,
             "tp_wait": float(self.tp_wait.get()),
+            "restart_delay": max(0.0, min(300.0, float(self.restart_delay.get()))),
             "s_enc_wait": float(self.s_enc_wait.get()),
             "target_iv_atk": max(0, min(15, int(self.target_iv_atk.get()))),
             "target_iv_def": max(0, min(15, int(self.target_iv_def.get()))),
@@ -3064,6 +3075,7 @@ class App:
                     # this spawn is slow. It waits until the current spawn can be checked.
                     spawn_timeout=(0.0 if self.mode == "coord_shundo"
                                    else max(0.0, float(self.tp_wait.get()))),
+                    restart_delay=max(0.0, min(300.0, float(self.restart_delay.get()))),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
                     target_ivs=(
                         max(0, min(15, int(self.target_iv_atk.get()))),
@@ -3215,6 +3227,9 @@ class App:
         def on_shundo_event(stats, outcome):
             self.log_queue.put("__countstr__" + self.tr("s_counts").format(
                 stats.checked, stats.shinies, stats.shundos, stats.backgrounds))
+            if outcome == "nomap_restarting":
+                self.log_queue.put(self.tr("msg_s_nomap_restarting"))
+                return
             if outcome == "spawn_restarting":
                 self.log_queue.put(self.tr("msg_s_spawn_restarting").format(
                     int(self.routine.config.spawn_timeout)))
@@ -3312,6 +3327,8 @@ class App:
                 self.log_queue.put(self.tr("msg_s_lost"))
             elif outcome == "nospawn":
                 self.log_queue.put(self.tr("msg_s_nospawn"))
+            elif outcome == "nomap":
+                self.log_queue.put(self.tr("msg_s_nomap"))
             elif outcome == "idle":
                 self.log_queue.put(self.tr("msg_s_idle"))
             elif outcome == "coord_idle":
@@ -3322,7 +3339,8 @@ class App:
             # count as activity — otherwise a run stuck looking at nothing never trips the
             # idle alert. Giving the entry up does advance the feed, so that one does.
             self._tick_alerts(
-                stats, outcome not in ("idle", "coord_idle", "popup", "recheck"), shundo=True)
+                stats, outcome not in ("idle", "coord_idle", "popup", "recheck", "nomap"),
+                shundo=True)
 
         dim = self.dim_screen.get()
         try:

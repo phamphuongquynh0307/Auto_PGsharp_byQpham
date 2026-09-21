@@ -151,7 +151,14 @@ class ShundoConfig:
     # for the spawn. A positive timeout relaunches the game when it expires; 0 waits
     # until the spawn loads or the user stops.
     spawn_timeout: float = 0.0
+    # Let Android finish tearing down the process before starting it again. Some emulators
+    # need longer than the built-in minimum, so expose this delay in the desktop settings.
+    restart_delay: float = 0.5
     spawn_wait_log: float = 20.0    # log a "still waiting" heartbeat this often (s)
+    # Cycles the map may stay invisible (loading screen, crash, game sent to the
+    # background) before the run relaunches the game. Unlike spawn_timeout this is not
+    # about a slow spawn — there is no map to work on at all — so it always applies.
+    no_map_restart_cycles: int = 12
 
     # The encounter is requested by ONE double-tap of the bar's first slot (same gesture
     # as the catch routine). PGSharp only opens the encounter for a shiny, so "encounter
@@ -397,6 +404,8 @@ class ShundoRoutine:
         self._pending_no_answers = 0
         # Looks spent trying to see the pending entry again on a crisp capture.
         self._pending_no_target = 0
+        # Consecutive cycles that found no map at all. Escalates to a relaunch.
+        self._no_map_streak = 0
         # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
         # avoids teleporting, so the run cannot continue.
         self._teleport_blocked = False
@@ -1320,7 +1329,8 @@ class ShundoRoutine:
 
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
-        blocked | shiny | shundo | miss | recheck | lost | nospawn | idle | popup | goplus."""
+        blocked | shiny | shundo | miss | recheck | lost | nospawn | nomap | idle | popup
+        | goplus."""
         cfg = self.config
         if self._teleport_blocked:
             return "goplus"
@@ -1373,9 +1383,18 @@ class ShundoRoutine:
         if self._anchor_in(frame) is None:
             frame = self.device.screenshot(fresh=True)
             if self._anchor_in(frame) is None and not self._ui_map_visible(force=True):
-                self._interruptible_sleep(cfg.poll_interval)
+                # No map: loading screen, a crash, or the game pushed to the background.
+                # Retrying at the 80ms poll rate only spams the log, and "miss" alone never
+                # escalates, so back off and hand the run a relaunch once the streak is up.
+                self._no_map_streak += 1
+                self._interruptible_sleep(
+                    cfg.poll_interval if self._no_map_streak <= 5 else cfg.idle_poll)
+                if self._no_map_streak >= max(1, cfg.no_map_restart_cycles):
+                    self.stats.last_event = "nomap"
+                    return "nomap"
                 self.stats.last_event = "miss"
                 return "miss"
+        self._no_map_streak = 0
 
         # Step 1: teleport to the next feed candidate. A miss on the stream frame is
         # retried on a crisp one-shot capture first — H.264 smear between keyframes
@@ -1555,9 +1574,13 @@ class ShundoRoutine:
                 # them. There is nothing to fall back on, so end the run instead of looping
                 # tap -> warning -> CANCEL; the caller reports why.
                 break
-            if outcome == "nospawn" and cfg.spawn_timeout > 0:
+            # A lost map is not a slow spawn: spawn_timeout does not gate it, so modes
+            # that wait forever for their spawn (Discord Coord) still recover from a
+            # crashed or stuck game instead of logging "miss" until the user notices.
+            if outcome == "nomap" or (outcome == "nospawn" and cfg.spawn_timeout > 0):
                 if on_event:
-                    on_event(self.stats, "spawn_restarting")
+                    on_event(self.stats, "nomap_restarting" if outcome == "nomap"
+                             else "spawn_restarting")
                 if not self._restart_game():
                     if not self.stop_event.is_set() and on_event:
                         on_event(self.stats, "restart_failed")
@@ -1602,7 +1625,7 @@ class ShundoRoutine:
         # Give Android a moment to finish force-stopping the process. Launching immediately
         # afterwards is occasionally acknowledged but discarded, leaving the emulator on its
         # home screen for the whole two-minute wait below.
-        self._interruptible_sleep(0.5)
+        self._interruptible_sleep(max(0.0, self.config.restart_delay))
         if self.stop_event.is_set() or not self._launch_game():
             return False
         self._anchor_cache = None
@@ -1612,6 +1635,7 @@ class ShundoRoutine:
         self._nearby_last_y = None
         self._ui_state_cache = None
         self._ui_state_cache_at = 0.0
+        self._no_map_streak = 0
         self._release_pending()
         deadline = time.monotonic() + 120.0
         next_launch_retry = time.monotonic() + 10.0
