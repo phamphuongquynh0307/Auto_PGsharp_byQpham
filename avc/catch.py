@@ -334,6 +334,7 @@ class CatchConfig:
     popup_autowalk_template: str = "templates/popup_autowalk.png"   # "Stop/Pause AutoWalk?" dialog
     popup_speed_template: str = "templates/popup_speed.png"         # "I'M A PASSENGER" green button
     popup_weather_template: str = "templates/popup_weather.png"     # "I AM SAFE" green button (weather warning)
+    dismiss_template: str = "templates/dismiss.png"                 # Bottom "DISMISS" action on news cards
     claim_rewards_template: str = "templates/claim_rewards.png"      # "CLAIM REWARDS" level up button
     close_btn_template: str = "templates/close_btn.png"              # Close "X" button
     close_btn_blue_template: str = "templates/close_btn_blue.png"    # Close "X" button (blue)
@@ -720,6 +721,7 @@ class CatchRoutine:
         self._popup_autowalk = load_opt(self.config.popup_autowalk_template)
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
+        self._dismiss = load_opt(self.config.dismiss_template)
         self._claim_rewards = load_opt(self.config.claim_rewards_template)
         self._cooldown_zero = load_opt(self.config.cooldown_zero_template)
         self._close_btn = load_opt(self.config.close_btn_template)
@@ -2011,7 +2013,11 @@ class CatchRoutine:
         # "Exit game?" dialog. Its button artwork/position varies by Android skin, so read
         # the exact CANCEL action from the hierarchy for a few seconds after our own BACK.
         now = time.monotonic()
-        if (getattr(self.config, "use_ui_dump", False)
+        ui_dump_enabled = bool(getattr(self.config, "use_ui_dump", False))
+        supports_ui_dump = getattr(self.device, "supports_ui_dump", None)
+        if ui_dump_enabled and callable(supports_ui_dump):
+            ui_dump_enabled = bool(supports_ui_dump())
+        if (ui_dump_enabled
                 and now < getattr(self, "_exit_dialog_until", 0.0)
                 and now - getattr(self, "_exit_dialog_checked_at", 0.0) >= 0.8):
             self._exit_dialog_checked_at = now
@@ -2044,7 +2050,7 @@ class CatchRoutine:
         # "Stop AutoWalk?" and its siblings: a stock two-button dialog. Handled before the
         # template-based popups because it is the one that actually blocks the flow here, and
         # because it is recognised by geometry rather than by a template that can go stale.
-        has_ui_dialog_proof = bool(getattr(self.config, "use_ui_dump", False))
+        has_ui_dialog_proof = ui_dump_enabled
         buttons = find_dialog_buttons(
             frame,
             self.config.dialog_region,
@@ -2053,7 +2059,7 @@ class CatchRoutine:
         )
         if len(buttons) >= 2:
             target = None
-            if getattr(self.config, "use_ui_dump", False):
+            if ui_dump_enabled:
                 # Geometry is a cheap candidate only. Android supplies the exact action text and
                 # bounds across DPI/themes/languages, and also prevents a Pokemon detail screen
                 # with two cyan stat groups from becoming a destructive POWER UP tap.
@@ -2079,6 +2085,26 @@ class CatchRoutine:
                 self._trace("dialog_cancel",
                             f"Hộp thoại chặn luồng ({len(buttons)} nút); bấm CANCEL tại {target}.",
                             0.0)
+                return True
+
+        # News/research cards can cover the map with a bottom-centred DISMISS text action.
+        # This screenshot-derived template is stored at 343px screen width, so derive its scale
+        # from the live frame rather than from the game/PGSharp UI calibration layers.
+        dismiss = getattr(self, "_dismiss", None)
+        if dismiss is not None:
+            height, width = frame.shape[:2]
+            base_scale = width / 343.0
+            region = (int(width * 0.20), int(height * 0.82),
+                      int(width * 0.60), int(height * 0.17))
+            hits = find(
+                frame, dismiss, threshold=max(0.78, self.config.popup_threshold),
+                scales=tuple(base_scale * factor for factor in (0.94, 1.0, 1.06)),
+                region=region, max_matches=1,
+            )
+            if hits:
+                self.device.tap(*hits[0].center)
+                self.stats.last_event = "popup"
+                self._trace("dismiss_popup", "Popup có nút DISMISS; đã đóng.", 0.0)
                 return True
 
         # Medal/share screens have a real close X at the bottom, but their green SHARE button

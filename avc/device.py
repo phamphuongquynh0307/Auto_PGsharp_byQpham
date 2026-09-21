@@ -486,6 +486,10 @@ class Device:
         self._ui_dump_supported = supported
         return supported
 
+    def supports_ui_dump(self) -> bool:
+        """Public capability check for routines choosing their visual fallback path."""
+        return self._can_use_ui_dump()
+
     def adb_tap(self, x: int, y: int) -> None:
         """Send an independent Android input tap without reusing scrcpy touch state."""
         self._run(["shell", "input", "tap", str(int(x)), str(int(y))])

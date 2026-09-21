@@ -30,6 +30,35 @@ class PopupCloseScaleTests(unittest.TestCase):
         without_cancel[420:455, 125:215] = 255
         self.assertIsNone(find_exit_game_cancel(without_cancel, template))
 
+    def test_dismiss_news_popup_is_closed_in_catch_and_shundo(self):
+        frame = cv2.imread("tests/fixtures/dismiss_popup.png")
+        dismiss = load_template("templates/dismiss.png")
+
+        for routine_type, module_name in (
+                (CatchRoutine, "avc.catch"), (ShundoRoutine, "avc.shundo")):
+            with self.subTest(routine=routine_type.__name__):
+                taps = []
+                routine = object.__new__(routine_type)
+                routine.config = _popup_config()
+                routine.config.use_ui_dump = False
+                routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+                routine.stats = SimpleNamespace(last_event="")
+                routine._popup_block_until = 0.0
+                routine._exit_game_cancel = None
+                routine._cancel_btn = None
+                routine._dismiss = dismiss
+                if routine_type is CatchRoutine:
+                    routine._trace = lambda *_args: None
+                else:
+                    routine._teleport_blocked = False
+
+                with patch(f"{module_name}.find_dialog_buttons", return_value=[]):
+                    self.assertTrue(routine._handle_popups(frame))
+
+                self.assertEqual(1, len(taps))
+                self.assertLessEqual(abs(taps[0][0] - 171), 5)
+                self.assertLessEqual(abs(taps[0][1] - 728), 5)
+
     def test_shundo_taps_game_drawn_cancel_without_android_button(self):
         taps = []
         routine = object.__new__(ShundoRoutine)
@@ -105,6 +134,28 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual([(515, 1510)], taps)
+
+    def test_catch_uses_visual_dialog_fallback_when_ui_dump_is_unsafe(self):
+        taps = []
+        routine = object.__new__(CatchRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = True
+        routine.device = SimpleNamespace(
+            tap=lambda *xy: taps.append(xy),
+            supports_ui_dump=lambda: False,
+        )
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._cancel_btn = None
+        routine._trace = lambda *_args: None
+        routine._ui_state = lambda **_kwargs: self.fail("unsafe hierarchy reader was called")
+
+        with patch("avc.catch.find_dialog_buttons",
+                   return_value=[(500, 1510), (760, 1510)]):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(500, 1510)], taps)
 
     def test_inner_x_matches_when_the_button_background_changed(self):
         template = load_template("templates/close_btn_white.png")
@@ -278,6 +329,32 @@ class PopupCloseScaleTests(unittest.TestCase):
         # proof that Go Plus is connected turned any stray dialog into a permanent silent stop.
         # Only the Go Plus warning's own template, matched in its own tight region, may do that.
         self.assertFalse(routine._teleport_blocked)
+
+    def test_shundo_uses_visual_dialog_fallback_when_ui_dump_is_unsafe(self):
+        taps = []
+        dump_calls = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = True
+        routine.device = SimpleNamespace(
+            tap=lambda *xy: taps.append(xy),
+            ui_dump=lambda: dump_calls.append(True),
+            supports_ui_dump=lambda: False,
+        )
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._scales = (0.55,)
+        routine._popup_scales = (0.66,)
+        routine._cancel_btn = None
+        routine._teleport_blocked = False
+
+        with patch("avc.shundo.find_dialog_buttons",
+                   return_value=[(720, 1520), (490, 1520)]):
+            handled = routine._handle_popups(np.zeros((1440, 810, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(490, 1520)], taps)
+        self.assertEqual([], dump_calls)
 
     def test_shundo_cancels_exit_dialog_after_flee_back(self):
         taps = []

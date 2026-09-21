@@ -233,6 +233,7 @@ class ShundoConfig:
     # Popups. Teleporting long distances reliably triggers the speed warning.
     popup_speed_template: str = "templates/popup_speed.png"
     popup_weather_template: str = "templates/popup_weather.png"     # "I AM SAFE" green button (weather warning)
+    dismiss_template: str = "templates/dismiss.png"                 # Bottom "DISMISS" action on news cards
     claim_rewards_template: str = "templates/claim_rewards.png"
     close_btn_template: str = "templates/close_btn.png"
     close_btn_blue_template: str = "templates/close_btn_blue.png"
@@ -427,6 +428,7 @@ class ShundoRoutine:
         self._exit_game_cancel = load_opt(self.config.exit_game_cancel_template)
         self._popup_speed = load_opt(self.config.popup_speed_template)
         self._popup_weather = load_opt(self.config.popup_weather_template)
+        self._dismiss = load_opt(self.config.dismiss_template)
         self._claim_rewards = load_opt(self.config.claim_rewards_template)
         self._close_btns = [
             b for b in (
@@ -810,7 +812,11 @@ class ShundoRoutine:
         # can differ from the PGSharp teleport warning template and geometry.
         now = time.monotonic()
         ui_dump = getattr(self.device, "ui_dump", None)
-        if (callable(ui_dump) and now < getattr(self, "_exit_dialog_until", 0.0)
+        ui_dump_enabled = bool(getattr(self.config, "use_ui_dump", True) and callable(ui_dump))
+        supports_ui_dump = getattr(self.device, "supports_ui_dump", None)
+        if ui_dump_enabled and callable(supports_ui_dump):
+            ui_dump_enabled = bool(supports_ui_dump())
+        if (ui_dump_enabled and now < getattr(self, "_exit_dialog_until", 0.0)
                 and now - getattr(self, "_exit_dialog_checked_at", 0.0) >= 0.8):
             self._exit_dialog_checked_at = now
             state = uidump.parse(ui_dump() or "")
@@ -838,16 +844,15 @@ class ShundoRoutine:
         # buttons and choose the left one. In Shundo this is the only native two-button modal
         # raised by the teleport path, therefore it has the same terminal meaning as the
         # template-backed Go Plus warning above.
-        ui_dump = getattr(self.device, "ui_dump", None)
         buttons = find_dialog_buttons(
             frame,
             self.config.dialog_region,
-            broad_accent=callable(ui_dump),
-            min_text_height=0 if callable(ui_dump) else None,
+            broad_accent=ui_dump_enabled,
+            min_text_height=0 if ui_dump_enabled else None,
         )
         if len(buttons) >= 2:
             target = None
-            if callable(ui_dump):
+            if ui_dump_enabled:
                 state = uidump.parse(ui_dump() or "")
                 target = state.cancel_button if state is not None else None
             else:
@@ -860,6 +865,24 @@ class ShundoRoutine:
                 # into a permanent, silent stop. Only the Go Plus warning's own template, which
                 # is matched in its own tight region above, is allowed to reach that verdict.
                 self.device.tap(*target)
+                self.stats.last_event = "popup"
+                return True
+
+        # News/research cards use a bottom-centred DISMISS action. The template came from a
+        # 343px-wide reference screenshot, so scale it directly to the current frame width.
+        dismiss = getattr(self, "_dismiss", None)
+        if dismiss is not None:
+            height, width = frame.shape[:2]
+            base_scale = width / 343.0
+            region = (int(width * 0.20), int(height * 0.82),
+                      int(width * 0.60), int(height * 0.17))
+            hits = find(
+                frame, dismiss, threshold=max(0.78, self.config.popup_threshold),
+                scales=tuple(base_scale * factor for factor in (0.94, 1.0, 1.06)),
+                region=region, max_matches=1,
+            )
+            if hits:
+                self.device.tap(*hits[0].center)
                 self.stats.last_event = "popup"
                 return True
         # NOTE: there used to be a "PGSharp menu accidentally left open -> tap the star to close
