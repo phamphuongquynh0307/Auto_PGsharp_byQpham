@@ -1,3 +1,29 @@
+# v1.4.24
+
+## Tiếng Việt
+
+### Không còn crash trên HyperOS và tự đóng popup DISMISS
+
+- Chặn lỗi native `SIGBUS` của Xiaomi HyperOS 3 / Android 15 khi Android đọc cây giao diện Pokémon GO. Trên các máy bị ảnh hưởng, bot tự chuyển sang nhận dạng hình ảnh thay vì làm game vừa mở đã thoát.
+- Khi cây giao diện không an toàn hoặc không khả dụng, các hộp thoại hai nút vẫn được nhận dạng bằng hình ảnh và bot bấm nút trái/CANCEL; không còn thấy popup nhưng đứng chờ xác nhận không bao giờ tới.
+- Thêm nhận dạng popup tin tức/sự kiện có chữ `DISMISS` ở cuối màn hình. Bot bấm đúng `DISMISS` trong cả chế độ Catch và Shundo.
+- Khi bản đồ biến mất quá lâu do game treo, tải lỗi hoặc rơi ra nền, chế độ Shundo tự mở lại Pokémon GO và chỉ tiếp tục sau khi bản đồ trở lại.
+- **338 test đạt** (21 test được bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Prevent HyperOS crashes and dismiss blocking news popups
+
+- Avoids Xiaomi HyperOS 3 / Android 15's native `SIGBUS` crash while Android reads Pokémon GO's accessibility hierarchy. Affected devices automatically use image recognition instead of making the game exit immediately after launch.
+- When the hierarchy reader is unsafe or unavailable, two-button dialogs continue through the visual fallback and the bot selects the left/CANCEL action instead of waiting for UI confirmation that cannot arrive.
+- Adds recognition for news/event cards with a bottom `DISMISS` action. Both Catch and Shundo modes now tap the action automatically.
+- If the map remains missing because the game is stuck, loading incorrectly, or sent to the background, Shundo mode relaunches Pokémon GO and resumes only after the map returns.
+- **338 tests pass** (21 skipped by configuration).
+
+---
+
 # v1.4.23
 
 ## Tiếng Việt
