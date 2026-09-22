@@ -1,3 +1,27 @@
+# v1.4.26
+
+## Tiếng Việt
+
+### Đọc được IV khi bảng chỉ số nằm trên nền sáng
+
+- Bảng IV của PGSharp là nền mờ xuyên thấu. Khi Pokémon xuất hiện ở chỗ trời sáng, nền bảng sáng gần bằng chữ nên cả bảng dính liền với bản đồ thành một mảng; bot không tách được chữ số nào và báo "Không đọc được IV" dù chữ trên màn hình rất rõ.
+- Bộ đọc IV giờ dựa vào độ tương phản cục bộ — chữ trắng luôn sáng hơn vùng ngay quanh nó — thay vì một ngưỡng sáng cố định, nên đọc được cả trên nền tối lẫn nền trời sáng.
+- Thêm một ảnh chụp thật (bảng `13/2/13` trên nền trời) vào bộ test để lỗi này không quay lại.
+- **341 test đạt**.
+
+---
+
+## English
+
+### Read the IV pill when it sits over a bright map
+
+- PGSharp draws the IV pill on a translucent surface. Over a bright sky its own background is nearly as light as the text, so pill and map fused into a single blob, no digit could be separated, and the bot reported "Could not read IV" even though the text was perfectly clear.
+- The IV reader now keys on local contrast — white text is always brighter than its immediate surroundings — instead of a fixed brightness cut, so it reads over dark and bright maps alike.
+- A real capture of a pill over the sky (`13/2/13`) joins the test suite so the failure cannot return.
+- **341 tests pass**.
+
+---
+
 # v1.4.25
 
 ## Tiếng Việt
