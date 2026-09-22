@@ -33,6 +33,14 @@ class IvOcrTests(unittest.TestCase):
 
         self.assertEqual((11, 9, 4), IvOcr(str(MODEL)).read(frame, (0, 0, 720, 170)))
 
+    def test_reads_a_native_pill_lying_over_a_bright_sky(self):
+        # Real 1220x2712 crop of "L8 IV62 13/2/13". The pill is translucent: over the bright sky
+        # its own background reads ~127, so a fixed brightness cut fused pill and map into one
+        # blob and no slash pair survived.
+        frame = cv2.imread(str(ROOT / "tests" / "fixtures" / "iv_pill_13_2_13_bright.png"))
+
+        self.assertEqual((13, 2, 13), IvOcr(str(MODEL)).read(frame, (0, 0, 720, 170)))
+
     def test_only_a_narrow_one_can_lead_a_two_glyph_iv(self):
         # "IV24 8/1/2": a tight space must not turn the "4" of the percent into ATK 48.
         percent_4, eight, slash_a, one, slash_b, two = (

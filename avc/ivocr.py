@@ -49,7 +49,14 @@ def _light_components(roi: np.ndarray) -> list[_Component]:
     # Encounter stats are white.  Capping saturation rejects the shiny/background artwork and
     # most of the map showing through the translucent pill; the geometric slash pair rejects the
     # remaining rain/highlight noise.
-    mask = ((value >= 105) & (saturation <= 115)).astype(np.uint8)
+    # Brightness alone is not enough: the pill is translucent, so over a bright sky its own
+    # background reads ~127 and passes any fixed cut, merging the whole pill into one blob with
+    # no separable glyphs.  A top-hat keeps only what is locally brighter than its surroundings
+    # (the kernel is wider than one glyph), which is true of the text on any map.
+    kernel = max(9, (roi.shape[0] // 4) | 1)
+    relief = cv2.morphologyEx(
+        value, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (kernel, kernel)))
+    mask = ((value >= 105) & (saturation <= 115) & (relief >= 50)).astype(np.uint8)
     count, labels, stats, _centres = cv2.connectedComponentsWithStats(mask, 8)
     out: list[_Component] = []
     for label in range(1, count):
