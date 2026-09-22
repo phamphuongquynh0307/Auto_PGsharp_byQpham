@@ -8,7 +8,7 @@ three small fields around PGSharp's two slash glyphs; it is not a general screen
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 
 import cv2
@@ -27,6 +27,7 @@ class _Component:
     h: int
     area: int
     slope: float
+    pixels: np.ndarray = field(compare=False, repr=False)  # own mask, h x w
 
     @property
     def right(self) -> int:
@@ -55,20 +56,27 @@ def _light_components(roi: np.ndarray) -> list[_Component]:
         x, y, w, h, area = (int(v) for v in stats[label])
         if area < 3 or h < 3:
             continue
-        ys, xs = np.nonzero(labels[y:y + h, x:x + w] == label)
+        pixels = labels[y:y + h, x:x + w] == label
+        ys, xs = np.nonzero(pixels)
         if len(np.unique(ys)) >= 3:
             slope = float(np.polyfit(ys, xs, 1)[0])
         else:
             slope = 0.0
-        out.append(_Component(label, x, y, w, h, area, slope))
+        out.append(_Component(label, x, y, w, h, area, slope, pixels))
     return out
 
 
 def _digit_groups(components: list[_Component], first: _Component,
                   second: _Component) -> tuple[list[_Component], list[_Component],
                                                 list[_Component]] | None:
-    """Return the 1-2 glyph components immediately around a plausible slash pair."""
+    """Return the 1-2 glyph components immediately around a plausible slash pair.
+
+    Digits of one number sit <=0.25 slash-heights apart; the space before the triplet and before
+    the trailing shiny/status icon is ~0.5. A two-glyph IV is 10-15, so it must lead with a
+    narrow "1": without that, "IV24 8/1/2" reads its left field as 48 and "/4 ✿" as a 4x.
+    """
     height = (first.h + second.h) / 2
+    max_gap = 0.35 * height
     line = [
         comp for comp in components
         if comp.label not in (first.label, second.label)
@@ -84,13 +92,15 @@ def _digit_groups(components: list[_Component], first: _Component,
     edge = first.x
     for comp in reversed(left_pool):
         gap = edge - comp.right
-        if gap > 0.62 * height:
+        if gap > max_gap:
             break
         left.append(comp)
         edge = comp.x
         if len(left) == 2:
             break
     left.reverse()
+    if len(left) == 2 and left[0].w > 0.5 * height:
+        left = left[1:]
 
     middle = [comp for comp in line
               if comp.x >= first.right - 1 and comp.right <= second.x + 1]
@@ -101,12 +111,14 @@ def _digit_groups(components: list[_Component], first: _Component,
     edge = second.right
     for comp in right_pool:
         gap = comp.x - edge
-        if gap > 0.62 * height:
+        if gap > max_gap:
             break
         right.append(comp)
         edge = comp.right
         if len(right) == 2:
             break
+    if len(right) == 2 and right[0].w > 0.5 * height:
+        right = right[:1]
 
     groups = (left, middle, right)
     if all(1 <= len(group) <= 2 for group in groups):
@@ -161,6 +173,13 @@ class IvOcr:
         if crop.size == 0:
             return None
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        # PGSharp packs glyphs 4-7 px apart, inside this padding, so the box also holds slices
+        # of the neighbours and the CRNN reads "1/" or "91" (a discarded mixed vote). Blank all
+        # but this glyph, grown 1 px to keep its anti-aliased edge.
+        own = np.zeros(gray.shape, np.uint8)
+        oy, ox = component.y - y0, component.x - x0
+        own[oy:oy + component.h, ox:ox + component.w] = component.pixels
+        gray[cv2.dilate(own, np.ones((3, 3), np.uint8)) == 0] = 0
         votes: list[int] = []
         thresholds = [
             cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1],
