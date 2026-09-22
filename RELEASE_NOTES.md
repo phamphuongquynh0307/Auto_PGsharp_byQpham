@@ -1,3 +1,29 @@
+# v1.4.25
+
+## Tiếng Việt
+
+### Sửa lỗi "Không đọc được IV" khi chấm shiny
+
+- Bot đọc IV bằng hình ảnh giờ tách riêng từng chữ số trước khi nhận dạng. Trước đây chữ PGSharp nằm sát nhau nên chữ số bên cạnh lọt vào khung đọc, kết quả bị loại và bot tạm dừng với "Không đọc được IV" dù chữ trên màn hình rất rõ.
+- Icon ✿/✨ đứng sau chỉ số HP không còn bị tính là một chữ số.
+- Số % IV đứng trước (ví dụ `IV24 8/1/2`) không còn bị ghép vào chỉ số Tấn công.
+- Dòng log "chưa thấy Pokémon trong thanh Feed" chỉ hiện một lần khi bắt đầu chờ, không lặp lại liên tục.
+- **340 test đạt**.
+
+---
+
+## English
+
+### Fix "Could not read IV" on shiny encounters
+
+- The on-screen IV reader now isolates each digit before recognizing it. PGSharp packs its glyphs tightly, so neighbouring digits leaked into each read, the result was discarded, and the bot paused with "Could not read IV" even when the text was perfectly clear.
+- The ✿/✨ icon after the HP value is no longer counted as a digit.
+- The IV percentage in front (for example `IV24 8/1/2`) is no longer merged into the Attack value.
+- The "no Pokémon found in the Feed yet" log line now appears once when the wait starts instead of repeating.
+- **340 tests pass**.
+
+---
+
 # v1.4.24
 
 ## Tiếng Việt
