@@ -392,7 +392,8 @@ LANG = {
         "en": "✨ Shiny IV {} matches but has no Special Background. Bot {} — go handle it!"},
     "msg_s_iv_unknown": {"vi": "⚠️ Không đọc được IV — đã giữ encounter và tạm dừng để không bỏ nhầm Pokémon.",
                           "en": "⚠️ Could not read IV — kept the encounter open and paused to avoid skipping the target."},
-    "msg_s_idle":    {"vi": "(không thấy thanh feed / thanh @ — kiểm tra PGSharp)", "en": "(feed / @ bar not found — check PGSharp)"},
+    "msg_s_idle":    {"vi": "(chưa thấy Pokémon trong thanh Feed — đang chờ)",
+                       "en": "(no Pokémon found in the Feed yet — waiting)"},
     "msg_coord_idle": {"vi": "(đang chờ coord từ extension — hàng đợi hiện trống)",
                          "en": "(waiting for a coordinate from the extension — queue is empty)"},
     "msg_coord_using": {"vi": "→ Đang chấm {}{} | còn {} coord", "en": "→ Checking {}{} | {} coords left"},
@@ -850,6 +851,7 @@ class App:
         self.coord_bridge = CoordBridge(self.coord_queue)
         self._coord_bridge_error = ""
         self._coord_idle_logged = False
+        self._shundo_idle_logged = False
         self.device: Device | None = None
         self.worker: threading.Thread | None = None
         self.paused = False
@@ -3176,6 +3178,7 @@ class App:
         self._empty_streak = 0
         self._alert_fired = False
         self._coord_idle_logged = False
+        self._shundo_idle_logged = False
         self._run_started = time.monotonic()
         self._last_report = time.monotonic()
         self._last_batt_check = 0.0
@@ -3240,6 +3243,8 @@ class App:
                 return
             if outcome != "coord_idle":
                 self._coord_idle_logged = False
+            if outcome != "idle":
+                self._shundo_idle_logged = False
             if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background"):
                 # A confirmed result releases exactly one new-coordinate credit to Edge.
                 # Ambiguous miss/recheck cycles keep the same item and release nothing.
@@ -3330,7 +3335,11 @@ class App:
             elif outcome == "nomap":
                 self.log_queue.put(self.tr("msg_s_nomap"))
             elif outcome == "idle":
-                self.log_queue.put(self.tr("msg_s_idle"))
+                # An empty Feed is a normal wait state. Log only its leading edge; repeating
+                # this every idle_poll made one temporary miss look like a persistent fault.
+                if not self._shundo_idle_logged:
+                    self.log_queue.put(self.tr("msg_s_idle"))
+                    self._shundo_idle_logged = True
             elif outcome == "coord_idle":
                 if not self._coord_idle_logged:
                     self.log_queue.put(self.tr("msg_coord_idle"))
