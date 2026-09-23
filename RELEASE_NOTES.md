@@ -1,3 +1,27 @@
+# v1.4.29
+
+## Tiếng Việt
+
+### Dừng bắt khi điểm ném trống
+
+- Khi đã xác nhận điểm ném trống trên ảnh chụp nét, bot rời encounter và chờ bóng thường; không mở bảng chọn bóng nữa.
+- Nếu game tự chuyển sang Master Ball, bot cũng dừng mà không chạm vào bảng chọn hoặc ném bóng.
+- Giữ kiểm tra nhiều khung hình và ảnh chụp nét để tránh dừng nhầm khi bóng chỉ đang chuyển động.
+- 346 test đạt (21 test bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Stop catching when the throw spot is empty
+
+- Once a crisp capture confirms the throw spot is empty, the bot leaves the encounter and waits for regular balls without opening the picker.
+- If the game switches to a Master Ball, the bot stops without touching the picker or throwing it.
+- Multiple frames and a crisp capture guard against mistaking a moving ball for an empty spot.
+- 346 tests pass (21 skipped by configuration).
+
+---
+
 # v1.4.28
 
 ## Tiếng Việt
