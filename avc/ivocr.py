@@ -109,8 +109,10 @@ def _digit_groups(components: list[_Component], first: _Component,
     if len(left) == 2 and left[0].w > 0.5 * height:
         left = left[1:]
 
+    # The anti-aliased 4 can overlap the slash's bounding box by two pixels even
+    # though the lit pixels remain separate (native PGSharp "1/4/15" case).
     middle = [comp for comp in line
-              if comp.x >= first.right - 1 and comp.right <= second.x + 1]
+              if comp.x >= first.right - 3 and comp.right <= second.x + 2]
 
     right_pool = [comp for comp in line
                   if comp.x >= second.right - 1 and comp.right <= second.right + 2.35 * height]

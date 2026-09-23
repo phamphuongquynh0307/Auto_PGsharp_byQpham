@@ -22,7 +22,7 @@ import uuid
 import webbrowser
 import tkinter as tk
 from dataclasses import replace
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import cv2
 import numpy as np
@@ -38,9 +38,10 @@ from avc.coord_source import CoordBridge, CoordQueue
 from avc.device import AdbError, Device
 from avc.resources import resource_path
 from avc.shundo import ShundoConfig, ShundoRoutine
+from avc import updater
 
 
-APP_VERSION = "1.4.26"
+APP_VERSION = "1.4.27"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -864,6 +865,7 @@ class App:
         self._empty_streak = 0             # consecutive empty cycles, for the Discord alert
         self._alert_fired = False          # one alert per dry spell
         self._reconnecting = False         # background Wi-Fi re-connect in flight
+        self._staged_update = None
 
         data = self._read_settings()
         self.lang = data.get("lang", "vi") if data.get("lang") in ("vi", "en") else "vi"
@@ -899,6 +901,40 @@ class App:
         self.root.after(100, self._drain_log)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Destroy>", self._on_root_destroy, add="+")
+        if getattr(sys, "frozen", False):
+            threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _check_update(self) -> None:
+        try:
+            release = updater.available_update(APP_VERSION)
+            if release is not None:
+                self.root.after(0, lambda: self._offer_update(release))
+        except Exception as error:  # network/update errors must never stop the bot
+            diag.write(f"Cập nhật tự động chưa thực hiện được: {error}")
+
+    def _offer_update(self, release) -> None:
+        version = release["tag_name"]
+        if self.lang == "vi":
+            message = (f"Có bản {version} mới. Bạn có đồng ý tải bản cập nhật, "
+                       "thay EXE hiện tại khi đóng app và mở lại app không?")
+            title = "Cập nhật ứng dụng"
+        else:
+            message = (f"Version {version} is available. Download it, replace this EXE "
+                       "when the app closes, and reopen the app?")
+            title = "App update"
+        if messagebox.askyesno(title, message, parent=self.root):
+            threading.Thread(target=self._download_update, args=(release,), daemon=True).start()
+
+    def _download_update(self, release) -> None:
+        try:
+            version, staged = updater.download_update(release, sys.executable)
+            self.root.after(0, lambda: self._update_ready(version, staged))
+        except Exception as error:
+            diag.write(f"Không tải được bản cập nhật: {error}")
+
+    def _update_ready(self, version, staged) -> None:
+        self._staged_update = staged
+        self._log(f"Đã tải và kiểm tra bản {version}. App sẽ cập nhật khi đóng cửa sổ.")
 
     def tr(self, key: str) -> str:
         return LANG[key][self.lang]
@@ -1724,6 +1760,11 @@ class App:
                 pass
         self.coord_bridge.stop()
         self.save_settings()
+        if self._staged_update is not None:
+            try:
+                updater.install_on_exit(sys.executable, self._staged_update)
+            except (OSError, ValueError) as error:
+                diag.write(f"Không cài được bản cập nhật: {error}")
         self.root.destroy()
 
     def _on_root_destroy(self, event) -> None:

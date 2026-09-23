@@ -5,8 +5,10 @@ __pycache__/
 
 # PyInstaller build output (regenerable, and the exe is ~100MB)
 build/
+/build-update/
 /build-new/
 dist/
+/dist-update/
 dist-new/
 /dist-guide*/
 *.spec.bak
@@ -26,6 +28,7 @@ baocao-*.zip
 # Screens the stall watchdog could not read, kept so a stuck run can be reported
 # after the fact instead of having to be caught happening.
 stuck/
+iv_unreadable.png
 
 # Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
 # Note: adb/ IS committed so the project builds out of the box.

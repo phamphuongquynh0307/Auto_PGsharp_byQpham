@@ -107,6 +107,13 @@ class ShundoUiFallbackTests(unittest.TestCase):
 
         self.assertIsNone(routine._ui_feed_bar(state))
 
+    def test_rss_column_identifies_feed_when_handle_is_unreadable(self):
+        routine = bare_routine(two_sidebar_xml(nearby_occupied=False))
+        routine._feed_rss_x = 112
+        state = uidump.parse(two_sidebar_xml(nearby_occupied=False))
+
+        self.assertEqual([(112, 378)], routine._ui_feed_bar(state))
+
 
 if __name__ == "__main__":
     unittest.main()

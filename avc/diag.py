@@ -169,6 +169,9 @@ def export(dest: str, *, settings_path: str | None = None,
             path = os.path.join(base_dir(), name)
             if os.path.exists(path):
                 bundle.write(path, name)
+        failed_iv = os.path.join(base_dir(), "iv_unreadable.png")
+        if os.path.exists(failed_iv):
+            bundle.write(failed_iv, "iv_unreadable.png")
         if settings_path:
             settings = _redacted_settings(settings_path)
             if settings is not None:

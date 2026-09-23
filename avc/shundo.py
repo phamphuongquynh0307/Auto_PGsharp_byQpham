@@ -592,6 +592,9 @@ class ShundoRoutine:
         if not rss:
             return None
         rx, ry = rss[0].center
+        # Keep the RSS column even when the small drag handle or sprite is lost to
+        # compression. The native ListView fallback can then identify Feed unambiguously.
+        self._feed_rss_x = rx
         column = (rx - cfg.handle_column_tol * 2, 0, cfg.handle_column_tol * 4, frame.shape[0])
         handles = find(frame, self._handle, threshold=cfg.feed_threshold, scales=self._scales,
                        region=column)
@@ -696,7 +699,10 @@ class ShundoRoutine:
             return None
         cache = getattr(self, "_feed_cache", None)
         remembered = getattr(self, "_ui_feed_slot", None)
-        feed_ref = cache[0][0] if cache is not None else (remembered[0] if remembered else None)
+        feed_ref = (cache[0][0] if cache is not None else
+                    getattr(self, "_feed_rss_x", None))
+        if feed_ref is None and remembered is not None:
+            feed_ref = remembered[0]
         tolerance = max(self.config.handle_column_tol * 2, self.config.s(140))
         if feed_ref is not None:
             column, bar = min(candidates, key=lambda candidate: abs(candidate[0] - feed_ref))
@@ -1578,6 +1584,15 @@ class ShundoRoutine:
             self.stats.last_event = "shiny"
             return "shiny"
         # Never flee a shiny whose IV could not be read: it might be the requested target.
+        # Keep the untouched native frame. A scaled/annotated preview destroys the tiny
+        # slash glyphs and cannot diagnose why this particular PGSharp pill failed.
+        try:
+            from . import diag
+            import os
+            import cv2
+            cv2.imwrite(os.path.join(diag.base_dir(), "iv_unreadable.png"), frame)
+        except (OSError, cv2.error):
+            pass
         self.stats.last_event = "iv_unknown"
         return "iv_unknown"
 

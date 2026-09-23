@@ -41,6 +41,11 @@ class IvOcrTests(unittest.TestCase):
 
         self.assertEqual((13, 2, 13), IvOcr(str(MODEL)).read(frame, (0, 0, 720, 170)))
 
+    def test_reads_native_shiny_pill_with_digit_overlapping_slash_bounds(self):
+        frame = cv2.imread(str(ROOT / "tests" / "fixtures" / "iv_pill_1_4_15.png"))
+
+        self.assertEqual((1, 4, 15), IvOcr(str(MODEL)).read(frame, (250, 500, 720, 170)))
+
     def test_only_a_narrow_one_can_lead_a_two_glyph_iv(self):
         # "IV24 8/1/2": a tight space must not turn the "4" of the percent into ATK 48.
         percent_4, eight, slash_a, one, slash_b, two = (

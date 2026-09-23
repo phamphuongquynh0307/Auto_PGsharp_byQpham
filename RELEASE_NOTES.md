@@ -1,3 +1,29 @@
+# v1.4.27
+
+## Tiếng Việt
+
+### Sửa đọc IV và Feed, thêm tự cập nhật
+
+- Đọc đúng IV `1/4/15` từ ảnh encounter người dùng gửi. Ký tự `4` chồng hộp bao của dấu `/` 2 pixel nên trước đây bộ đọc loại cả chuỗi.
+- Khi RSS của Feed nhìn thấy nhưng tay cầm bị nén ảnh, dùng vị trí RSS để tìm đúng cột Feed trong cây giao diện Android.
+- Khi vẫn không đọc được IV, lưu ảnh gốc `iv_unreadable.png` và đưa vào gói báo lỗi để điều tra, không tự bỏ qua shiny.
+- EXE tự kiểm tra bản mới và hiện popup hỏi trước khi tải. Nếu đồng ý, app xác minh SHA-256; đóng app để thay EXE và mở lại.
+- 346 test đạt (21 test bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Fix IV and Feed reading, add automatic updates
+
+- Read the user's real `1/4/15` encounter screenshot. The `4` overlapped a slash bounding box by two pixels, previously rejecting the whole triplet.
+- Use the visible RSS column to locate Feed in the Android hierarchy when compression hides its drag handle.
+- Save an unmodified native frame in `iv_unreadable.png` and include it in support reports when IV remains unreadable. Keep the shiny encounter open.
+- The EXE checks for new GitHub releases and asks before downloading. If accepted, it verifies SHA-256; close the app to replace the EXE and restart.
+- 346 tests pass (21 skipped by configuration).
+
+---
+
 # v1.4.26
 
 ## Tiếng Việt
