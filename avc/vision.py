@@ -738,6 +738,29 @@ def find_ball_picker_choices(
     return [(int(px + 72 * scale), int(py - 95 * scale)) for px, py in row]
 
 
+def master_ball_at(scene: np.ndarray, centre: tuple[int, int], radius: int) -> bool:
+    """Detect the distinctive purple/pink upper shell of a Master Ball.
+
+    ``centre`` is the hub for a resting ball or the sprite centre in the picker. Only
+    the upper interior is sampled, avoiding berries, map art and the white lower shell.
+    """
+    cx, cy = centre
+    radius = max(8, int(radius))
+    x0, x1 = max(0, cx - radius), min(scene.shape[1], cx + radius + 1)
+    y0, y1 = max(0, cy - radius), min(scene.shape[0], cy)
+    if x1 <= x0 or y1 <= y0:
+        return False
+    patch = scene[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    yy, xx = np.ogrid[y0 - cy:y1 - cy, x0 - cx:x1 - cx]
+    interior = (xx * xx + yy * yy <= (radius * 0.82) ** 2) & (yy < -radius * 0.12)
+    if int(interior.sum()) < 40:
+        return False
+    magenta = ((hsv[..., 0] >= 125) & (hsv[..., 0] <= 175)
+               & (hsv[..., 1] >= 75) & (hsv[..., 2] >= 75))
+    return float(magenta[interior].mean()) >= 0.12
+
+
 def berry_button_visible(
     scene: np.ndarray,
     *,

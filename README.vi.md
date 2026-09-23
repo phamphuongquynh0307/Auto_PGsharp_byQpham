@@ -19,6 +19,7 @@ Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải
 ## Tính năng
 
 - **Tự động bắt Pokemon** — bắt các Pokemon xuất hiện trong danh sách gần đây của PGSharp.
+- **Giữ Master Ball** — bot không chọn hoặc ném Master Ball; khi chỉ còn Master Ball, bot thoát encounter và chờ nạp bóng thường.
 - **Bắt nhanh không cần key PGSharp** — điều khiển cảm ứng Android để ném bóng và thoát encounter nhanh.
 - **Tự bám quả bóng** — tìm tâm bóng thật trên encounter rồi đặt điểm ném theo giao diện của máy;
   vẫn cho phép căn tay khi cần.

@@ -1,3 +1,29 @@
+# v1.4.28
+
+## Tiếng Việt
+
+### Giữ an toàn Master Ball khi tự bắt
+
+- Nhận dạng vỏ tím/hồng của Master Ball trên bóng đang chờ ném và trong bảng chọn bóng. App không chọn hoặc ném Master Ball.
+- Nếu chỉ còn Master Ball, bot rời encounter và chuyển sang chờ nạp bóng thường. Nếu có cả Master Ball và bóng thường, bot bỏ qua Master Ball.
+- Kiểm tra lại loại bóng ngay trước cú ném để chặn trường hợp game tự chuyển sang Master Ball sau khi bóng thường hết.
+- Thêm ảnh người dùng gửi và các test cho cả ba tình huống trên.
+- 351 test đạt (21 test bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Protect Master Balls during automatic catching
+
+- Detect the purple/pink Master Ball shell in the resting throw ball and ball picker. The app does not select or throw Master Balls.
+- When only Master Balls remain, the bot leaves the encounter and waits for regular balls. When both are offered, it skips the Master Ball.
+- Recheck ball type immediately before throwing in case the game switched types after regular stock ran out.
+- Add the user's screenshot and regression tests for these cases.
+- 351 tests pass (21 skipped by configuration).
+
+---
+
 # v1.4.27
 
 ## Tiếng Việt

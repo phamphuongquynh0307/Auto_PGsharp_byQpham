@@ -19,6 +19,7 @@ Vietnamese users can follow the [detailed setup guide for every mode](HUONG_DAN.
 ## Features
 
 - **Automatic catching** — catches Pokemon shown in PGSharp's nearby feed.
+- **Protects Master Balls** — the bot never selects or throws a Master Ball; when only Master Balls remain, it leaves the encounter and waits for a refill.
 - **Quick Catch without a PGSharp key** — uses Android touch control to throw the ball and exit the encounter quickly.
 - **Editable throws** — adjust throw power and flick duration for different phones.
 - **Manual calibration** — fine-tune touch coordinates when automatic scaling is not accurate enough.

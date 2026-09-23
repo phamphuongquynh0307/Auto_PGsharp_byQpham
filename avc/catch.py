@@ -41,6 +41,7 @@ from .vision import (
     best_matching_scale, cooldown_zero_visible, find, find_ball_picker_choices,
     find_berry_button, find_enc_ball, find_exit_game_cancel, find_fast, find_popup_close,
     find_throw_ball_hub,
+    master_ball_at,
     find_dialog_buttons, find_pokestops, load_template,
     slot_has_pokemon,
 )
@@ -963,6 +964,12 @@ class CatchRoutine:
         # that, since the cost of reading a present ball as absent is a ten-minute pause.
         return 0.10 <= band <= 0.70 and hub >= 0.18
 
+    def _master_ball_visible(self, frame) -> bool:
+        """Guard the resting throw ball independently of its hub/readiness signal."""
+        scale = self.config.game_scale or (frame.shape[1] / BASE_RESOLUTION[0])
+        hub = self._throw_hub_in(frame) or self.config.ball_hub
+        return master_ball_at(frame, hub, round(185 * scale))
+
     def _is_out_of_balls(self, frame) -> bool:
         """True when the encounter's ball-count badge reads 'x0' (the red pill at the bottom
         centre) — i.e. we have no Poké Balls left. Colour match so it can't be confused with a
@@ -1008,6 +1015,8 @@ class CatchRoutine:
                 return "closed"
             if self._is_out_of_balls(frame):
                 return self._pick_another_ball(frame)
+            if self._master_ball_visible(frame):
+                return self._pick_another_ball(frame)
             if self._ball_ready(frame):
                 # The actual throwable ball is the only positive inventory signal. The live
                 # empty-bag UI still draws the bottom-right Poké Ball selector, so treating that
@@ -1031,6 +1040,8 @@ class CatchRoutine:
                 fresh = self.device.screenshot(fresh=True)
                 if not self._in_encounter(fresh, strict=True):
                     return "closed"
+                if self._master_ball_visible(fresh):
+                    return self._pick_another_ball(fresh)
                 if not self._is_out_of_balls(fresh) and self._ball_ready(fresh):
                     return "ready"
                 return self._pick_another_ball(fresh)
@@ -1052,11 +1063,28 @@ class CatchRoutine:
         if selector is not None:
             tap = getattr(self.device, "adb_tap", None) or self.device.tap
             tap(int(selector[0]), int(selector[1]))
-            choices = self._poll(lambda f: find_ball_picker_choices(f, scale=scale), 2.0)
-            if choices:
-                tap(*choices[0])
+            self._poll(lambda f: find_ball_picker_choices(f, scale=scale), 2.0)
+            sheet = self.device.screenshot(fresh=True)
+            if sheet is None or not self._in_encounter(sheet, strict=True):
+                return "closed"
+            fresh_choices = find_ball_picker_choices(sheet, scale=scale)
+            safe = [point for point in fresh_choices
+                    if not master_ball_at(sheet, point, round(90 * scale))]
+            if not safe:
+                self._trace("master_ball_guard",
+                            "Không thấy bóng thường trong bảng chọn; giữ nguyên Master Ball.", 0.0)
+                back = getattr(self.device, "back", None)
+                if back is not None:
+                    back()
+                try:
+                    cv2.imwrite("no-balls.png", frame)
+                except Exception:  # noqa: BLE001
+                    pass
+                return "empty"
+            tap(*safe[0])
             # The sheet hides the Berry button while it slides away, so only a ball counts here.
-            if self._poll(lambda f: True if self._ball_ready(f) else None, 3.0):
+            if self._poll(lambda f: True if self._ball_ready(f)
+                          and not self._master_ball_visible(f) else None, 3.0):
                 self._trace("ball_switched",
                             "Chỗ ném trống nhưng túi còn bóng; đã chọn lại bóng từ bảng chọn.",
                             0.0)
@@ -2979,12 +3007,20 @@ class CatchRoutine:
             # Reconfirm on a new frame immediately before touching the screen. This closes the
             # stale-frame race where the encounter vanished during the delay and the queued
             # throw landed on the map's centre Poké Ball.
-            if not self._in_encounter(self.device.screenshot(next_frame=True)):
+            guard_frame = self.device.screenshot(fresh=True)
+            if not self._in_encounter(guard_frame):
                 closed = True
                 if attempt == 0:
                     self._trace("throw_safety_cancel",
                                 "Hủy ném: frame mới không còn thấy nút Berry của encounter.", 0.0)
                 break
+            if self._master_ball_visible(guard_frame):
+                ball_state = self._pick_another_ball(guard_frame)
+                if ball_state == "empty":
+                    self._flag_no_balls()
+                    return threw
+                # The next cycle verifies the newly selected ball before any throw.
+                continue
             self._trace(
                 "throw_start",
                 f"Ném lần {attempt + 1}/{cfg.max_throws_per_encounter} tại {ball_xy} "

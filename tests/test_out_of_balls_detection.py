@@ -2,6 +2,7 @@
 import threading
 import unittest
 import unittest.mock
+from pathlib import Path
 from types import SimpleNamespace
 
 import cv2
@@ -10,7 +11,7 @@ import numpy as np
 from avc.catch import (
     CURRENT_OUT_OF_BALLS_REGION, LEGACY_OUT_OF_BALLS_REGION, CatchConfig, CatchRoutine,
 )
-from avc.vision import find_ball_picker_choices, find_throw_ball_hub
+from avc.vision import find_ball_picker_choices, find_throw_ball_hub, master_ball_at
 
 
 class FrameDevice:
@@ -37,6 +38,7 @@ def bare_routine(frames):
     routine._in_encounter = lambda frame, **_kwargs: frame != "map"
     routine._is_out_of_balls = lambda frame: frame == "x0"
     routine._ball_ready = lambda frame: frame == "ball"
+    routine._master_ball_visible = lambda _frame: False
     # The live empty-bag screen still contains the bottom-right selector button. Only ``ball``
     # models the large throwable ball resting at the throw point.
     routine._ball_selector_present = lambda frame: frame in ("selector", "ball")
@@ -83,6 +85,39 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
                            ("ultra", (25, 25, 25)), ("master", (170, 40, 130))):
             with self.subTest(ball=name):
                 self.assertTrue(ball_reader()._ball_ready(encounter_frame(dome)))
+
+    def test_master_ball_is_rejected_before_ready_state(self):
+        frame = encounter_frame((170, 40, 130))
+        routine = ball_reader()
+        routine.stop_event = threading.Event()
+        routine.pause_event = threading.Event()
+        routine._wait_if_paused = lambda: None
+        routine._in_encounter = lambda _frame, **_kwargs: True
+        routine._is_out_of_balls = lambda _frame: False
+        routine._pick_another_ball = lambda _frame: "empty"
+        routine.device = FrameDevice([frame])
+
+        self.assertTrue(routine._master_ball_visible(frame))
+        self.assertEqual("empty", routine._wait_for_ball_state(0.0))
+
+    def test_master_ball_appearing_immediately_before_throw_cancels_it(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(max_throws_per_encounter=1,
+                                         encounter_touch_delay_ms=0,
+                                         no_balls_missing_timeout=0)
+        routine.stop_event = threading.Event()
+        routine.stats = SimpleNamespace(throws=0)
+        routine.device = SimpleNamespace(screenshot=lambda **_kwargs: "master")
+        routine._wait_for_ball_state = lambda _timeout: "ready"
+        routine._throw_point_from_hub = lambda _hub: (610, 2380)
+        routine._in_encounter = lambda _frame: True
+        routine._master_ball_visible = lambda _frame: True
+        routine._pick_another_ball = lambda _frame: "empty"
+        routine._flag_no_balls = lambda: setattr(routine, "stopped_for_balls", True)
+
+        self.assertFalse(routine._run_encounter((610, 2380)))
+        self.assertTrue(routine.stopped_for_balls)
+        self.assertEqual(0, routine.stats.throws)
 
     def test_missing_selector_is_not_ready(self):
         for name, background in (("grass", GRASS), ("water", (170, 120, 40)),
@@ -177,13 +212,14 @@ class MissingBallDetectionTests(unittest.TestCase):
         self.assertEqual("ready", routine._wait_for_ball_state(99.0))
 
 
-def picker_frame(balls=3):
+def picker_frame(balls=3, domes=None):
     """Base-resolution encounter with the ball picker sheet open, as measured on a live phone."""
     frame = np.full((2712, 1220, 3), GRASS, dtype=np.uint8)
     frame[2040:] = (208, 208, 206)                                   # light sheet
     for i in range(balls):
         px, py = 156 + 381 * i, 2359
-        cv2.circle(frame, (px + 72, py - 95), 80, (40, 40, 220), -1)  # ball sprite
+        dome = domes[i] if domes else (40, 40, 220)
+        cv2.circle(frame, (px + 72, py - 95), 80, dome, -1)  # ball sprite
         cv2.rectangle(frame, (px - 69, py - 34), (px + 69, py + 34), (120, 99, 38), -1)  # pill
         cv2.putText(frame, "x199", (px - 55, py + 14), cv2.FONT_HERSHEY_SIMPLEX, 1.2,
                     (244, 242, 237), 3)
@@ -191,6 +227,11 @@ def picker_frame(balls=3):
 
 
 class BallPickerTests(unittest.TestCase):
+    def test_user_master_only_screenshot_is_recognised(self):
+        screenshot = cv2.imread(str(Path(__file__).parent / "fixtures" /
+                                    "master_picker_only.png"))
+        self.assertTrue(master_ball_at(screenshot, (70, 695), 30))
+
     def test_picker_offers_each_owned_type_left_to_right(self):
         choices = find_ball_picker_choices(picker_frame())
 
@@ -231,13 +272,33 @@ class BallPickerTests(unittest.TestCase):
         return routine, taps
 
     def test_switches_to_the_first_offered_ball_when_the_spot_is_bare(self):
-        routine, taps = self._routine([picker_frame(), encounter_frame((25, 25, 25))])
+        routine, taps = self._routine([picker_frame(), picker_frame(),
+                                      encounter_frame((25, 25, 25))])
 
         with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)):
             self.assertEqual("ready", routine._pick_another_ball(encounter_frame()))
 
         self.assertEqual((1067, 2440), taps[0])
         self.assertLessEqual(abs(taps[1][0] - 228), 3)
+
+    def test_never_selects_master_when_a_regular_ball_is_available(self):
+        sheet = picker_frame(2, domes=[(170, 40, 130), (40, 40, 220)])
+        routine, taps = self._routine([sheet, sheet, encounter_frame((40, 40, 220))])
+
+        with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)):
+            self.assertEqual("ready", routine._pick_another_ball(encounter_frame()))
+
+        self.assertEqual((1067, 2440), taps[0])
+        self.assertLessEqual(abs(taps[1][0] - 609), 4)
+
+    def test_master_only_picker_is_treated_as_no_safe_balls(self):
+        sheet = picker_frame(1, domes=[(170, 40, 130)])
+        routine, taps = self._routine([sheet, sheet])
+
+        with unittest.mock.patch("avc.catch.find_enc_ball", return_value=(1067, 2440)):
+            self.assertEqual("empty", routine._pick_another_ball(encounter_frame()))
+
+        self.assertEqual([(1067, 2440)], taps)
 
     def test_no_picker_and_no_ball_means_the_bag_really_is_empty(self):
         bare = encounter_frame()

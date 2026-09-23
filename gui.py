@@ -41,7 +41,7 @@ from avc.shundo import ShundoConfig, ShundoRoutine
 from avc import updater
 
 
-APP_VERSION = "1.4.27"
+APP_VERSION = "1.4.28"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.

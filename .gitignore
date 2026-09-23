@@ -29,6 +29,7 @@ baocao-*.zip
 # after the fact instead of having to be caught happening.
 stuck/
 iv_unreadable.png
+no-balls.png
 
 # Note: templates/*.png ARE committed — the app needs pokeball.png + nearby_anchor.png.
 # Note: adb/ IS committed so the project builds out of the box.
