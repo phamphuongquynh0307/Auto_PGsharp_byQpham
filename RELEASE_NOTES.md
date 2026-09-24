@@ -1,3 +1,29 @@
+# v1.4.30
+
+## Tiếng Việt
+
+### Ném bóng nhanh hơn khi Encounter mở
+
+- Thấy nút Berry là bắt đầu cú ném đầu tiên: dùng tâm bóng thật khi đọc được, hoặc điểm ném đã căn khi chưa đọc được. Nếu Encounter vẫn mở sau cú ném, bot mới xác nhận còn bóng trước khi ném tiếp.
+- Kiểm tra bằng khung hình mới từ luồng trực tiếp thay cho ảnh chụp ADB trước mỗi cú ném, bỏ khoảng 1 giây chờ đã đo trên máy người dùng.
+- Không dùng lại tâm bóng từ ảnh cũ; phân biệt bóng nằm yên với bóng đang bị kéo lên. Quick Catch nhả các điểm chạm trước khi đóng kênh điều khiển, và một khung hình mất nét đơn lẻ không còn bị tính là Pokémon thoát bóng.
+- Tiếp tục chặn Master Ball và dấu hiệu hết bóng `x0` trước cú ném.
+- 352 test đạt (21 test bỏ qua theo cấu hình).
+
+---
+
+## English
+
+### Throw sooner when an Encounter opens
+
+- The Berry button starts the first throw: use the detected ball centre when available or the calibrated throw point otherwise. If the Encounter remains open, confirm another ball before retrying.
+- Check the next live stream frame instead of forcing an ADB screenshot before every throw, removing about one second of measured wait on the user's device.
+- Clear stale ball positions and distinguish a resting ball from one being held or lifted. Quick Catch releases touch contacts before closing control, and a single missed video frame no longer counts as a breakout.
+- Continue to protect Master Balls and check the `x0` out-of-balls badge before throwing.
+- 352 tests pass (21 skipped by configuration).
+
+---
+
 # v1.4.29
 
 ## Tiếng Việt

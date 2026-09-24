@@ -913,8 +913,8 @@ class CatchRoutine:
         cfg = self.config
         game_scale = cfg.game_scale or (frame.shape[1] / BASE_RESOLUTION[0])
         hub = find_throw_ball_hub(frame, scale=game_scale)
-        if hub is not None:
-            self._throw_hub_at = hub
+        # A hub from an earlier frame must never steer a later throw after the ball moves.
+        self._throw_hub_at = hub
         return hub
 
     def _throw_point_from_hub(self, hub: tuple[int, int] | None) -> tuple[int, int]:
@@ -946,8 +946,16 @@ class CatchRoutine:
         """
         # Prefer the structural whole-frame detector. It follows the real ball when a different
         # aspect ratio, navigation bar or display-size setting shifts the game UI.
-        if self._throw_hub_in(frame) is not None:
-            return True
+        detected_hub = self._throw_hub_in(frame)
+        if detected_hub is not None:
+            # On this phone a held/rotating ball can still expose its hub, but it rises
+            # roughly 150 px above the resting ball. The Berry control moves with the
+            # encounter UI, making it a better vertical ruler than saved coordinates.
+            berry = getattr(self, "_enc_berry_at", None)
+            min_y = frame.shape[0] * 0.93
+            if berry is not None:
+                min_y = max(min_y, berry[1] + 60 * frame.shape[1] / BASE_RESOLUTION[0])
+            return detected_hub[1] >= min_y
 
         cx, cy = self.config.ball_hub
         radius = max(8, self.config.ball_hub_radius)
@@ -2844,6 +2852,9 @@ class CatchRoutine:
             self.config.berry_start, self.config.berry_end,
             (bx, by), (ex, ey), self.config.quick_flick_ms,
         )
+        # Confirm both contacts are up while the gesture's control socket is still open.
+        # Closing it below makes the later held-ball recovery a no-op on this device.
+        self.device.release_control_pointers()
         # MuMu can show the Flee button before the throw is committed. A small floor keeps
         # the first exit tap safe; configured extra wait is still honoured on slower phones.
         # MuMu commonly needs close to one second before Flee becomes actionable.  An
@@ -2897,6 +2908,7 @@ class CatchRoutine:
         second throw into every catch animation."""
         deadline = time.monotonic() + timeout
         ball_left = False
+        missing_frames = 0
         while not self.stop_event.is_set():
             self._wait_if_paused()
             frame = self.device.screenshot(next_frame=True)
@@ -2907,12 +2919,19 @@ class CatchRoutine:
                 return "closed"
             ball_ready = self._ball_ready(frame)
             if not ball_ready:
-                ball_left = True
+                # One compressed stream frame can lose the small hub while the ball has
+                # never actually left. Require two successive misses before a return can
+                # mean breakout.
+                missing_frames += 1
+                if missing_frames >= 2:
+                    ball_left = True
             elif ball_left:
                 # The same tested hub that gates the initial throw has returned after being
                 # absent, which is the breakout cue. The selector is deliberately irrelevant:
                 # the current empty-bag UI leaves that button visible too.
                 return "breakout"
+            else:
+                missing_frames = 0
             if time.monotonic() >= deadline:
                 return "timeout"
         return "timeout"
@@ -2928,40 +2947,55 @@ class CatchRoutine:
         cfg = self.config
         threw = False
         closed = False
-        for attempt in range(max(1, cfg.max_throws_per_encounter)):
+        attempt = 0
+        guard_misses = 0
+        while attempt < max(1, cfg.max_throws_per_encounter):
             if self.stop_event.is_set():
                 return threw
-            # Wait for the actual ball on every attempt. The old code only waited before the
-            # first throw and then threw at the fallback coordinate even when the last ball had
-            # just disappeared. _wait_for_ball_state also supports the new no-selector empty-bag
-            # UI, while returning immediately as soon as a normal ball is visible.
-            ready_wait = max(
-                cfg.encounter_touch_delay_ms / 1000.0,
-                cfg.no_balls_missing_timeout,
-            )
-            ball_state = self._wait_for_ball_state(ready_wait)
-            if ball_state == "empty":
-                self._flag_no_balls()
-                return threw
-            if ball_state == "closed":
-                closed = True
-                return threw
-            # _wait_for_ball_state has just located the current resting ball. Follow that real
-            # position unless the user explicitly saved a hand-aligned throw point.
-            ball_xy = self._throw_point_from_hub(getattr(self, "_throw_hub_at", None))
-            # Reconfirm on a new frame immediately before touching the screen. This closes the
-            # stale-frame race where the encounter vanished during the delay and the queued
-            # throw landed on the map's centre Poké Ball.
-            guard_frame = self.device.screenshot(fresh=True)
+            # Berry proves the first encounter is open. Try its first throw even if the hub
+            # detector cannot read the ball. Only retries need a positive ball signal: after a
+            # throw the encounter can stay open while the ball is flying or the bag is empty.
+            if attempt > 0:
+                ready_wait = max(
+                    cfg.encounter_touch_delay_ms / 1000.0,
+                    cfg.no_balls_missing_timeout,
+                )
+                ball_state = self._wait_for_ball_state(ready_wait)
+                if ball_state == "empty":
+                    self._flag_no_balls()
+                    return threw
+                if ball_state == "closed":
+                    closed = True
+                    return threw
+            # Reconfirm on the next distinct live frame immediately before touching the
+            # screen. A forced ADB screencap costs about a second on this phone and made
+            # every throw visibly one beat late. screenshot(next_frame=True) still bounds
+            # frame age and falls back to ADB if the stream has stopped.
+            guard_frame = self.device.screenshot(next_frame=True)
             if not self._in_encounter(guard_frame):
                 closed = True
                 if attempt == 0:
                     self._trace("throw_safety_cancel",
                                 "Hủy ném: frame mới không còn thấy nút Berry của encounter.", 0.0)
                 break
-            if self._master_ball_visible(guard_frame):
+            if self._master_ball_visible(guard_frame) or self._is_out_of_balls(guard_frame):
                 self._flag_no_balls()
                 return threw
+            ready_now = self._ball_ready(guard_frame)
+            if attempt > 0 and not ready_now:
+                # The stream may have shown a ball that has since moved or disappeared.
+                # Do not count an unseen ball as a throw; let the next wait settle it.
+                guard_misses += 1
+                if guard_misses >= 3:
+                    self._trace("throw_ball_missing",
+                                "Hủy ném: ảnh mới không xác nhận được bóng tại điểm ném.", 0.0)
+                    return threw
+                continue
+            guard_misses = 0
+            # Use the real hub when a resting ball is visible. On the first throw alone, a
+            # missed hub falls back to the calibrated point rather than stalling at Encounter.
+            ball_xy = self._throw_point_from_hub(
+                getattr(self, "_throw_hub_at", None) if ready_now else None)
             self._trace(
                 "throw_start",
                 f"Ném lần {attempt + 1}/{cfg.max_throws_per_encounter} tại {ball_xy} "
@@ -2970,6 +3004,7 @@ class CatchRoutine:
             )
             self.stats.throws += 1
             threw = True
+            attempt += 1
             if cfg.quick_catch:
                 self._quick_throw(ball_xy)
             else:

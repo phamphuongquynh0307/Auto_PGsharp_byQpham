@@ -110,11 +110,81 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
         routine._throw_point_from_hub = lambda _hub: (610, 2380)
         routine._in_encounter = lambda _frame: True
         routine._master_ball_visible = lambda _frame: True
+        routine._is_out_of_balls = lambda _frame: False
         routine._flag_no_balls = lambda: setattr(routine, "stopped_for_balls", True)
 
         self.assertFalse(routine._run_encounter((610, 2380)))
         self.assertTrue(routine.stopped_for_balls)
         self.assertEqual(0, routine.stats.throws)
+
+    def test_quick_throw_releases_contacts_before_closing_control(self):
+        events = []
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(berry_start=(100, 2300), berry_end=(300, 2300),
+                                         quick_flick_ms=100, post_throw_wait_ms=0,
+                                         flee_taps=1, flee_xy=(120, 170))
+        routine.stop_event = threading.Event()
+        routine._throw_vector = lambda _xy: ((610, 2380), (610, 1680))
+        routine._interruptible_sleep = lambda _seconds: None
+        routine.device = SimpleNamespace(
+            quick_catch_throw=lambda *_args: events.append("throw"),
+            release_control_pointers=lambda: events.append("release"),
+            close_control=lambda: events.append("close"),
+            adb_tap=lambda *_args: events.append("flee"),
+        )
+
+        routine._quick_throw((610, 2380))
+        self.assertEqual(["throw", "release", "close", "flee"], events)
+
+    def test_first_throw_uses_fallback_when_berry_is_visible_but_hub_is_missing(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(max_throws_per_encounter=1,
+                                         encounter_touch_delay_ms=0,
+                                         no_balls_missing_timeout=0,
+                                         quick_catch=False, catch_timeout=1.0)
+        routine.stop_event = threading.Event()
+        routine.stats = SimpleNamespace(throws=0, encounters=0)
+        screenshot = unittest.mock.Mock(return_value="missing")
+        routine.device = SimpleNamespace(screenshot=screenshot)
+        routine._in_encounter = lambda _frame: True
+        routine._master_ball_visible = lambda _frame: False
+        routine._is_out_of_balls = lambda _frame: False
+        routine._ball_ready = lambda _frame: False
+        routine._throw_point_from_hub = lambda _hub: (610, 2380)
+        routine._throw = unittest.mock.Mock()
+        routine._throw_outcome = lambda _timeout: "closed"
+        routine._settle_after_encounter = lambda: None
+        routine._trace = lambda *_args: None
+
+        self.assertTrue(routine._run_encounter((610, 2380)))
+        screenshot.assert_called_once_with(next_frame=True)
+        routine._throw.assert_called_once_with((610, 2380))
+        self.assertEqual(1, routine.stats.throws)
+
+    def test_open_encounter_checks_remaining_ball_after_first_throw(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(max_throws_per_encounter=2,
+                                         encounter_touch_delay_ms=0,
+                                         no_balls_missing_timeout=0,
+                                         quick_catch=False, catch_timeout=1.0)
+        routine.stop_event = threading.Event()
+        routine.stats = SimpleNamespace(throws=0)
+        routine.device = SimpleNamespace(screenshot=lambda **_kwargs: "encounter")
+        routine._in_encounter = lambda _frame: True
+        routine._master_ball_visible = lambda _frame: False
+        routine._is_out_of_balls = lambda _frame: False
+        routine._ball_ready = lambda _frame: False
+        routine._throw_point_from_hub = lambda _hub: (610, 2380)
+        routine._throw = unittest.mock.Mock()
+        routine._throw_outcome = lambda _timeout: "timeout"
+        routine._wait_for_ball_state = unittest.mock.Mock(return_value="empty")
+        routine._flag_no_balls = lambda: setattr(routine, "stopped_for_balls", True)
+        routine._trace = lambda *_args: None
+
+        self.assertTrue(routine._run_encounter((610, 2380)))
+        routine._throw.assert_called_once()
+        routine._wait_for_ball_state.assert_called_once()
+        self.assertTrue(routine.stopped_for_balls)
 
     def test_missing_selector_is_not_ready(self):
         for name, background in (("grass", GRASS), ("water", (170, 120, 40)),
@@ -148,6 +218,21 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
         self.assertLessEqual(abs(found[0] - shifted[0]), 2)
         self.assertLessEqual(abs(found[1] - shifted[1]), 2)
 
+    def test_lifted_ball_hub_is_not_a_resting_throw_ball(self):
+        routine = ball_reader()
+        routine._enc_berry_at = (147, 2467)
+        lifted = encounter_frame((30, 30, 225), center=(655, 2470))
+        self.assertIsNotNone(find_throw_ball_hub(lifted))
+        self.assertFalse(routine._ball_ready(lifted))
+
+    def test_missing_ball_clears_previous_throw_position(self):
+        routine = ball_reader()
+        shifted = (700, 2570)
+        self.assertIsNotNone(routine._throw_hub_in(
+            encounter_frame((30, 30, 225), center=shifted)))
+        self.assertIsNone(routine._throw_hub_in(encounter_frame()))
+        self.assertIsNone(routine._throw_hub_at)
+
     def test_detected_hub_moves_the_throw_start_but_manual_alignment_still_wins(self):
         routine = object.__new__(CatchRoutine)
         routine.config = CatchConfig()
@@ -159,6 +244,20 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
 
 
 class MissingBallDetectionTests(unittest.TestCase):
+    def test_one_dropped_hub_frame_does_not_mean_breakout(self):
+        routine = object.__new__(CatchRoutine)
+        routine.stop_event = threading.Event()
+        routine.pause_event = threading.Event()
+        routine._wait_if_paused = lambda: None
+        screenshot = unittest.mock.Mock(side_effect=["ready", "missing", "ready",
+                                                 "missing", "missing", "ready"])
+        routine.device = SimpleNamespace(screenshot=screenshot)
+        routine._in_encounter = lambda _frame, **_kwargs: True
+        routine._ball_ready = lambda frame: frame == "ready"
+
+        self.assertEqual("breakout", routine._throw_outcome(5.0))
+        self.assertEqual(6, screenshot.call_count)
+
     def test_three_missing_frames_in_an_open_encounter_mean_empty(self):
         routine = bare_routine(["missing", "missing", "missing", "missing"])
 
