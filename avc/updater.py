@@ -66,13 +66,16 @@ def download_update(release: dict, exe_path: str) -> tuple[str, Path]:
     digest = _get(asset_url(HASH_NAME), limit=256).decode("ascii").strip().split()[0]
     if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
         raise ValueError("Invalid update digest")
-    target = Path(exe_path)
-    staged = target.with_name(target.name + ".update")
+    staged = _staged_path(exe_path)
+    # Written under .part and renamed only once verified, so a download cut short by closing
+    # the app can never be mistaken for a finished one.
+    partial = staged.with_name(staged.name + ".part")
+    staged.unlink(missing_ok=True)
     source = asset_url(EXE_NAME)
     request = urllib.request.Request(source, headers={"User-Agent": "AutoCatchPokemonPGSharp-Updater"})
     hasher = hashlib.sha256()
     try:
-        with urllib.request.urlopen(request, timeout=60) as response, staged.open("wb") as output:
+        with urllib.request.urlopen(request, timeout=60) as response, partial.open("wb") as output:
             total = 0
             while block := response.read(1024 * 1024):
                 total += len(block)
@@ -82,33 +85,70 @@ def download_update(release: dict, exe_path: str) -> tuple[str, Path]:
                 output.write(block)
         if hasher.hexdigest().lower() != digest.lower():
             raise ValueError("Update digest mismatch")
+        os.replace(partial, staged)
     except Exception:
-        staged.unlink(missing_ok=True)
+        partial.unlink(missing_ok=True)
         raise
     return version, staged
 
 
+def _staged_path(exe_path: str) -> Path:
+    target = Path(exe_path)
+    return target.with_name(target.name + ".update")
+
+
+def discard_stale(exe_path: str) -> None:
+    """Remove leftovers of an update that was never installed (e.g. the app was killed)."""
+    staged = _staged_path(exe_path)
+    for leftover in (staged, staged.with_name(staged.name + ".part")):
+        try:
+            leftover.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _clean_environment() -> dict[str, str]:
+    """This process's environment, minus what makes a one-file EXE think it is our child.
+
+    The PyInstaller bootloader passes _PYI_* variables to its own child process. Inherited by
+    the updated EXE, they make it reuse this run's _MEI folder — which is deleted as we exit —
+    so the new version never opens. PYINSTALLER_RESET_ENVIRONMENT makes it start fresh.
+    """
+    env = {key: value for key, value in os.environ.items()
+           if not key.upper().startswith(("_PYI_", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def install_on_exit(exe_path: str, staged: Path) -> None:
-    """Start a detached helper that waits for this process, swaps the EXE, then restarts."""
+    """Start a detached helper that waits for this app, swaps the EXE, then restarts it."""
     if not getattr(sys, "frozen", False) or os.name != "nt":
         return
     helper = Path(tempfile.gettempdir()) / f"avc-update-{os.getpid()}.ps1"
     # Paths are passed as process arguments rather than interpolated into PowerShell code.
+    # Both processes of the one-file build are waited for: the bootloader parent keeps the
+    # EXE locked until it has cleaned up _MEI. If the swap still cannot happen, the old EXE
+    # is reopened anyway rather than leaving the user with no app at all.
     helper.write_text(
-        "param([int]$ParentPid, [string]$Exe, [string]$Staged)\n"
-        "try { Wait-Process -Id $ParentPid -ErrorAction SilentlyContinue } catch {}\n"
-        "for ($i = 0; $i -lt 30; $i++) {\n"
-        "  try { Move-Item -LiteralPath $Staged -Destination $Exe -Force -ErrorAction Stop; "
-        "Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe); break }\n"
+        "param([string]$Pids, [string]$Exe, [string]$Staged)\n"
+        "foreach ($p in ($Pids -split ',')) { try { Wait-Process -Id $p -Timeout 60 -ErrorAction Stop } catch {} }\n"
+        "$moved = $false\n"
+        "for ($i = 0; $i -lt 120 -and -not $moved; $i++) {\n"
+        "  try { Move-Item -LiteralPath $Staged -Destination $Exe -Force -ErrorAction Stop; $moved = $true }\n"
         "  catch { Start-Sleep -Seconds 1 }\n"
         "}\n"
+        "Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe)\n"
         "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n",
         encoding="utf-8",
     )
-    subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-         str(helper), "-ParentPid", str(os.getpid()), "-Exe", exe_path,
-         "-Staged", str(staged)],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        close_fds=True,
-    )
+    pids = ",".join(str(pid) for pid in {os.getpid(), os.getppid()})
+    args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+            str(helper), "-Pids", pids, "-Exe", exe_path, "-Staged", str(staged)]
+    flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+    # Leave any job object we were started in, or closing the app can take the helper with
+    # it. A job that forbids breakaway refuses the flag outright, so fall back without it.
+    try:
+        subprocess.Popen(args, env=_clean_environment(), close_fds=True,
+                         creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
+    except OSError:
+        subprocess.Popen(args, env=_clean_environment(), close_fds=True, creationflags=flags)

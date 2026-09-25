@@ -86,7 +86,17 @@ class PopupCloseScaleTests(unittest.TestCase):
         self.assertTrue(routine._handle_popups(frame))
         self.assertEqual([(608, 1564)], taps)
 
-    def test_known_map_rate_limits_the_heavy_popup_scan(self):
+    def test_known_encounter_rate_limits_the_heavy_popup_scan(self):
+        routine = object.__new__(CatchRoutine)
+        routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
+        routine._popup_full_scan_at = 95.0
+        routine._in_encounter = lambda _frame: True
+
+        with patch("avc.catch.time.monotonic", return_value=100.0):
+            self.assertFalse(routine._needs_full_popup_scan(object()))
+
+    def test_visible_nearby_bar_does_not_skip_the_popup_scan(self):
+        """PGSharp's bar overlays game popups, so seeing it must not suppress the scan."""
         routine = object.__new__(CatchRoutine)
         routine.config = SimpleNamespace(popup_known_screen_interval=8.0)
         routine._popup_full_scan_at = 95.0
@@ -94,7 +104,7 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine._bar_visible = lambda _frame: True
 
         with patch("avc.catch.time.monotonic", return_value=100.0):
-            self.assertFalse(routine._needs_full_popup_scan(object()))
+            self.assertTrue(routine._needs_full_popup_scan(object()))
 
     def test_unknown_screen_still_gets_an_immediate_popup_scan(self):
         routine = object.__new__(CatchRoutine)
@@ -442,7 +452,8 @@ class PopupCloseScaleTests(unittest.TestCase):
                     routine._encounter_visible = lambda _frame: False
                     routine._anchor_in = lambda frame: (972, 1053) if frame is fresh_map else None
                 with patch(f"{module_name}.find_dialog_buttons", return_value=[]), \
-                        patch(f"{module_name}.find_popup_close", return_value=match):
+                        patch(f"{module_name}.find_popup_close",
+                              side_effect=lambda frame, *_a, **_k: match if frame is stale else None):
                     self.assertFalse(routine._handle_popups(stale))
                 self.assertEqual([], taps)
 
@@ -468,8 +479,8 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine._encounter_visible = lambda _frame: False
         routine._anchor_in = lambda frame: (972, 1053) if frame is fresh_map else None
 
-        def find_button(_frame, template, **_kwargs):
-            return [Match(500, 1500, 80, 50, 0.9)] if template is claim else []
+        def find_button(frame, template, **_kwargs):
+            return [Match(500, 1500, 80, 50, 0.9)] if template is claim and frame is stale else []
 
         with patch("avc.shundo.find_dialog_buttons", return_value=[]), \
                 patch("avc.shundo.find_popup_close", return_value=None), \
@@ -488,7 +499,7 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine.config = CatchConfig()
         routine.device = SimpleNamespace(
             tap=lambda *xy: taps.append(xy),
-            screenshot=lambda **_kwargs: next(captures),
+            screenshot=lambda **_kwargs: next(captures, map_frame),
         )
         routine.stats = SimpleNamespace(last_event="")
         routine.stop_event = threading.Event()

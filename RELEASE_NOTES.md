@@ -1,3 +1,43 @@
+# v1.4.31
+
+## Tiếng Việt
+
+### Bắt popup nhanh và chắc hơn
+
+- Thanh Nearby của PGSharp nằm đè lên cả popup của game, nên bot không còn coi "thấy thanh Nearby" là "không có popup". Popup trên map (cảnh báo tốc độ, thời tiết, medal…) giờ được xử lý ngay trong vòng quét, thay vì có thể chờ tới 8 giây.
+- Popup có dấu X giờ được đóng thật; trước đây bot thấy thanh Nearby nên bỏ qua. Vẫn xác nhận lại X trên ảnh chụp mới trước khi bấm.
+- Màn CLAIM REWARDS khi lên level (Catch và Shundo): đóng lần lượt các màn phần thưởng bằng nút X, không còn bấm mù vào giữa màn hình.
+- Tự bấm Back khi kẹt: nếu bấm Nearby 3 lần liền mà không mở được encounter, bot coi là đang bị popup lạ che và bấm Back sau 12 giây.
+
+### Tự cập nhật hoạt động trở lại
+
+- Sửa lỗi app không tự mở lại sau khi cập nhật ("Failed to load Python DLL").
+- Chờ app cũ thoát hẳn rồi mới thay EXE; nếu không thay được vẫn mở lại app cũ.
+- Hiện trạng thái tải và lỗi cập nhật trên log; tải xong app hỏi khởi động lại ngay. File tải dở được dọn khi mở app.
+- Lưu ý: từ v1.4.30 lên bản này, app có thể không tự mở lại một lần — hãy mở lại bằng tay.
+- 356 test đạt.
+
+---
+
+## English
+
+### Faster, more reliable popup handling
+
+- PGSharp's Nearby bar is drawn over game popups too, so seeing it no longer counts as "no popup". Map popups (speed, weather, medals…) are handled on the next scan instead of waiting up to 8 seconds.
+- Popups with a close X are actually closed now; the visible Nearby bar used to veto the tap. The X is still confirmed on a fresh capture first.
+- Level-up CLAIM REWARDS (Catch and Shundo): reward cards are closed through their X, with no blind centre taps.
+- Stuck recovery: three Nearby taps in a row that open nothing count as an unknown popup, and BACK is pressed after 12 seconds.
+
+### Auto-update works again
+
+- Fixed the app not reopening after an update ("Failed to load Python DLL").
+- Wait for the old app to fully exit before swapping the EXE; reopen the old one if the swap fails.
+- Show download progress and update errors in the log, and offer to restart once the update is ready. Partial downloads are cleaned up at startup.
+- Note: updating from v1.4.30 to this version may not reopen the app once — open it manually.
+- 356 tests pass.
+
+---
+
 # v1.4.30
 
 ## Tiếng Việt

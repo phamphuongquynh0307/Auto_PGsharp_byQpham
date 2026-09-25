@@ -85,6 +85,16 @@ class StuckBackTests(unittest.TestCase):
             self._handle(routine, at)
         self.assertEqual([], routine.backs)
 
+    def test_bar_in_view_with_rejected_taps_still_counts_as_stuck(self):
+        """PGSharp draws the bar over game popups; taps that keep opening nothing expose them."""
+        routine = _routine()
+        routine._bar_visible = lambda _frame: True
+        routine._engage_retry_streak = CatchRoutine.STUCK_REJECTED_TAPS
+        self._handle(routine, 1000.0)
+
+        self.assertTrue(self._handle(routine, 1013.0))
+        self.assertEqual(1, len(routine.backs))
+
     def test_the_timer_restarts_the_moment_the_screen_is_readable_again(self):
         routine = _routine()
         self._handle(routine, 1000.0)

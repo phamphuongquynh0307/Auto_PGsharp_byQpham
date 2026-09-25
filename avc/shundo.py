@@ -920,12 +920,11 @@ class ShundoRoutine:
             )
             if close is not None:
                 # Never re-tap an X seen only in a stale stream frame after the popup
-                # disappeared. The fresh map also rules out X-shaped artwork underneath.
+                # disappeared. (Not via the Nearby anchor: PGSharp draws it above game popups
+                # too, so seeing it proves nothing about the popup.)
                 fresh_capture = getattr(self.device, "screenshot", None)
                 if callable(fresh_capture):
                     fresh = fresh_capture(fresh=True)
-                    if self._anchor_in(fresh) is not None:
-                        return False
                     confirmed = find_popup_close(
                         fresh,
                         self._close_btns,
@@ -962,15 +961,13 @@ class ShundoRoutine:
             # This button is a large, low-detail green pill. At the generic 0.70 popup
             # threshold, static map scenery can occasionally resemble it closely enough to
             # start the reward-dismiss loop, whose centre taps are unsafe on an ordinary map.
-            # Require a stronger match on a separate fresh capture, and reject it outright
-            # when the Nearby anchor proves that the fresh screen is already the map.
+            # Require a stronger match at the same spot on a separate fresh capture. (The
+            # Nearby anchor can't veto it: PGSharp draws it over the level-up screen too.)
             claim_threshold = max(0.82, self.config.popup_threshold)
             m = find_fast(frame, self._claim_rewards, threshold=claim_threshold,
                           scales=CALIBRATION_SWEEP, cache=fast_cache)
             if m:
                 fresh = self.device.screenshot(fresh=True)
-                if self._anchor_in(fresh) is not None:
-                    return False
                 confirmed = find_fast(
                     fresh, self._claim_rewards, threshold=claim_threshold,
                     scales=CALIBRATION_SWEEP,
@@ -984,15 +981,21 @@ class ShundoRoutine:
                     return False
                 self.device.tap(*second)
                 self.stats.last_event = "popup"
-                # Advance through the reward cards until the nearby bar returns.
-                cx, cy = self.config.pt((610, 1000), "TC")
+                # Close the reward cards through their X until two frames in a row show none.
+                # No blind centre taps: the anchor can't say the map is back, and a centre tap
+                # on the returned map lands on whatever is there.
+                quiet = 0
                 deadline = time.monotonic() + 15.0
-                while time.monotonic() < deadline and not self.stop_event.is_set():
+                while quiet < 2 and time.monotonic() < deadline and not self.stop_event.is_set():
                     self._interruptible_sleep(0.5)
-                    f = self.device.screenshot()
-                    if self._anchor_in(f) is not None:
-                        break
-                    self.device.tap(cx, cy)
+                    close = find_popup_close(
+                        self.device.screenshot(fresh=True), self._close_btns,
+                        threshold=max(0.82, self.config.popup_threshold),
+                        scales=self._popup_scales,
+                    )
+                    if close is not None:
+                        self.device.tap(*close.center)
+                    quiet = 0 if close is not None else quiet + 1
                 return True
         # Do not run a second, lower-confidence X search here. The high-confidence search
         # above already handles real close buttons. Repeating it at the generic 0.70 popup

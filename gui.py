@@ -41,7 +41,7 @@ from avc.shundo import ShundoConfig, ShundoRoutine
 from avc import updater
 
 
-APP_VERSION = "1.4.30"
+APP_VERSION = "1.4.31"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -902,7 +902,13 @@ class App:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.bind("<Destroy>", self._on_root_destroy, add="+")
         if getattr(sys, "frozen", False):
+            updater.discard_stale(sys.executable)
             threading.Thread(target=self._check_update, daemon=True).start()
+
+    def _update_log(self, message: str) -> None:
+        """Log from the update threads: into the UI log (via Tk's thread) and the log file."""
+        diag.write(message)
+        self.root.after(0, lambda: self._log(message))
 
     def _check_update(self) -> None:
         try:
@@ -910,7 +916,7 @@ class App:
             if release is not None:
                 self.root.after(0, lambda: self._offer_update(release))
         except Exception as error:  # network/update errors must never stop the bot
-            diag.write(f"Cập nhật tự động chưa thực hiện được: {error}")
+            self._update_log(f"Không kiểm tra được bản cập nhật: {error}")
 
     def _offer_update(self, release) -> None:
         version = release["tag_name"]
@@ -923,6 +929,7 @@ class App:
                        "when the app closes, and reopen the app?")
             title = "App update"
         if messagebox.askyesno(title, message, parent=self.root):
+            self._log(f"Đang tải bản {version} (~135 MB)... đừng đóng app cho tới khi tải xong.")
             threading.Thread(target=self._download_update, args=(release,), daemon=True).start()
 
     def _download_update(self, release) -> None:
@@ -930,11 +937,19 @@ class App:
             version, staged = updater.download_update(release, sys.executable)
             self.root.after(0, lambda: self._update_ready(version, staged))
         except Exception as error:
-            diag.write(f"Không tải được bản cập nhật: {error}")
+            self._update_log(f"Không tải được bản cập nhật: {error}")
 
     def _update_ready(self, version, staged) -> None:
         self._staged_update = staged
         self._log(f"Đã tải và kiểm tra bản {version}. App sẽ cập nhật khi đóng cửa sổ.")
+        if self.lang == "vi":
+            title, message = ("Cập nhật ứng dụng",
+                              f"Đã tải xong bản {version}. Khởi động lại app ngay để cập nhật?")
+        else:
+            title, message = ("App update",
+                              f"Version {version} is ready. Restart the app now to update?")
+        if messagebox.askyesno(title, message, parent=self.root):
+            self._on_close()
 
     def tr(self, key: str) -> str:
         return LANG[key][self.lang]

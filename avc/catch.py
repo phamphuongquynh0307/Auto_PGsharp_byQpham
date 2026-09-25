@@ -369,7 +369,7 @@ class CatchConfig:
     # Full popup recognition costs roughly half a second on the target phone. A screen already
     # proven to be the map or an encounter gets a bounded periodic sweep; unknown screens are
     # still checked immediately.
-    popup_known_screen_interval: float = 8.0
+    popup_known_screen_interval: float = 3.0
     # Every popup handler above recognises its dialog by a template cropped from one phone
     # running one PGSharp/Pokemon GO build. A build that draws a modal differently — another
     # language, theme, game version, emulator — leaves the routine staring at something it has
@@ -596,6 +596,7 @@ class CatchRoutine:
     # but the answer feeds a timer measured in tens of seconds, so sampling every poll would
     # buy nothing and cost two detections a frame.
     STUCK_SAMPLE = 1.0
+    STUCK_REJECTED_TAPS = 3     # Nearby taps in a row that opened nothing: see _stuck_back_due
 
     def __init__(self, device: Device, config: CatchConfig | None = None) -> None:
         self.device = device
@@ -1634,10 +1635,10 @@ class CatchRoutine:
         last = getattr(self, "_popup_full_scan_at", 0.0)
         if interval <= 0 or time.monotonic() - last >= interval:
             return True
-        # If a popup hides both stable anchors it is checked immediately. A modal that happens to
-        # preserve one behind its dim layer is still bounded by the periodic pass; all throws are
-        # independently encounter-gated, so the skipped heavy scan cannot produce a blind swipe.
-        return not (self._in_encounter(frame) or self._bar_visible(frame))
+        # Only an open encounter counts as proof there is no popup. The Nearby bar is a PGSharp
+        # overlay drawn above the game, so it stays visible over speed/weather/medal popups too;
+        # trusting it left those popups unhandled for up to a whole interval on the map.
+        return not self._in_encounter(frame)
 
     def _bar_visible(self, frame) -> bool:
         """True when the Nearby bar's '@' is on screen — i.e. we are back on the map.
@@ -2115,12 +2116,11 @@ class CatchRoutine:
             if close is not None:
                 # The stream can keep the popup's last frame after it has closed. A second
                 # tap at that position then lands on the map and can open another screen.
-                # Confirm the X on a one-shot capture before issuing the tap.
+                # Confirm the X on a one-shot capture before issuing the tap. (Not via the Nearby
+                # bar: that PGSharp overlay stays on screen above the popup, so it proves nothing.)
                 fresh_capture = getattr(self.device, "screenshot", None)
                 if callable(fresh_capture):
                     fresh = fresh_capture(fresh=True)
-                    if self._bar_visible(fresh):
-                        return False
                     confirmed = find_popup_close(
                         fresh,
                         (self._close_btn, self._close_btn_blue, self._close_btn_white),
@@ -2204,37 +2204,31 @@ class CatchRoutine:
                 self.device.tap(rx, ry)
                 self.stats.last_event = "popup"
                 
-                # Repeatedly tap center to dismiss items until map screen (nearby anchor) is back
-                cx, cy = self.config.pt((610, 1000), "TC")
+                # Close the reward cards that follow through their bottom X. The Nearby bar can't
+                # tell us the map is back — PGSharp draws it over these cards too — so the loop
+                # ends once two frames in a row show no X, and never blind-taps the screen: a
+                # centre tap on a map that has already returned lands on whatever is there.
+                region = self.config.rect((400, 2000, 420, 712), "BC")
+                quiet = 0
                 deadline = time.monotonic() + 15.0
-                while time.monotonic() < deadline and not self.stop_event.is_set():
+                while quiet < 2 and time.monotonic() < deadline and not self.stop_event.is_set():
                     self._interruptible_sleep(0.5)
                     f = self.device.screenshot()
-                    if self._bar_visible(f):
-                        break
-                    # If close button appears in the center bottom region, tap it immediately
                     closed = False
                     for btn in (self._close_btn, self._close_btn_blue, self._close_btn_white):
-                        if btn is not None:
-                            m_close = find_fast(f, btn, threshold=0.7,
-                                                scales=self._game_popup_scales,
-                                                region=self.config.rect((400, 2000, 420, 712), "BC"))
-                            if m_close:
-                                fresh = self.device.screenshot(fresh=True)
-                                if self._bar_visible(fresh):
-                                    return True
-                                fresh_close = find_fast(
-                                    fresh, btn, threshold=0.7,
-                                    scales=self._game_popup_scales,
-                                    region=self.config.rect((400, 2000, 420, 712), "BC"))
-                                if fresh_close:
-                                    self.device.tap(*fresh_close[0].center)
-                                    closed = True
-                                break
-                    if closed:
-                        self._interruptible_sleep(0.5)
-                        continue
-                    self.device.tap(cx, cy)
+                        if btn is None or not find_fast(f, btn, threshold=0.7,
+                                                        scales=self._game_popup_scales,
+                                                        region=region):
+                            continue
+                        # Confirm on a one-shot capture: the stream can lag a closed card.
+                        fresh_close = find_fast(self.device.screenshot(fresh=True), btn,
+                                                threshold=0.7, scales=self._game_popup_scales,
+                                                region=region)
+                        if fresh_close:
+                            self.device.tap(*fresh_close[0].center)
+                            closed = True
+                        break
+                    quiet = 0 if closed else quiet + 1
                 return True
         # Pokéstop photo-disc screen -> close it via its bottom-center 'X'. The X always sits
         # at the same spot, so search only a tight box around it and, if the template still
@@ -2319,7 +2313,12 @@ class CatchRoutine:
         now = time.monotonic()
         if now - self._stuck_checked_at >= self.STUCK_SAMPLE:
             self._stuck_checked_at = now
-            if self._bar_visible(frame) or self._in_encounter(frame):
+            # The Nearby bar alone is not proof of the map: PGSharp draws it above game popups
+            # too. It only counts while taps on it are still opening encounters — a streak of
+            # rejected taps with the bar in view means something unrecognised sits on top.
+            taps_blocked = (getattr(self, "_engage_retry_streak", 0)
+                            >= self.STUCK_REJECTED_TAPS)
+            if self._in_encounter(frame) or (self._bar_visible(frame) and not taps_blocked):
                 self._stuck_since = 0.0
             elif not self._stuck_since:
                 self._stuck_since = now

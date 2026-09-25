@@ -41,6 +41,26 @@ class UpdaterTests(unittest.TestCase):
                     updater.download_update(release, exe)
             self.assertFalse(staged.exists())
 
+    def test_stale_and_partial_downloads_are_discarded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            exe = Path(directory) / updater.EXE_NAME
+            leftovers = [exe.with_name(exe.name + ".update"),
+                         exe.with_name(exe.name + ".update.part")]
+            for path in leftovers:
+                path.write_bytes(b"partial")
+            updater.discard_stale(str(exe))
+            self.assertFalse(any(path.exists() for path in leftovers))
+
+    def test_restart_environment_does_not_inherit_the_old_bundle(self):
+        with patch.dict(updater.os.environ, {"_PYI_APPLICATION_HOME_DIR": "C:/old/_MEI1",
+                                             "_PYI_PARENT_PROCESS_LEVEL": "1",
+                                             "KEEP_ME": "yes"}):
+            env = updater._clean_environment()
+        self.assertNotIn("_PYI_APPLICATION_HOME_DIR", env)
+        self.assertNotIn("_PYI_PARENT_PROCESS_LEVEL", env)
+        self.assertEqual("yes", env["KEEP_ME"])
+        self.assertEqual("1", env["PYINSTALLER_RESET_ENVIRONMENT"])
+
     def test_check_only_reads_release_metadata(self):
         release = {"tag_name": "v1.4.27"}
         with patch.object(updater, "_get", return_value=json.dumps(release).encode()) as get:
