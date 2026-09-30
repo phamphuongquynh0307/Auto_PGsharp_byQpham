@@ -49,8 +49,6 @@ class PopupCloseScaleTests(unittest.TestCase):
                 routine._dismiss = dismiss
                 if routine_type is CatchRoutine:
                     routine._trace = lambda *_args: None
-                else:
-                    routine._teleport_blocked = False
 
                 with patch(f"{module_name}.find_dialog_buttons", return_value=[]):
                     self.assertTrue(routine._handle_popups(frame))
@@ -324,7 +322,6 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine._scales = (0.55,)
         routine._popup_scales = (0.66,)
         routine._cancel_btn = None
-        routine._teleport_blocked = False
 
         with patch("avc.shundo.find_dialog_buttons",
                    return_value=[(720, 1520), (490, 1520)]), \
@@ -334,11 +331,73 @@ class PopupCloseScaleTests(unittest.TestCase):
 
         self.assertTrue(handled)
         self.assertEqual([(490, 1520)], taps)
-        # CANCEL is pressed, but the run is NOT declared dead. "Two buttons in a centre box,
-        # the left one chosen" describes a great many Android dialogs, and treating that as
-        # proof that Go Plus is connected turned any stray dialog into a permanent silent stop.
-        # Only the Go Plus warning's own template, matched in its own tight region, may do that.
-        self.assertFalse(routine._teleport_blocked)
+        # Without a confirmed Go Plus warning, the generic dialog takes CANCEL.
+
+    def test_shundo_confirms_recognized_go_plus_warning_and_keeps_running(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = False
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._exit_game_cancel = None
+        routine._cancel_btn = object()
+        routine._scales = (1.0,)
+
+        with patch("avc.shundo.find", return_value=[SimpleNamespace(center=(490, 1520))]), \
+                patch("avc.shundo.find_dialog_buttons",
+                      return_value=[(720, 1520), (490, 1520)]):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(720, 1520)], taps)
+        self.assertEqual("popup", routine.stats.last_event)
+
+    def test_shundo_does_not_guess_confirmation_without_a_button(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = False
+        routine.device = SimpleNamespace(tap=lambda *xy: taps.append(xy))
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._exit_game_cancel = None
+        routine._cancel_btn = object()
+        routine._scales = (1.0,)
+
+        with patch("avc.shundo.find", return_value=[SimpleNamespace(center=(490, 1520))]), \
+                patch("avc.shundo.find_dialog_buttons", return_value=[]):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([], taps)
+
+    def test_shundo_confirms_go_plus_warning_from_android_text_when_template_misses(self):
+        taps = []
+        routine = object.__new__(ShundoRoutine)
+        routine.config = _popup_config()
+        routine.config.use_ui_dump = True
+        routine.device = SimpleNamespace(
+            tap=lambda *xy: taps.append(xy),
+            ui_dump=lambda: '<node text="Go Plus is connected, teleport may trigger a softban"/>',
+        )
+        routine.stats = SimpleNamespace(last_event="")
+        routine._popup_block_until = 0.0
+        routine._exit_game_cancel = None
+        routine._cancel_btn = None
+
+        state = SimpleNamespace(
+            dialog_buttons=[("CANCEL", (490, 1520)), ("OK", (720, 1520))],
+            cancel_button=(490, 1520),
+        )
+        with patch("avc.shundo.find_dialog_buttons",
+                   return_value=[(490, 1520), (720, 1520)]), \
+                patch("avc.shundo.uidump.parse", return_value=state):
+            handled = routine._handle_popups(np.zeros((2712, 1220, 3), dtype=np.uint8))
+
+        self.assertTrue(handled)
+        self.assertEqual([(720, 1520)], taps)
 
     def test_shundo_uses_visual_dialog_fallback_when_ui_dump_is_unsafe(self):
         taps = []
@@ -356,7 +415,6 @@ class PopupCloseScaleTests(unittest.TestCase):
         routine._scales = (0.55,)
         routine._popup_scales = (0.66,)
         routine._cancel_btn = None
-        routine._teleport_blocked = False
 
         with patch("avc.shundo.find_dialog_buttons",
                    return_value=[(720, 1520), (490, 1520)]):

@@ -26,8 +26,8 @@ Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải
 - **AutoWalk đa máy** — nhận icon bằng ảnh và dùng chính view Android của PGSharp làm đường lui,
   hỗ trợ cả nhãn `AutoWalk` và `AW(Paused)`.
 - **Căn chỉnh thủ công** — tinh chỉnh tọa độ chạm khi tự co giãn chưa đủ chính xác.
-- **Chấm shiny theo IV** — nhập riêng IV Công/Thủ/HP từ 0–15; cả nguồn feed và Discord Coord chỉ dừng khi shiny khớp đúng cả ba cột.
-- **Shundo từ Discord Coord** — nhận tọa độ từ extension Edge, teleport lần lượt và chỉ lấy coord tiếp theo sau khi chấm xong.
+- **Chấm shiny theo IV từ Feed** — nhập riêng IV Công/Thủ/HP từ 0–15 và giữ shiny khớp đúng cả ba cột.
+- **Shundo từ Discord Coord** — dùng bộ ba IV đi kèm từng coord làm mục tiêu, teleport lần lượt và chỉ lấy coord tiếp theo sau khi chấm xong.
 - **Tự né popup an toàn** — đóng cảnh báo thời tiết, tốc độ, level-up và màn hình PokeStop; hộp
   Android được đối chiếu đúng nút `CANCEL/HỦY` trước khi bấm.
 - **Tự xử lý khi hết bóng** — tạm ngừng bắt, vẫn cho AutoWalk tìm vật phẩm rồi tự bắt lại.
@@ -67,7 +67,7 @@ Extension được dùng với chế độ **Shundo từ Discord Coord**. Giải
 
 - **Bắt Pokemon** — tự động bắt Pokemon trong danh sách gần đây.
 - **Chấm shiny theo IV** — lấy Pokémon từ Feed PGSharp và chỉ giữ shiny có đúng bộ IV Công/Thủ/HP mục tiêu.
-- **Chấm shiny IV từ Discord Coord** — nhận coord từ extension Edge, teleport và chấm tuần tự từng Pokémon.
+- **Chấm shiny IV từ Discord Coord** — nhận coord cùng IV từ extension Edge, teleport và so IV trong game với IV của chính coord đó; không dùng ba ô IV đặt tay.
 - **Quay PokéStop khi đi đường** — giữ AutoWalk và bấm các PokéStop xanh trong vòng quét quanh nhân vật.
 
 Sau đó chọn kiểu bắt:
@@ -78,6 +78,8 @@ Sau đó chọn kiểu bắt:
 ### 4. Chạy
 
 Bấm **Chạy** để bắt đầu, **Tạm dừng** để nghỉ hoặc **Dừng** để kết thúc. Theo dõi hoạt động trong khung nhật ký.
+
+**Chạy nhiều máy:** app tự quét thiết bị và hiện mỗi máy thành một tab trong cùng cửa sổ, với đầy đủ Điều khiển, Cài đặt, Hướng dẫn và Ủng hộ. **Chạy tất cả** và **Dừng tất cả** điều khiển các máy đang kết nối cùng lúc. **Xem tất cả** hiển thị các máy cạnh nhau trong một cửa sổ; nút **Xem bot nhìn** trong từng tab cũng mở màn hình chung này. App tự dò ADB Wi-Fi đã bật hoặc ghép đôi và chuyển đúng tab từ USB sang Wi-Fi, kể cả khi đang chạy. Lần đầu bật ADB Wi-Fi từ USB, bấm **Thêm qua Wi-Fi** rồi chọn **Chuyển máy USB sang Wi-Fi**; chỉ rút dây sau khi báo kết nối thành công. Discord Coord dùng cổng nhận cố định nên chỉ chạy ở tab máy đầu tiên.
 
 Mỗi chế độ cần một bố cục PGSharp khác nhau. Trước khi chạy, làm đúng checklist của chế độ trong [hướng dẫn chi tiết](HUONG_DAN.md).
 

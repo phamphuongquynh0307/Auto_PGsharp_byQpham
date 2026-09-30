@@ -83,6 +83,17 @@ function findPokemonName(coordinate) {
   return candidate ? candidate.replace(/^\d+\s+/, "") : "";
 }
 
+function findIvText() {
+  const lines = (document.body?.innerText || "").split(/\r?\n/).map((line) => line.trim());
+  const relevant = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/(?:\bIV\b|\bIV\d|\d\s*%?\s*IV\b)/i.test(lines[index])) continue;
+    relevant.push(lines.slice(index, index + 3).join(" "));
+    if (relevant.length === 3) break;
+  }
+  return relevant.join(" | ").slice(0, 500);
+}
+
 async function poll() {
   if (finished) return;
 
@@ -105,6 +116,7 @@ async function poll() {
         type: "coordinateFound",
         coordinate,
         pokemon: findPokemonName(coordinate),
+        ivText: findIvText(),
         url: location.href
       });
     } catch (_error) {

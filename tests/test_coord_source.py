@@ -2,10 +2,42 @@ import json
 import unittest
 import urllib.request
 
-from avc.coord_source import COORD_BRIDGE_PORT, CoordBridge, CoordItem, CoordQueue
+from avc.coord_source import COORD_BRIDGE_PORT, CoordBridge, CoordItem, CoordQueue, parse_exact_ivs
 
 
 class CoordQueueTests(unittest.TestCase):
+    def test_discord_exact_iv_is_carried_with_the_coordinate(self):
+        item = CoordItem.from_payload({
+            "coordinate": "10.762622,106.660172",
+            "discordText": "Pokedex100 · IV57 9/2/15 · CP 778 · Click for Coords",
+        })
+        self.assertEqual((9, 2, 15), item.iv_stats)
+
+    def test_pokedex100_labelled_triplet_from_the_whole_message(self):
+        # Real post text: the IV line is in the message body, the link is in the embed below.
+        text = (":flag_jp: Geodude :74::shiny: IV66 (A1/D14/S15) CP298 L9 ♀ /WXL (DSP in 34m)"
+                " - Kamigyo Ward, Kyoto\nGreat League Rank 1\nEvolution: Golem L19.0 CP1498\n"
+                "Cost: Stardust 32000, Candy 36, Candy XL 0\nClick for Coords | Donor | Support Us")
+        self.assertEqual((1, 14, 15), parse_exact_ivs(text))
+        self.assertEqual((12, 15, 14), parse_exact_ivs(
+            "🇺🇸 Sewaddle 🍃 IV91 (A12/D15/S14) CP213 L8 ♂ / (DSP in 26m) - Highland Park"))
+
+    def test_percentage_alone_does_not_identify_three_stats(self):
+        self.assertIsNone(parse_exact_ivs("IV 57% · CP 778 · 10/12/2026"))
+        self.assertEqual((15, 15, 15), parse_exact_ivs("IV: 100% · CP 778"))
+        self.assertEqual((15, 15, 15), parse_exact_ivs("100IV · CP 778"))
+
+    def test_page_iv_text_is_used_when_discord_only_has_a_link(self):
+        item = CoordItem.from_payload({
+            "coordinate": "10.762622,106.660172",
+            "discordText": "Click for Coords",
+            "ivText": "IV 57% (9/2/15) CP 778",
+        })
+        self.assertEqual((9, 2, 15), item.iv_stats)
+
+    def test_conflicting_triplets_are_not_trusted(self):
+        self.assertIsNone(parse_exact_ivs("IV 9/2/15; corrected IV 8/3/15"))
+
     def test_validates_and_deduplicates_source_links(self):
         queue = CoordQueue()
         item = CoordItem.from_payload({
@@ -76,6 +108,7 @@ class CoordBridgeTests(unittest.TestCase):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as response:
             health = json.load(response)
         self.assertEqual(health["completed"], 1)
+        self.assertTrue(health["sessionId"])
 
         request = urllib.request.Request(
             f"http://127.0.0.1:{self.port}/session",
@@ -85,8 +118,22 @@ class CoordBridgeTests(unittest.TestCase):
         )
         with urllib.request.urlopen(request, timeout=2) as response:
             reset = json.load(response)
-        self.assertEqual(reset, {"ok": True, "queued": 0, "completed": 0})
+        self.assertEqual(reset, {"ok": True, "queued": 0, "completed": 0,
+                                 "sessionId": health["sessionId"]})
         self.assertEqual(self.queue.completed_count(), 0)
+
+    def test_new_bridge_has_a_new_session_even_when_completed_is_zero(self):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as response:
+            first = json.load(response)
+        self.bridge.stop()
+        self.bridge = CoordBridge(CoordQueue(), port=0)
+        self.port = self.bridge.start()
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as response:
+            second = json.load(response)
+
+        self.assertEqual(0, first["completed"])
+        self.assertEqual(0, second["completed"])
+        self.assertNotEqual(first["sessionId"], second["sessionId"])
 
 
 if __name__ == "__main__":

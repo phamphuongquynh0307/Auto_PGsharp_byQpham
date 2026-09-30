@@ -1,3 +1,53 @@
+# v1.4.32
+
+## Tiếng Việt
+
+### Nhiều điện thoại trong một cửa sổ
+
+- App tự quét thiết bị; mỗi điện thoại là một tab riêng với đủ 4 tab con, nút điều khiển và cài đặt riêng (cài đặt tự lưu theo từng máy).
+- **Chạy tất cả** / **Dừng tất cả** điều khiển mọi máy cùng lúc. **Xem tất cả** hiện các màn hình cạnh nhau trong một cửa sổ.
+- Tự nhận ADB Wi-Fi đã bật và chuyển tab từ USB sang Wi-Fi, kể cả khi đang chạy. Log và file chẩn đoán tách riêng theo từng máy.
+- Discord Coord chỉ chạy ở tab thiết bị đầu tiên (cổng nhận cố định).
+
+### Shundo từ Discord Coord
+
+- Mỗi coord dùng IV ghi trong bài Discord (vd `IV91 (A12/D15/S14)`) làm mục tiêu; ô IV mục tiêu đã lưu chỉ áp dụng cho chế độ Feed.
+- Bài không có bộ IV chính xác: bot dừng lại để bạn tự xem, không so với IV đã lưu và không bỏ chạy shiny.
+- Cảnh báo Go Plus khi teleport giờ được xác nhận để Shundo chạy tiếp; các hộp thoại lạ khác vẫn bấm CANCEL.
+- Extension v0.3.6: đọc IV từ cả embed của Pokedex100; khi app mở lại, extension tự lấy coord mới nhất.
+
+### Bắt Pokémon và đọc IV
+
+- Không còn tạm dừng 10 phút vì "hết bóng" sai lúc encounter đang mở: tín hiệu hết bóng phải lặp lại trên ảnh chụp mới sau 0,5 giây.
+- Đọc IV chắc hơn khi nền sáng dính vào chữ số (dùng mẫu dấu "/" của PGSharp, đối chiếu với %).
+- 393 test đạt.
+
+---
+
+## English
+
+### Multiple phones in one window
+
+- Devices are scanned automatically; each phone gets its own tab with all four inner tabs, its own controls and settings (settings auto-save per device).
+- **Run all** / **Stop all** control every device together. **View all** shows the screens side by side.
+- Already enabled ADB Wi-Fi is detected and the tab switches from USB to Wi-Fi, even mid-run. Logs and diagnostics are kept per device.
+- Discord Coord runs only in the first device tab (fixed receiver port).
+
+### Shundo from Discord Coord
+
+- Each coordinate uses the IV from its Discord post (e.g. `IV91 (A12/D15/S14)`) as the target; saved target IV fields apply only to Feed mode.
+- Posts without an exact IV triplet pause the bot for a manual look instead of comparing against the saved target or fleeing the shiny.
+- The Go Plus teleport warning is now confirmed so Shundo keeps running; other unknown dialogs still get CANCEL.
+- Extension v0.3.6: reads IV from Pokedex100 embeds, and fetches the latest coordinate automatically when the app restarts.
+
+### Catching and IV reading
+
+- No more false 10-minute "out of balls" pauses while an encounter is opening: the empty-bag signal must repeat on a fresh capture 0.5 s later.
+- More reliable IV reading when bright scenery touches the digits (PGSharp slash template, cross-checked with the percentage).
+- 393 tests pass.
+
+---
+
 # v1.4.31
 
 ## Tiếng Việt

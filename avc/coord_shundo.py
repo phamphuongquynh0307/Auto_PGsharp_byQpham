@@ -50,6 +50,14 @@ class CoordShundoRoutine(ShundoRoutine):
         self.coord_queue = coord_queue
         self.current_coord: CoordItem | None = None
 
+    def _target_ivs(self) -> tuple[int, int, int] | None:
+        # Prefer the exact triplet from the Discord post; a post without one (e.g. only
+        # "IV57%") falls back to the saved target so a wrong-IV shiny is still fled.
+        item = self.current_coord
+        if item is not None and item.iv_stats is not None:
+            return item.iv_stats
+        return super()._target_ivs()
+
     def _teleport_next(self, frame) -> str | None:
         cfg = self.config
         item = self.coord_queue.get(timeout=cfg.coord_queue_poll)

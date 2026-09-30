@@ -29,7 +29,7 @@ class VisibilityTests(unittest.TestCase):
         self.gui = gui
         self.tmp = tempfile.mkdtemp()
         self._real_path = gui._settings_path
-        gui._settings_path = lambda: os.path.join(self.tmp, "settings.json")
+        gui._settings_path = lambda *_a: os.path.join(self.tmp, "settings.json")
         self.root = tk.Tk()
         self.app = gui.App(self.root)
 
@@ -71,6 +71,15 @@ class VisibilityTests(unittest.TestCase):
         self.assertFalse(self._shown("throw_power"))
         self.assertFalse(self._shown("wait_catch"))
         self.assertTrue(self._shown("flee_taps"))   # ShundoRoutine._flee spends these
+
+    def test_discord_coord_hides_saved_target_iv_inputs(self):
+        self._configure("coord_shundo")
+        for key in ("target_iv_atk", "target_iv_def", "target_iv_sta"):
+            self.assertFalse(self._shown(key))
+
+        self._configure("shundo")
+        for key in ("target_iv_atk", "target_iv_def", "target_iv_sta"):
+            self.assertTrue(self._shown(key))
 
     def test_advanced_rows_stay_hidden_until_asked_for(self):
         self._configure("catch", "normal", advanced=False)
@@ -155,12 +164,30 @@ class VisibilityTests(unittest.TestCase):
 class HiddenPersistenceTests(unittest.TestCase):
     """A hidden control is still a set control; hiding it must never drop its value."""
 
+    def test_edit_is_saved_without_running_or_closing_the_app(self):
+        import gui
+
+        with tempfile.TemporaryDirectory() as tmp:
+            real_path = gui._settings_path
+            gui._settings_path = lambda *_a: os.path.join(tmp, "settings.json")
+            try:
+                root = tk.Tk()
+                app = gui.App(root)
+                app.throw_power.set(987)
+                self.assertIsNotNone(app._save_after_id)
+                app._autosave_settings()
+                root.destroy()
+                with open(gui._settings_path(), encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["throw_power"], 987)
+            finally:
+                gui._settings_path = real_path
+
     def test_a_setting_hidden_by_the_current_mode_is_still_saved(self):
         import gui
 
         tmp = tempfile.mkdtemp()
         real_path = gui._settings_path
-        gui._settings_path = lambda: os.path.join(tmp, "settings.json")
+        gui._settings_path = lambda *_a: os.path.join(tmp, "settings.json")
         try:
             root = tk.Tk()
             app = gui.App(root)
@@ -200,7 +227,7 @@ class HiddenPersistenceTests(unittest.TestCase):
 
         tmp = tempfile.mkdtemp()
         real_path = gui._settings_path
-        gui._settings_path = lambda: os.path.join(tmp, "settings.json")
+        gui._settings_path = lambda *_a: os.path.join(tmp, "settings.json")
         try:
             with open(gui._settings_path(), "w", encoding="utf-8") as fh:
                 json.dump({"post_throw": 0.0, "flee_gap": 0.05}, fh)
@@ -226,7 +253,7 @@ class SpinConfigTests(unittest.TestCase):
         self.gui = gui
         self.tmp = tempfile.mkdtemp()
         self._real_path = gui._settings_path
-        gui._settings_path = lambda: os.path.join(self.tmp, "settings.json")
+        gui._settings_path = lambda *_a: os.path.join(self.tmp, "settings.json")
         self.root = tk.Tk()
         self.app = gui.App(self.root)
 

@@ -9,6 +9,7 @@ import json
 import re
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import asdict, dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,6 +23,36 @@ COORD_RE = re.compile(r"^(-?\d{1,2}(?:\.\d+)?),\s*(-?\d{1,3}(?:\.\d+)?)$")
 COORD_BRIDGE_PORT = 8766
 
 
+def parse_exact_ivs(text: str) -> tuple[int, int, int] | None:
+    """Extract an exact IV triplet near an IV label in a Discord/Pokedex100 post.
+
+    A percentage below 100 is not enough: many ATK/DEF/HP combinations share it.
+    Conflicting triplets also leave the value unknown instead of guessing.
+    """
+    source = str(text or "")[:4000]
+    # Pokedex100 writes "IV91 (A12/D15/S14)"; older posts use a bare "12/15/14".
+    triplet = re.compile(r"(?<![\dA-Za-z])[Aa]?\s*(\d{1,2})\s*[/／-]\s*[Dd]?\s*(\d{1,2})"
+                         r"\s*[/／-]\s*[SsHh]?\s*(\d{1,2})(?!\d)")
+    found: set[tuple[int, int, int]] = set()
+    for marker in re.finditer(r"\bIV\b|\bIV(?=\d{1,3}\b)", source, re.IGNORECASE):
+        # Keep the match local to the IV label; unrelated dates and coordinates elsewhere
+        # in the Discord message must not be interpreted as Pokémon stats.
+        tail = source[marker.end():marker.end() + 100]
+        match = triplet.search(tail)
+        if match:
+            values = tuple(int(value) for value in match.groups())
+            if all(0 <= value <= 15 for value in values):
+                found.add(values)
+    if len(found) == 1:
+        return next(iter(found))
+    if len(found) > 1:
+        return None
+    if re.search(r"\bIV\s*[:：-]?\s*100\s*%?\b|\b100\s*%?\s*IV\b", source,
+                 re.IGNORECASE):
+        return 15, 15, 15
+    return None
+
+
 @dataclass(frozen=True)
 class CoordItem:
     coordinate: str
@@ -33,6 +64,7 @@ class CoordItem:
     captured_at: str = ""
     source: str = ""
     note: str = ""
+    iv_stats: tuple[int, int, int] | None = None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "CoordItem":
@@ -44,6 +76,8 @@ class CoordItem:
         longitude = float(match.group(2))
         if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
             raise ValueError("coordinate is outside the valid latitude/longitude range")
+        discord_text = str(payload.get("discordText", payload.get("discord_text", "")))[:2000]
+        iv_text = str(payload.get("ivText", payload.get("iv_text", "")))[:500]
         return cls(
             coordinate=f"{match.group(1)},{match.group(2)}",
             latitude=latitude,
@@ -54,6 +88,7 @@ class CoordItem:
             captured_at=str(payload.get("capturedAt", payload.get("captured_at", "")))[:80],
             source=str(payload.get("source", ""))[:120],
             note=str(payload.get("note", ""))[:160],
+            iv_stats=parse_exact_ivs(iv_text) or parse_exact_ivs(discord_text),
         )
 
     @property
@@ -124,6 +159,7 @@ class _BridgeServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler, coord_queue: CoordQueue) -> None:
         self.coord_queue = coord_queue
+        self.session_id = uuid.uuid4().hex
         super().__init__(address, handler)
 
 
@@ -155,13 +191,15 @@ class _Handler(BaseHTTPRequestHandler):
             "ok": True,
             "queued": self.server.coord_queue.qsize(),
             "completed": self.server.coord_queue.completed_count(),
+            "sessionId": self.server.session_id,
         })
 
     def do_POST(self) -> None:  # noqa: N802
         path = urlparse(self.path).path
         if path == "/session":
             self.server.coord_queue.clear()
-            self._json(200, {"ok": True, "queued": 0, "completed": 0})
+            self._json(200, {"ok": True, "queued": 0, "completed": 0,
+                             "sessionId": self.server.session_id})
             return
         if path != "/coords":
             self._json(404, {"ok": False, "error": "not found"})

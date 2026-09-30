@@ -433,6 +433,21 @@ class ShundoAnswerTests(unittest.TestCase):
         self.assertEqual("iv_unknown", outcome)
         self.assertIsNone(routine.stats.last_ivs)
 
+    def test_unreadable_iv_diagnostic_keeps_the_confirmed_encounter(self):
+        import numpy as np
+
+        routine = bare_routine()
+        routine.config.iv_read_tries = 2
+        encounter = np.ones((80, 200, 3), dtype=np.uint8)
+        later_map = np.zeros_like(encounter)
+        routine.device.screenshot = lambda **_kwargs: later_map
+        routine._read_iv_stats = lambda _frame: None
+
+        with patch("cv2.imwrite") as save:
+            self.assertEqual("iv_unknown", routine._grade_encounter(confirmed_frame=encounter))
+
+        self.assertIs(encounter, save.call_args.args[1])
+
     def test_pending_miss_returns_before_the_next_feed_can_be_tapped(self):
         routine = bare_routine()
         routine._teleport_blocked = False

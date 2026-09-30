@@ -222,9 +222,8 @@ class ShundoConfig:
     toast_center_tol: int = 320      # max |pill center x - screen center x|
 
     menu_star_template: str = "templates/menu_star.png"
-    # PGSharp's Go Plus teleport warning. Shundo teleports on every cycle, so this decides
-    # whether the mode can run at all. Same tight box as the catch routine's: it stops short
-    # of the OK button so a stray match can never confirm the teleport.
+    # PGSharp's Go Plus teleport warning. Match CANCEL in a tight box, then locate the
+    # separate confirmation button before continuing the Shundo teleport.
     cancel_btn_template: str = "templates/cancel_btn.png"
     exit_game_cancel_template: str = "templates/exit_game_cancel.png"
     dialog_region: tuple[int, int, int, int] = (150, 1150, 950, 500)
@@ -407,9 +406,6 @@ class ShundoRoutine:
         self._pending_no_target = 0
         # Consecutive cycles that found no map at all. Escalates to a relaunch.
         self._no_map_streak = 0
-        # Set once the Go Plus warning has been answered CANCEL. Shundo has no path that
-        # avoids teleporting, so the run cannot continue.
-        self._teleport_blocked = False
 
         def load(path):
             return load_template(_resolve(path))
@@ -801,6 +797,14 @@ class ShundoRoutine:
             return True
         return False
 
+    @staticmethod
+    def _positive_dialog_button(state) -> tuple[int, int] | None:
+        if state is None:
+            return None
+        positive = {"OK", "CONTINUE", "YES", "TIẾP TỤC", "ĐỒNG Ý"}
+        return next((centre for label, centre in state.dialog_buttons
+                     if label.strip().upper() in positive), None)
+
     def _handle_popups(self, frame=None) -> bool:
         if time.monotonic() < self._popup_block_until:
             return False
@@ -832,24 +836,33 @@ class ShundoRoutine:
                 self._exit_dialog_until = 0.0
                 self.stats.last_event = "popup"
                 return True
-        # PGSharp "Go Plus is connected, teleport may trigger a softban. Continue?" -> CANCEL.
-        # First, because it is a modal that eats every other tap, and the answer is never OK:
-        # confirming risks the account. Shundo teleports every cycle, so the run is over —
-        # see the _teleport_blocked check in run_once.
+        # The user chose to keep Shundo running with Go Plus connected. This modal eats
+        # every other tap, so confirm it only when the warning's CANCEL template matches.
         if self._cancel_btn is not None:
             m = find(frame, self._cancel_btn, threshold=self.config.popup_threshold,
                      scales=self._scales, grayscale=False,
                      region=self.config.cancel_btn_region, max_matches=1)
             if m:
-                self.device.tap(*m[0].center)
-                self._teleport_blocked = True
+                buttons = find_dialog_buttons(
+                    frame, self.config.dialog_region,
+                    broad_accent=ui_dump_enabled,
+                    min_text_height=0 if ui_dump_enabled else None,
+                )
+                target = None
+                if ui_dump_enabled:
+                    state = uidump.parse(ui_dump() or "")
+                    if state is not None:
+                        target = self._positive_dialog_button(state)
+                if target is None and len(buttons) >= 2:
+                    target = max(buttons, key=lambda b: b[0])
+                if target is not None:
+                    self.device.tap(*target)
                 self.stats.last_event = "popup"
                 return True
         # Some Android skins alter the CANCEL font/background enough that the template misses.
         # The warning is still a stock two-button AlertDialog, so recognise its two aligned
-        # buttons and choose the left one. In Shundo this is the only native two-button modal
-        # raised by the teleport path, therefore it has the same terminal meaning as the
-        # template-backed Go Plus warning above.
+        # buttons and choose the left one. Without an exact Go Plus match, this may be an
+        # unrelated dialog, so do not confirm it.
         buttons = find_dialog_buttons(
             frame,
             self.config.dialog_region,
@@ -859,17 +872,16 @@ class ShundoRoutine:
         if len(buttons) >= 2:
             target = None
             if ui_dump_enabled:
-                state = uidump.parse(ui_dump() or "")
-                target = state.cancel_button if state is not None else None
+                raw = ui_dump() or ""
+                state = uidump.parse(raw)
+                if "go plus" in raw.lower() and "softban" in raw.lower():
+                    target = self._positive_dialog_button(state)
+                else:
+                    target = state.cancel_button if state is not None else None
             else:
                 target = min(buttons, key=lambda b: b[0])
             if target is not None:
-                # CANCEL it — never confirm a teleport that a warning is asking about. But do
-                # NOT conclude from this that Go Plus is connected: "some two-ish buttons in a
-                # centre box, one of them labelled CANCEL" describes a great many Android
-                # dialogs, and ending the whole run on that evidence turned any stray dialog
-                # into a permanent, silent stop. Only the Go Plus warning's own template, which
-                # is matched in its own tight region above, is allowed to reach that verdict.
+                # Generic dialogs still take the negative action.
                 self.device.tap(*target)
                 self.stats.last_event = "popup"
                 return True
@@ -1049,6 +1061,10 @@ class ShundoRoutine:
                     return True
         return False
 
+    def _target_ivs(self) -> tuple[int, int, int] | None:
+        """The IV triplet this encounter must match; subclasses may supply it per spawn."""
+        return tuple(self.config.target_ivs)
+
     def _read_iv_stats(self, frame) -> tuple[int, int, int] | None:
         """Read exact IVs locally first; pay for UIAutomator only as a fallback.
 
@@ -1072,10 +1088,10 @@ class ShundoRoutine:
                     exact = None
         if exact is not None:
             if (getattr(self.config, "require_background", False)
-                    and exact == tuple(self.config.target_ivs)):
+                    and exact == self._target_ivs()):
                 self._encounter_ui_state = uidump.parse(self.device.ui_dump() or "")
             return exact
-        if tuple(self.config.target_ivs) == (15, 15, 15) and self._is_hundo(frame):
+        if self._target_ivs() == (15, 15, 15) and self._is_hundo(frame):
             return 15, 15, 15
         state = uidump.parse(self.device.ui_dump() or "")
         # Reuse this hierarchy for Background detection; never pay for the same dump twice.
@@ -1361,11 +1377,8 @@ class ShundoRoutine:
 
     def run_once(self) -> str:
         """One check cycle. Returns the outcome:
-        blocked | shiny | shundo | miss | recheck | lost | nospawn | nomap | idle | popup
-        | goplus."""
+        blocked | shiny | shundo | miss | recheck | lost | nospawn | nomap | idle | popup."""
         cfg = self.config
-        if self._teleport_blocked:
-            return "goplus"
         self.stats.cycles += 1
         self._ensure_calibrated()
 
@@ -1527,7 +1540,7 @@ class ShundoRoutine:
         return outcome
 
     def _grade_encounter(self, confirmed_frame=None) -> str:
-        """We're inside a shiny encounter; compare its exact IV with the configured target."""
+        """Compare a shiny encounter with this source's target IV triplet."""
         cfg = self.config
         frame = confirmed_frame
         if frame is None:
@@ -1538,10 +1551,22 @@ class ShundoRoutine:
                 self.stats.last_event = "miss"
                 return "miss"
 
+        target_ivs = self._target_ivs()
+        if target_ivs is None:
+            # Discord supplied no exact triplet. Never compare this encounter with the
+            # saved Feed target or flee a shiny on the basis of an unknown target.
+            self.stats.checked += 1
+            self.stats.shinies += 1
+            self.stats.last_ivs = None
+            self.stats.last_background = False
+            self.stats.last_event = "target_unknown"
+            return "target_unknown"
+
         self.stats.checked += 1
         self.stats.shinies += 1
         self.stats.last_ivs = None
         self.stats.last_background = False
+        diagnostic_frame = frame
         background_hits = 0
         target_iv_seen = False
         for attempt in range(cfg.iv_read_tries):
@@ -1554,9 +1579,9 @@ class ShundoRoutine:
             # Once the exact target has been proven, do not let a later transitional/partial UI
             # read overwrite that decisive value while we spend another frame confirming the
             # Background badge.
-            if iv_stats is not None and (not target_iv_seen or iv_stats == tuple(cfg.target_ivs)):
+            if iv_stats is not None and (not target_iv_seen or iv_stats == target_ivs):
                 self.stats.last_ivs = iv_stats
-            if iv_stats == tuple(cfg.target_ivs):
+            if iv_stats == target_ivs:
                 if not target_iv_seen:
                     self.stats.shundos += 1
                     target_iv_seen = True
@@ -1593,7 +1618,8 @@ class ShundoRoutine:
             from . import diag
             import os
             import cv2
-            cv2.imwrite(os.path.join(diag.base_dir(), "iv_unreadable.png"), frame)
+            cv2.imwrite(os.path.join(diag.base_dir(), diag.IV_UNREADABLE_NAME),
+                        diagnostic_frame)
         except (OSError, cv2.error):
             pass
         self.stats.last_event = "iv_unknown"
@@ -1610,11 +1636,6 @@ class ShundoRoutine:
             outcome = self.run_once()
             if on_event:
                 on_event(self.stats, outcome)
-            if outcome == "goplus":
-                # Every shundo cycle teleports, and the Go Plus warning refuses every one of
-                # them. There is nothing to fall back on, so end the run instead of looping
-                # tap -> warning -> CANCEL; the caller reports why.
-                break
             # A lost map is not a slow spawn: spawn_timeout does not gate it, so modes
             # that wait forever for their spawn (Discord Coord) still recover from a
             # crashed or stuck game instead of logging "miss" until the user notices.
@@ -1655,7 +1676,7 @@ class ShundoRoutine:
                     break
                 else:
                     self.pause_event.set()
-            elif outcome == "iv_unknown":
+            elif outcome in ("iv_unknown", "target_unknown"):
                 self.pause_event.set()
 
     def _restart_game(self) -> bool:

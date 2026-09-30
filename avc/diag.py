@@ -12,6 +12,7 @@ worse than no diagnostics.
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import logging
 import os
@@ -21,7 +22,11 @@ import time
 import zipfile
 from logging.handlers import RotatingFileHandler
 
-LOG_NAME = "autoclick.log"
+_serial = os.environ.get("AVC_DEVICE_SERIAL", "")
+_suffix = f"-{hashlib.sha256(_serial.encode('utf-8')).hexdigest()[:12]}" if _serial else ""
+LOG_NAME = f"autoclick{_suffix}.log"
+TIMING_NAME = f"timing{_suffix}.log"
+IV_UNREADABLE_NAME = f"iv_unreadable{_suffix}.png"
 # ~1 MB holds a few hours of a talkative run; one backup means a report still covers the
 # stretch before the failure rather than only the moment somebody noticed it.
 MAX_BYTES = 1_000_000
@@ -30,7 +35,7 @@ BACKUPS = 1
 # Where the shadow comparison lands (CatchRoutine._shadow_check). Kept out of autoclick.log
 # on purpose: it is a machine-readable table for the author, not narration for the user, and
 # mixing it into the pane would bury the messages the user is actually meant to read.
-SHADOW_NAME = "doi-chieu.log"
+SHADOW_NAME = f"doi-chieu{_suffix}.log"
 SHADOW_MAX_BYTES = 400_000
 
 _logger: logging.Logger | None = None
@@ -162,14 +167,14 @@ def export(dest: str, *, settings_path: str | None = None,
             path = os.path.join(base_dir(), name)
             if os.path.exists(path):
                 bundle.write(path, name)
-        timing = os.path.join(base_dir(), "timing.log")
+        timing = os.path.join(base_dir(), TIMING_NAME)
         if os.path.exists(timing):
             bundle.write(timing, "timing.log")
         for name in (SHADOW_NAME, f"{SHADOW_NAME}.1"):
             path = os.path.join(base_dir(), name)
             if os.path.exists(path):
                 bundle.write(path, name)
-        failed_iv = os.path.join(base_dir(), "iv_unreadable.png")
+        failed_iv = os.path.join(base_dir(), IV_UNREADABLE_NAME)
         if os.path.exists(failed_iv):
             bundle.write(failed_iv, "iv_unreadable.png")
         if settings_path:

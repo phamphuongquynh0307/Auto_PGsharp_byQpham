@@ -32,6 +32,7 @@ def bare_routine(frames):
         no_balls_missing_frames=3,
     )
     routine.device = FrameDevice(frames)
+    routine.EMPTY_CONFIRM_SETTLE = 0.0
     routine.stop_event = threading.Event()
     routine.pause_event = threading.Event()
     routine._wait_if_paused = lambda: None
@@ -93,7 +94,8 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
         routine._wait_if_paused = lambda: None
         routine._in_encounter = lambda _frame, **_kwargs: True
         routine._is_out_of_balls = lambda _frame: False
-        routine.device = FrameDevice([frame])
+        routine.EMPTY_CONFIRM_SETTLE = 0.0
+        routine.device = FrameDevice([frame, frame])   # stream frame + crisp confirmation
 
         self.assertTrue(routine._master_ball_visible(frame))
         self.assertEqual("empty", routine._wait_for_ball_state(0.0))
@@ -108,7 +110,8 @@ class AnyBallTypeIsThrowableTests(unittest.TestCase):
         routine.device = SimpleNamespace(screenshot=lambda **_kwargs: "master")
         routine._wait_for_ball_state = lambda _timeout: "ready"
         routine._throw_point_from_hub = lambda _hub: (610, 2380)
-        routine._in_encounter = lambda _frame: True
+        routine.EMPTY_CONFIRM_SETTLE = 0.0
+        routine._in_encounter = lambda _frame, **_kwargs: True
         routine._master_ball_visible = lambda _frame: True
         routine._is_out_of_balls = lambda _frame: False
         routine._flag_no_balls = lambda: setattr(routine, "stopped_for_balls", True)
@@ -286,7 +289,7 @@ class MissingBallDetectionTests(unittest.TestCase):
         self.assertEqual("closed", routine._wait_for_ball_state(0.0))
 
     def test_legacy_x0_badge_still_wins_immediately(self):
-        routine = bare_routine(["x0"])
+        routine = bare_routine(["x0", "x0"])
 
         self.assertEqual("empty", routine._wait_for_ball_state(99.0))
 
@@ -301,9 +304,21 @@ class MissingBallDetectionTests(unittest.TestCase):
         self.assertEqual("empty", routine._wait_for_ball_state(0.0))
 
     def test_x0_badge_stops_without_opening_picker(self):
-        routine = bare_routine(["x0"])
+        routine = bare_routine(["x0", "x0"])
 
         self.assertEqual("empty", routine._wait_for_ball_state(99.0))
+
+    def test_x0_misread_while_the_encounter_opens_is_not_empty(self):
+        """A slow-opening encounter can flash an x0-like frame; the settled capture decides."""
+        routine = bare_routine(["x0", "ball", "ball"])
+
+        self.assertEqual("ready", routine._wait_for_ball_state(99.0))
+
+    def test_x0_with_a_resting_ball_on_the_crisp_capture_is_not_empty(self):
+        routine = bare_routine(["ball"])             # the crisp capture only
+        routine._is_out_of_balls = lambda frame: frame in ("x0", "ball")
+
+        self.assertFalse(routine._empty_bag_confirmed("x0"))
 
 
 def picker_frame(balls=3, domes=None):

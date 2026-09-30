@@ -26,15 +26,21 @@ function isCoordLink(anchor) {
 }
 
 function messageTextFor(anchor) {
-  const message = anchor.closest('li[id^="chat-messages"], article');
-  if (message) return message.innerText.trim();
-
-  let parent = anchor.parentElement;
-  for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
-    const text = parent.innerText?.trim();
-    if (text && text.length >= 20) return text.slice(0, 2000);
+  // Pokedex100 puts IV/CP in the embed body, several levels above the link row
+  // ("Click for Coords | Donor | Support Us"). Climb to the whole message, but stop
+  // before an ancestor that also holds another post's coord link.
+  let best = "";
+  let node = anchor.parentElement;
+  for (let depth = 0; node && depth < 20; depth += 1, node = node.parentElement) {
+    if ([...node.querySelectorAll("a[href]")].filter(isCoordLink).length > 1) break;
+    const text = String(node.innerText || "").trim();
+    if (text.length > 4000) break;
+    if (text) best = text;
+    // Not plain <article>: Discord renders each embed as one, and Pokedex100 keeps the
+    // IV embed separate from the "Click for Coords" embed of the same message.
+    if (node.matches?.('li[id^="chat-messages"], [id^="chat-messages-"], [role="article"]')) break;
   }
-  return "";
+  return best.slice(0, 2000);
 }
 
 async function scanVisibleLinks(maxLinks = 1) {

@@ -1,5 +1,5 @@
 const STORAGE_KEY = "coordCollectorState";
-const EXTENSION_VERSION = "0.3.3";
+const EXTENSION_VERSION = chrome.runtime.getManifest?.()?.version || "";
 const STATE_VERSION = 6;
 const TOOL_RETRY_ALARM = "coordCollectorToolRetry";
 const TOOL_BASE_URL = "http://127.0.0.1:8766";
@@ -18,6 +18,7 @@ const DEFAULT_STATE = {
   seenUrls: {},
   captureCredits: 0,
   toolCompleted: 0,
+  toolSessionId: null,
   discordTabId: null,
   toolConnected: false,
   toolStatus: "Chưa kết nối tool",
@@ -236,7 +237,21 @@ async function syncToolDemand(state) {
   state.toolConnected = true;
   const completed = Math.max(0, Number(health.completed) || 0);
   const previous = Math.max(0, Number(state.toolCompleted) || 0);
-  if (completed < previous) {
+  const sessionId = String(health.sessionId || "");
+  const newSession = Boolean(sessionId && sessionId !== state.toolSessionId);
+  if (newSession) {
+    // A restarted desktop app has an empty in-memory queue even when both completed
+    // counters are zero. Re-arm one capture and refresh the Discord tab automatically.
+    state.toolSessionId = sessionId;
+    state.toolCompleted = completed;
+    state.captureCredits = INITIAL_PREFETCH;
+    state.seenUrls = {};
+    state.status = "App vừa mở lại · đang lấy coord mới nhất";
+    await saveState(state);
+    if (state.running) {
+      state.discordTabId = await notifyDiscordTabs(true, true, INITIAL_PREFETCH, true);
+    }
+  } else if (completed < previous) {
     // The desktop app was restarted and began a new in-memory session.
     state.toolCompleted = completed;
   } else if (completed > previous) {
@@ -520,6 +535,7 @@ async function acceptCoordinate(message, sender) {
     url: current.url,
     discordChannelUrl: current.discordChannelUrl || "",
     discordText: current.discordText,
+    ivText: String(message.ivText || "").slice(0, 500),
     source: "Discord Pokedex100",
     note: DEFAULT_IMPORT_NOTE,
     sentToTool: false
@@ -614,6 +630,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           state.captureCredits = INITIAL_PREFETCH;
           state.toolCompleted = 0;
           const toolSession = await resetToolSession();
+          state.toolSessionId = toolSession?.sessionId || null;
           state.toolConnected = Boolean(toolSession);
           state.toolStatus = toolSession ? "Đã kết nối · bộ đệm mới" : "Chưa kết nối tool";
         } else if (message.stopAndClear) {
@@ -676,6 +693,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         state.captureCredits = state.running ? INITIAL_PREFETCH : 0;
         await chrome.alarms.clear(TOOL_RETRY_ALARM);
         const toolSession = await resetToolSession();
+        state.toolSessionId = toolSession?.sessionId || null;
         state.toolConnected = Boolean(toolSession);
         state.toolStatus = toolSession ? "Đã xóa hàng chờ trong tool" : "Chưa kết nối tool";
         state.status = state.running ? "Đã xóa; đang chờ link mới" : "Đã xóa dữ liệu";

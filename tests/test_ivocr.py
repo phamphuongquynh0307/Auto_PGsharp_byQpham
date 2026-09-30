@@ -46,6 +46,13 @@ class IvOcrTests(unittest.TestCase):
 
         self.assertEqual((1, 4, 15), IvOcr(str(MODEL)).read(frame, (250, 500, 720, 170)))
 
+    def test_reads_shiny_pill_when_scenery_joins_first_slash_to_digit(self):
+        # Native screenshot of "L23 IV57 9/2/15". Component segmentation sees no slash
+        # pair, while the known PGSharp slash artwork remains visible in both positions.
+        frame = cv2.imread(str(ROOT / "tests" / "fixtures" / "iv_pill_9_2_15_shiny.png"))
+
+        self.assertEqual((9, 2, 15), IvOcr(str(MODEL)).read(frame, (0, 0, 720, 170)))
+
     def test_only_a_narrow_one_can_lead_a_two_glyph_iv(self):
         # "IV24 8/1/2": a tight space must not turn the "4" of the percent into ATK 48.
         percent_4, eight, slash_a, one, slash_b, two = (

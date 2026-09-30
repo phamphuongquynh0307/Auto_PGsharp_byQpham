@@ -989,6 +989,28 @@ class CatchRoutine:
                        scales=self._scales, grayscale=False, region=self.config.out_of_balls_region)
         return bool(matches)
 
+    # How long an opening encounter is given to settle before an empty-bag signal is re-read.
+    EMPTY_CONFIRM_SETTLE = 0.5
+
+    def _empty_bag_confirmed(self, frame) -> bool:
+        """True only when the x0 badge / Master Ball guard fires on ``frame`` AND again on a
+        crisp capture taken once the screen has settled.
+
+        A single frame is not enough: while an encounter is still sliding in, the half-drawn
+        ball and badge area misread as empty, and every such misread cost a ten-minute pause
+        right after an ordinary tap on Nearby. A real empty bag is still empty half a second
+        later; an opening encounter is not.
+        """
+        if not (self._is_out_of_balls(frame) or self._master_ball_visible(frame)):
+            return False
+        self._interruptible_sleep(self.EMPTY_CONFIRM_SETTLE)
+        fresh = self.device.screenshot(fresh=True)
+        if not self._in_encounter(fresh, strict=True):
+            return False
+        if self._master_ball_visible(fresh):
+            return True
+        return self._is_out_of_balls(fresh) and not self._ball_ready(fresh)
+
     def _ball_selector_present(self, frame) -> bool:
         """Whether the fixed bottom-right ball-selector control is visible.
 
@@ -1020,7 +1042,7 @@ class CatchRoutine:
             frame = self.device.screenshot(next_frame=True)
             if not self._in_encounter(frame, strict=True):
                 return "closed"
-            if self._is_out_of_balls(frame) or self._master_ball_visible(frame):
+            if self._empty_bag_confirmed(frame):
                 return "empty"
             if self._ball_ready(frame):
                 # The actual throwable ball is the only positive inventory signal. The live
@@ -2977,9 +2999,18 @@ class CatchRoutine:
                     self._trace("throw_safety_cancel",
                                 "Hủy ném: frame mới không còn thấy nút Berry của encounter.", 0.0)
                 break
-            if self._master_ball_visible(guard_frame) or self._is_out_of_balls(guard_frame):
-                self._flag_no_balls()
-                return threw
+            if self._is_out_of_balls(guard_frame) or self._master_ball_visible(guard_frame):
+                if self._empty_bag_confirmed(guard_frame):
+                    self._flag_no_balls()
+                    return threw
+                # A misread from the opening animation. The frame is now half a second old,
+                # so look again rather than throw from it; bounded like any other guard miss.
+                guard_misses += 1
+                if guard_misses >= 3:
+                    self._trace("throw_ball_missing",
+                                "Hủy ném: tín hiệu hết bóng chập chờn, không xác nhận được.", 0.0)
+                    return threw
+                continue
             ready_now = self._ball_ready(guard_frame)
             if attempt > 0 and not ready_now:
                 # The stream may have shown a ball that has since moved or disappeared.
@@ -3312,8 +3343,7 @@ class CatchRoutine:
         self._mark("check-enc")
         if ball_xy is not None:
             self._engage_retry_streak = 0
-            ball_state = "empty" if (self._is_out_of_balls(frame)
-                                     or self._master_ball_visible(frame)) else "ready"
+            ball_state = "empty" if self._empty_bag_confirmed(frame) else "ready"
             if ball_state != "ready":
                 self._mark("het-bong")
                 if ball_state == "empty":

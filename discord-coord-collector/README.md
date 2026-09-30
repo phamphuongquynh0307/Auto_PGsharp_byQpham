@@ -1,6 +1,6 @@
 # Discord Coord Collector (Edge)
 
-[Tải extension v0.3.3](https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.3.zip)
+[Tải extension v0.3.6](../downloads/discord-coord-collector-v0.3.6.zip)
 
 Tiện ích Edge chạy tuần tự:
 
@@ -10,7 +10,13 @@ Tiện ích Edge chạy tuần tự:
 4. Lưu cục bộ trong bộ nhớ của tiện ích, đóng tab và xử lý link kế tiếp.
 5. Tự gửi coord sang app desktop.
 
-Phiên bản hiện tại: **0.3.3**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
+Collector gửi kèm IV chính xác khi bài Discord hoặc trang coord có bộ ba ATK/DEF/HP.
+Ở chế độ Discord Coord, app dùng IV đó làm mục tiêu của riêng coord hiện tại và so
+với IV đọc trực tiếp trong encounter; ba ô IV đặt tay chỉ dùng cho Feed. Nếu Discord
+không có bộ ba chính xác hoặc game không đọc được IV, app giữ shiny và tạm dừng.
+Riêng `100IV` tương đương `15/15/15`; phần trăm dưới 100 không đủ để suy ra ba chỉ số.
+
+Phiên bản hiện tại: **0.3.6**. Popup có nút đổi giữa **Bắt đầu** và **Tắt**. Tab tạm được tự đóng cả khi lấy thành công lẫn khi trang hết hạn/
 không đọc được coord. Các trang yêu cầu Bronze/donor role mà tài khoản không có sẽ được nhận diện,
 đóng ngay và bỏ qua vĩnh viễn trong lượt thu hiện tại.
 
@@ -31,7 +37,7 @@ trước khi bấm **Bắt đầu** để coord được đưa thẳng vào hàn
 **Shundo từ Discord Coord**.
 
 Popup hiển thị phiên bản extension và endpoint đang dùng. Sau khi cập nhật, vào `edge://extensions` bấm
-**Reload**; phải thấy `v0.3.3` và `127.0.0.1:8766`. Nếu còn bản cũ, xóa bản đó rồi **Load unpacked** lại thư mục này.
+**Reload** một lần; phải thấy `v0.3.6` và `127.0.0.1:8766`. Sau đó khi mở lại app desktop, Collector tự nhận phiên mới và lấy coord tiếp theo. Nếu còn bản cũ, xóa bản đó rồi **Load unpacked** lại thư mục này.
 Từ v0.3.3, extension tự chèn lại bộ quét vào tab Discord đã mở trước khi extension được reload nên không cần F5 tab thủ công.
 
 Collector không lấy toàn bộ lịch sử đang hiển thị. Khi bấm **Bắt đầu**, các link hiện tại được ghi

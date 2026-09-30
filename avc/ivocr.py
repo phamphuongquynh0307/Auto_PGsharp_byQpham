@@ -10,9 +10,12 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from itertools import combinations
+from pathlib import Path
 
 import cv2
 import numpy as np
+
+from .vision import find, load_template
 
 
 OCR_VOCABULARY = list("0123456789abcdefghijklmnopqrstuvwxyz")
@@ -171,6 +174,64 @@ class IvOcr:
         self.model.setDecodeType("CTC-greedy")
         self.model.setVocabulary(OCR_VOCABULARY)
         self.model.setInputParams(1.0 / 127.5, (100, 32), (127.5, 127.5, 127.5))
+        try:
+            self.slash_template = load_template(
+                str(Path(model_path).resolve().parent.parent / "templates" / "glyph_slash.png"))
+        except FileNotFoundError:
+            self.slash_template = None
+
+    def _read_from_slash_template(self, frame: np.ndarray,
+                                  region: tuple[int, int, int, int]) -> tuple[int, int, int] | None:
+        """Use the known PGSharp slash artwork when bright scenery joins glyph components."""
+        if self.slash_template is None:
+            return None
+        hits = find(frame, self.slash_template, threshold=0.85,
+                    scales=(0.8, 0.9, 1.0, 1.1, 1.2), region=region, max_matches=12)
+        pairs = [(a, b) for a in hits for b in hits
+                 if 0.7 * a.height <= b.x - a.x <= 1.8 * a.height
+                 and abs(a.y - b.y) <= 0.25 * a.height
+                 and 0.8 <= a.height / b.height <= 1.25]
+        pairs.sort(key=lambda pair: -(pair[0].score + pair[1].score))
+        for first, second in pairs:
+            height = (first.height + second.height) / 2
+            y0 = max(0, round(min(first.y, second.y) - 0.15 * height))
+            y1 = min(frame.shape[0], round(max(first.y + first.height,
+                                               second.y + second.height) + 0.15 * height))
+
+            def read_field(x0: int, x1: int) -> int | None:
+                crop = frame[y0:y1, max(0, x0):min(frame.shape[1], x1)]
+                if crop.size == 0:
+                    return None
+                value = self.model.recognize(crop).strip()
+                return int(value) if value.isdigit() and 0 <= int(value) <= 15 else None
+
+            left = read_field(round(first.x - 0.95 * height), first.x)
+            middle = read_field(first.x + first.width, second.x)
+            right_votes = [read_field(second.x + second.width,
+                                      round(second.x + second.width + width * height))
+                           for width in (0.8, 1.0, 1.2, 1.4)]
+            valid_right = [value for value in right_votes if value is not None]
+            if left is None or middle is None or not valid_right:
+                continue
+            right = Counter(valid_right).most_common(1)[0][0]
+            stats = (left, middle, right)
+            # PGSharp truncates the displayed percentage on some builds; accept either
+            # convention, but require the percentage to agree before trusting this fallback.
+            percent = sum(stats) * 100 / 45
+            expected = {str(int(percent)), str(round(percent))}
+            percent_seen = False
+            for width in (2.5, 3.0, 3.5, 4.0):
+                x0 = max(0, round(first.x - width * height))
+                x1 = max(x0, round(first.x - 0.9 * height))
+                if x1 == x0:
+                    continue
+                text = self.model.recognize(frame[y0:y1, x0:x1])
+                if any(value in text for value in expected):
+                    percent_seen = True
+                    break
+            if percent_seen:
+                return stats
+        return None
 
     def _digit(self, roi: np.ndarray, component: _Component) -> tuple[int, int] | None:
         pad_x = max(2, int(round(component.h * 0.28)))
@@ -263,7 +324,7 @@ class IvOcr:
             answers.append((percent_match, support, -geometry_penalty, stats))
 
         if not answers:
-            return None
+            return self._read_from_slash_template(frame, region)
         answers.sort(reverse=True)
         best = answers[0]
         # Each glyph is tried under six independent binarisations. Require a conservative average

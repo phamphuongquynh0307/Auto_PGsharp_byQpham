@@ -21,6 +21,7 @@ def bare_app(serial="192.168.1.4:43239"):
     app.log_queue = queue.Queue()
     app.root = ImmediateRoot()
     app.remembered = []
+    app.manager = None
     app._remember_device = lambda value: app.remembered.append(value)
     app.tr = lambda key: "lost {}/{}" if key == "conn_run_lost" else key
     return app

@@ -24,7 +24,7 @@ Vietnamese users can follow the [detailed setup guide for every mode](HUONG_DAN.
 - **Editable throws** — adjust throw power and flick duration for different phones.
 - **Manual calibration** — fine-tune touch coordinates when automatic scaling is not accurate enough.
 - **Exact-IV shiny hunting** — enter separate 0–15 Attack/Defence/HP targets; both source modes stop only when all three columns match.
-- **Shundo from Discord coords** — receives coordinates from the Edge extension, teleports in order, and requests the next coordinate only after a check completes.
+- **Shundo from Discord coords** — uses each coordinate's Discord IV as its target, compares it with the encounter IV, and requests the next coordinate only after a check completes. Saved target IV fields apply only to Feed mode.
 - **Popup handling** — closes weather, speed, level-up, and PokeStop screens automatically.
 - **Out-of-ball recovery** — pauses catching while AutoWalk continues searching for more items, then resumes automatically.
 - **Discord alerts** — notifications for long spawn gaps, periodic reports, low battery, no balls, shiny encounters, and more.
@@ -72,6 +72,8 @@ Choose a catch style as well:
 ### 4. Run
 
 Click **Run** to start, **Pause** to pause, or **Stop** to finish. Activity is shown in the log panel.
+
+**Multiple devices:** the app scans automatically and shows each device as a tab in one window, with all four inner tabs and its own controls and settings. **Run all** and **Stop all** control connected devices together. **View all** shows the phones side by side in one window; the Live view button in each device tab opens the same view. It detects already enabled or paired ADB Wi-Fi and switches the same tab from USB to Wi-Fi, including during a run. To enable ADB Wi-Fi from USB for the first time, use **Add via Wi-Fi** and **Switch USB device to Wi-Fi**, then unplug only after connection succeeds. Discord Coord uses a fixed receiver port and runs only in the first device tab.
 
 ### 5. Settings
 

@@ -1,9 +1,9 @@
 import threading
 import unittest
-from unittest.mock import patch
 
 from avc.coord_shundo import CoordShundoConfig, CoordShundoRoutine
 from avc.coord_source import CoordItem, CoordQueue
+from avc.shundo import ShundoStats
 
 
 class FakeDevice:
@@ -41,6 +41,59 @@ class BareCoordRoutine(CoordShundoRoutine):
 
 
 class CoordTeleportTests(unittest.TestCase):
+    def test_each_coord_supplies_its_own_target_instead_of_saved_settings(self):
+        config = CoordShundoConfig(target_ivs=(15, 15, 15), iv_read_tries=1)
+        routine = BareCoordRoutine(FakeDevice(), CoordQueue(), config)
+        routine.stats = ShundoStats()
+        routine.current_coord = CoordItem.from_payload({
+            "coordinate": "1.2,3.4", "discordText": "IV57 9/2/15"
+        })
+        routine._read_iv_stats = lambda _frame: (9, 2, 15)
+        self.assertEqual("shundo", routine._grade_encounter(confirmed_frame=object()))
+
+        routine.current_coord = CoordItem.from_payload({
+            "coordinate": "5.6,7.8", "discordText": "IV58 10/2/14"
+        })
+        routine._read_iv_stats = lambda _frame: (10, 2, 14)
+        self.assertEqual("shundo", routine._grade_encounter(confirmed_frame=object()))
+        self.assertEqual(2, routine.stats.shundos)
+
+    def test_game_iv_mismatch_is_not_a_match_to_discord_coord(self):
+        routine = BareCoordRoutine(FakeDevice(), CoordQueue(), CoordShundoConfig(iv_read_tries=1))
+        routine.stats = ShundoStats()
+        routine.current_coord = CoordItem.from_payload({
+            "coordinate": "1.2,3.4", "discordText": "IV57 9/2/15"
+        })
+        routine._read_iv_stats = lambda _frame: (10, 2, 14)
+
+        self.assertEqual("shiny", routine._grade_encounter(confirmed_frame=object()))
+        self.assertEqual((10, 2, 14), routine.stats.last_ivs)
+
+    def test_missing_discord_triplet_falls_back_to_saved_target(self):
+        routine = BareCoordRoutine(FakeDevice(), CoordQueue(), CoordShundoConfig(
+            target_ivs=(15, 15, 15), iv_read_tries=1))
+        routine.stats = ShundoStats()
+        routine.current_coord = CoordItem.from_payload({
+            "coordinate": "1.2,3.4", "discordText": "IV57% Click for Coords"
+        })
+        routine._read_iv_stats = lambda _frame: (9, 2, 15)
+        self.assertEqual("shiny", routine._grade_encounter(confirmed_frame=object()))
+
+        routine._read_iv_stats = lambda _frame: (15, 15, 15)
+        self.assertEqual("shundo", routine._grade_encounter(confirmed_frame=object()))
+
+    def test_unreadable_game_iv_does_not_auto_match_discord_target(self):
+        routine = BareCoordRoutine(FakeDevice(), CoordQueue(), CoordShundoConfig(iv_read_tries=1))
+        routine.stats = ShundoStats()
+        routine.current_coord = CoordItem.from_payload({
+            "coordinate": "1.2,3.4", "discordText": "IV57 9/2/15"
+        })
+        routine._read_iv_stats = lambda _frame: None
+        outcome = routine._grade_encounter(confirmed_frame=object())
+
+        self.assertEqual("iv_unknown", outcome)
+        self.assertIsNone(routine.stats.last_ivs)
+
     def test_empty_queue_is_a_separate_idle_outcome(self):
         routine = BareCoordRoutine(FakeDevice(), CoordQueue(), CoordShundoConfig(coord_queue_poll=0))
         self.assertEqual(routine._teleport_next(object()), "coord_idle")

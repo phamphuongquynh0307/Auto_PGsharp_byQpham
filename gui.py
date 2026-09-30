@@ -14,7 +14,10 @@ import base64
 import json
 import os
 import queue
+import socket
+import hashlib
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -41,7 +44,7 @@ from avc.shundo import ShundoConfig, ShundoRoutine
 from avc import updater
 
 
-APP_VERSION = "1.4.31"
+APP_VERSION = "1.4.32"
 from avc.spin import SpinRoutine
 
 # Donate destinations shown on the Donate tab.
@@ -98,8 +101,9 @@ LANG = {
         "📖 HƯỚNG DẪN NHANH THEO TỪNG CHẾ ĐỘ\n\n"
         "① KẾT NỐI VÀ KIỂM TRA\n"
         "• Bật USB debugging; điện thoại và máy tính dùng chung Wi-Fi.\n"
-        "• Lần đầu cắm USB → Kết nối → Wi-Fi. Chỉ rút cáp sau khi app báo thành công.\n"
-        "• Chọn máy rồi bấm ‘Kiểm tra ADB/scrcpy’. Cần đủ ADB, stream và socket điều khiển.\n"
+        "• App tự quét; mỗi điện thoại hiện trong một tab với đầy đủ các mục.\n"
+        "• App tự nhận Wi-Fi đã bật/ghép đôi. Nếu chưa bật, chọn ‘Thêm qua Wi-Fi’ khi còn cắm USB.\n"
+        "• Chọn tab máy rồi bấm ‘Kiểm tra ADB/scrcpy’. Cần đủ ADB, stream và socket điều khiển.\n"
         "• Dùng ‘👁 Xem bot nhìn’ trước; chỉ căn tay khi vùng nhận diện thật sự bị lệch.\n\n"
         "② AUTO BẮT POKÉMON\n"
         "• PGSharp ở màn hình map, thanh Nearby bên phải phải nhìn thấy Pokémon.\n"
@@ -129,8 +133,9 @@ LANG = {
         "📖 QUICK GUIDE BY MODE\n\n"
         "① CONNECT AND TEST\n"
         "• Enable USB debugging; keep the phone and PC on the same Wi-Fi.\n"
-        "• First time: USB → Connect → Wi-Fi. Unplug only after the success message.\n"
-        "• Run ‘Test ADB/scrcpy’; ADB capture, realtime stream and control socket must all pass.\n"
+        "• Devices are discovered automatically; each phone gets a tab with all sections.\n"
+        "• Already enabled/paired ADB Wi-Fi is detected automatically. Otherwise use Add via Wi-Fi with USB plugged in.\n"
+        "• Select a device tab and run Test ADB/scrcpy; capture, stream and control must pass.\n"
         "• Open Live view first. Use Manual align only when the overlay is visibly misplaced.\n\n"
         "② AUTO CATCH\n"
         "• Stay on the map with a Pokémon visible in PGSharp's right-side Nearby bar.\n"
@@ -159,6 +164,12 @@ LANG = {
     "copy":          {"vi": "Sao chép", "en": "Copy"},
     "copied":        {"vi": "Đã chép ✓", "en": "Copied ✓"},
     "device":        {"vi": "Thiết bị:", "en": "Device:"},
+    "coord_single_window": {"vi": "Chế độ Discord Coord chỉ chạy trong cửa sổ chính (cổng 8766).",
+                            "en": "Discord Coord mode runs only in the main window (port 8766)."},
+    "usb_to_wifi": {"vi": "Chuyển máy USB sang Wi-Fi", "en": "Switch USB device to Wi-Fi"},
+    "tools":       {"vi": "Công cụ", "en": "Tools"},
+    "conn_usb_missing": {"vi": "Không thấy cáp USB của máy này — cắm cáp rồi thử lại.",
+                         "en": "This phone's USB cable isn't plugged in — plug it in and retry."},
     "refresh":       {"vi": "Làm mới", "en": "Refresh"},
     "test_control":  {"vi": "Kiểm tra ADB/scrcpy", "en": "Test ADB/scrcpy"},
     "test_running":  {"vi": "Đang kiểm tra ADB, stream và scrcpy…", "en": "Testing ADB, stream, and scrcpy…"},
@@ -172,7 +183,7 @@ LANG = {
                         "en": "✓ scrcpy control socket works (no tap sent)."},
     "test_fail":     {"vi": "✗ Kiểm tra thất bại tại {}: {}", "en": "✗ Test failed at {}: {}"},
     "connect":       {"vi": "Kết nối", "en": "Connect"},
-    "wireless_debug": {"vi": "Wireless Debug", "en": "Wireless Debug"},
+    "wireless_debug": {"vi": "📶 Thêm máy qua Wi-Fi…", "en": "📶 Add phone over Wi-Fi…"},
     "wd_title":      {"vi": "Kết nối Wireless Debugging", "en": "Connect Wireless Debugging"},
     "wd_help":       {"vi": "Điện thoại và máy tính phải cùng Wi-Fi. Nếu đã ghép đôi, thử Tự tìm trước; nếu không thấy, nhập ‘Địa chỉ IP & cổng’ ở màn Wireless debugging.",
                       "en": "Phone and PC must be on the same Wi-Fi. If already paired, try Auto find first; if it is not found, enter ‘IP address & Port’ from the Wireless debugging screen."},
@@ -210,8 +221,8 @@ LANG = {
                       "en": "Wireless ADB dropped; reconnecting the catch session ({}/{})…"},
     "conn_run_restored": {"vi": "✓ Đã nối lại ADB ({}); tiếp tục phiên bắt hiện tại.",
                           "en": "✓ ADB reconnected ({}); continuing the current catch session."},
-    "conn_re_fail":  {"vi": "Không tự tìm thấy thiết bị — bấm Wireless Debug để nhập IP:cổng hoặc ghép đôi.",
-                      "en": "No device was auto-discovered — click Wireless Debug to enter IP:port or pair."},
+    "conn_re_fail":  {"vi": "Không tự tìm thấy thiết bị — vào Công cụ → Thêm máy qua Wi-Fi để nhập IP:cổng hoặc ghép đôi.",
+                      "en": "No device was auto-discovered — use Tools → Add phone over Wi-Fi to enter IP:port or pair."},
     "pick_usb":      {"vi": "Đang cắm nhiều máy — chọn máy:", "en": "Multiple phones plugged in — pick one:"},
     "grp_catch":     {"vi": "Bắt Pokémon", "en": "Catching"},
     "grp_pace":      {"vi": "Nhịp độ & an toàn tài khoản", "en": "Pacing & account safety"},
@@ -392,7 +403,9 @@ LANG = {
         "vi": "✨ Shiny IV {} đúng IV nhưng không có Special Background. Bot {} — vào máy xử lý!",
         "en": "✨ Shiny IV {} matches but has no Special Background. Bot {} — go handle it!"},
     "msg_s_iv_unknown": {"vi": "⚠️ Không đọc được IV — đã giữ encounter và tạm dừng để không bỏ nhầm Pokémon.",
-                          "en": "⚠️ Could not read IV — kept the encounter open and paused to avoid skipping the target."},
+                           "en": "⚠️ Could not read IV — kept the encounter open and paused to avoid skipping the target."},
+    "msg_coord_iv_unknown": {"vi": "⚠️ Coord Discord không có bộ ba IV chính xác — đã giữ shiny và tạm dừng, không dùng IV trong cài đặt.",
+                              "en": "⚠️ Discord coord has no exact IV triplet — kept the shiny open and paused without using the saved IV target."},
     "msg_s_idle":    {"vi": "(chưa thấy Pokémon trong thanh Feed — đang chờ)",
                        "en": "(no Pokémon found in the Feed yet — waiting)"},
     "msg_coord_idle": {"vi": "(đang chờ coord từ extension — hàng đợi hiện trống)",
@@ -532,9 +545,10 @@ GUIDE_PAGES = {
 ## C. Kết nối lần đầu
 1. Cắm cáp USB truyền dữ liệu; cáp chỉ sạc sẽ không dùng được.
 2. Khi Android hỏi cho phép gỡ lỗi, đánh dấu Luôn cho phép từ máy tính này rồi bấm Cho phép.
-3. Trong app bấm Kết nối → Wi-Fi (rút được cáp).
+3. Không cần bấm gì: app tự chuyển máy sang Wi-Fi sau vài giây (nếu không được, bấm chữ USB ⇄ ở đầu cửa sổ).
+   Muốn đổi giữa cáp và Wi-Fi thì bấm chữ Wi-Fi ⇄ / USB ⇄ ở đầu cửa sổ (nhiều máy: cột Kết nối); app nhớ lựa chọn này.
 4. Chờ nhật ký báo đã kết nối Wi-Fi và có thể rút cáp rồi mới rút.
-5. Những lần sau chỉ cần chọn thiết bị đã lưu. Nếu mất kết nối, bấm Làm mới; không được nữa thì cắm USB để bật lại ADB Wi-Fi.
+5. Những lần sau app tự kết nối lại máy đã lưu. Điện thoại khởi động lại thì cắm USB một lần để app bật lại ADB Wi-Fi.
 
 [[IMAGE:03-connect-wifi|Chụp hộp chọn USB/Wi-Fi, hộp cấp quyền trên Android và dòng báo có thể rút cáp.]]
 
@@ -567,7 +581,8 @@ mũi tên THROW phải bám quả bóng. Nếu vẫn sai, giữ nguyên màn hì
 1. Enable Developer options and USB debugging.
 2. Keep the phone and PC on the same Wi-Fi.
 3. Plug in a data-capable USB cable and approve the Android debugging prompt.
-4. In the app choose Connect → Wi-Fi. Unplug only after the success message.
+4. The app switches the phone to Wi-Fi by itself within a few seconds (fallback: click USB ⇄ at the top of the window). Unplug only after the success message.
+   Click Wi-Fi ⇄ / USB ⇄ at the top of the window (several phones: the Link column) to switch cable ↔ Wi-Fi; the app remembers it.
 [[IMAGE:02-usb-debug|Developer options and USB debugging.]]
 [[IMAGE:03-connect-wifi|USB/Wi-Fi choice and successful connection log.]]
 
@@ -736,7 +751,7 @@ Vào 🎯 Căn chỉnh tay → Discord Coord:
 
 ## D. Thứ tự chạy
 1. Mở app và kiểm tra log Bộ nhận Discord Coord đang chạy tại 127.0.0.1:8766.
-2. Chọn chế độ, nhập IV và bấm Chạy.
+2. Chọn chế độ và bấm Chạy. IV mục tiêu được lấy từ chính coord Discord; không cần nhập ba ô IV.
 3. Sau đó mới mở Collector và bấm Bắt đầu.
 4. Collector gửi một coord; app chấm xong coord đó rồi mới cấp quyền lấy coord mới nhất tiếp theo.
 
@@ -747,7 +762,7 @@ Vào 🎯 Căn chỉnh tay → Discord Coord:
 
 Load the unpacked Edge extension, sign into Discord Web and Pokedex100 in the same profile, and keep the target Discord tab active.
 In PGSharp enable Block Non-Shiny and Encounter IV, disconnect VGP, add Teleport to Custom Shortcuts and keep the shortcut menu expanded.
-Align Teleport row, Coordinates input and the OK button after hiding the keyboard. Start the desktop app before Collector.
+Align Teleport row, Coordinates input and the OK button after hiding the keyboard. Each Discord coord supplies its own target IV; the saved IV fields apply only to Feed. Start the desktop app before Collector.
 [[IMAGE:12-edge-extension|Loaded Edge extension and Collector popup.]]
 [[IMAGE:13-pgsharp-teleport|Expanded PGSharp Teleport flow.]]
 [[IMAGE:14-coord-flow|Three alignment points and received-coordinate log.]]
@@ -834,17 +849,31 @@ def _parse_guide_image_marker(line: str) -> tuple[str, str] | None:
     return stem, caption.strip()
 
 
-def _settings_path() -> str:
+def _settings_path(serial: str | None = None) -> str:
     """Store settings next to the exe (frozen) or the script (source)."""
     base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+    serial = os.environ.get("AVC_DEVICE_SERIAL", "") if serial is None else serial
+    if serial:
+        token = hashlib.sha256(serial.encode("utf-8")).hexdigest()[:12]
+        return os.path.join(base, f"settings-{token}.json")
     return os.path.join(base, "settings.json")
 
 
 class App:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, *, container=None, serial: str | None = None,
+                 primary: bool = True, manager=None, settings_key: str | None = None) -> None:
         self.root = root
-        root.geometry("470x780")
-        root.minsize(430, 700)
+        self.container = container if container is not None else root
+        self.manager = manager
+        self.is_primary = primary
+        self.instance_serial = (os.environ.get("AVC_DEVICE_SERIAL", "")
+                                if serial is None else serial)
+        self._settings_key = settings_key or self.instance_serial
+        self._settings_file = _settings_path(self._settings_key)
+        self._save_after_id = None
+        if manager is None:
+            root.geometry("470x780")
+            root.minsize(430, 700)
 
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.routine: CatchRoutine | None = None
@@ -872,6 +901,8 @@ class App:
         # Every device ever connected, most recent first; shown in the picker even when
         # currently offline, and Wi-Fi ones are re-connected automatically.
         self.known: list[str] = [s for s in data.get("known_devices", []) if isinstance(s, str)][:10]
+        # Chosen from Tools: stay on the cable even when Wi-Fi is available (no auto-switch).
+        self.prefer_usb = bool(data.get("prefer_usb", False))
         # Manual alignment: device-pixel overrides for tap points / detection boxes, keyed by
         # field name; "_screen" stores the resolution they were set at. Empty = full auto.
         #
@@ -891,17 +922,26 @@ class App:
         self._apply_settings(data)
         self._sync_settings_visibility()
         self._retranslate()
-        try:
-            port = self.coord_bridge.start()
-            self._log(self.tr("msg_coord_bridge").format(port))
-        except OSError as error:
-            self._coord_bridge_error = str(error)
-            self._log(self.tr("msg_coord_bridge_fail").format(error))
+        if self.is_primary:
+            try:
+                port = self.coord_bridge.start()
+                self._log(self.tr("msg_coord_bridge").format(port))
+            except OSError as error:
+                self._coord_bridge_error = str(error)
+                self._log(self.tr("msg_coord_bridge_fail").format(error))
         self.refresh_devices()
+        if self.instance_serial:
+            self.device_var.set(self.instance_serial)
+            self.device_combo.config(state="disabled")
+            self.connect_btn.config(state="disabled")
+        if self.manager is not None:
+            self._compact_for_manager()
+        self._watch_settings_changes()
         self.root.after(100, self._drain_log)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.bind("<Destroy>", self._on_root_destroy, add="+")
-        if getattr(sys, "frozen", False):
+        if self.manager is None:
+            self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+            self.root.bind("<Destroy>", self._on_root_destroy, add="+")
+        if getattr(sys, "frozen", False) and self.is_primary:
             updater.discard_stale(sys.executable)
             threading.Thread(target=self._check_update, daemon=True).start()
 
@@ -965,19 +1005,25 @@ class App:
     def _build_ui(self) -> None:
         pad = {"padx": 8, "pady": 4}
 
-        self.notebook = ttk.Notebook(self.root)
+        self.notebook = ttk.Notebook(self.container)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
         self.tab_main = ttk.Frame(self.notebook)
         self.tab_settings = ttk.Frame(self.notebook)
-        self.tab_guide = ttk.Frame(self.notebook)
-        self.tab_donate = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_main, text=self.tr("tab_main"))
         self.notebook.add(self.tab_settings, text=self.tr("tab_settings"))
-        self.notebook.add(self.tab_guide, text=self.tr("tab_guide"))
-        self.notebook.add(self.tab_donate, text=self.tr("tab_donate"))
+        # Guide and Donate are the same for every phone. In the multi-device window the first
+        # panel builds them once, as pages of the manager's stack, instead of one copy per phone.
+        self._has_help = self.manager is None or self.is_primary
+        self._help_book = self.notebook if self.manager is None else self.manager.tabs
+        if self._has_help:
+            self.tab_guide = ttk.Frame(self._help_book)
+            self.tab_donate = ttk.Frame(self._help_book)
+            self._help_book.add(self.tab_guide, text=self.tr("tab_guide"))
+            self._help_book.add(self.tab_donate, text=self.tr("tab_donate"))
 
         # ---- Control tab ----
         top = ttk.Frame(self.tab_main)
+        self._device_row = top
         top.pack(fill="x", **pad)
         self._label(top, "device").pack(side="left")
         self.device_var = tk.StringVar()
@@ -997,6 +1043,8 @@ class App:
         )
         self.wireless_btn.pack(side="left")
         self._i18n.append((self.wireless_btn, "wireless_debug"))
+        self._test_row = test_row
+        self._wifi_busy = False
         self.test_control_btn = ttk.Button(
             test_row, text=self.tr("test_control"), command=self._test_device_control,
         )
@@ -1004,6 +1052,7 @@ class App:
         self._i18n.append((self.test_control_btn, "test_control"))
 
         mode_row = ttk.Frame(self.tab_main)
+        self._mode_row = mode_row
         mode_row.pack(fill="x", **pad)
         self._label(mode_row, "mode").pack(side="left")
         self.mode = "catch"            # "catch" | "shundo" | "coord_shundo" | "spin"
@@ -1020,7 +1069,7 @@ class App:
 
         controls = ttk.Frame(self.tab_main)
         controls.pack(fill="x", **pad)
-        self.play_btn = ttk.Button(controls, text=self.tr("run"), command=self.on_play)
+        self.play_btn = AccentButton(controls, text=self.tr("run"), command=self.on_play)
         self.play_btn.pack(side="left", expand=True, fill="x", padx=3)
         self._i18n.append((self.play_btn, "run"))
         self.pause_btn = ttk.Button(controls, text=self.tr("pause"), command=self.on_pause, state="disabled")
@@ -1030,6 +1079,7 @@ class App:
         self._i18n.append((self.stop_btn, "stop"))
 
         status = ttk.Frame(self.tab_main)
+        self._status_row = status
         status.pack(fill="x", **pad)
         self.status_var = tk.StringVar(value=self.tr("st_ready"))
         ttk.Label(status, textvariable=self.status_var, font=("Segoe UI", 10, "bold")).pack(side="left")
@@ -1046,6 +1096,7 @@ class App:
         self.log.config(yscrollcommand=sb.set)
 
         report_row = ttk.Frame(self.tab_main)
+        self._report_row = report_row
         report_row.pack(fill="x", padx=8, pady=(0, 6))
         self.export_btn = ttk.Button(report_row, text=self.tr("export"), command=self.export_report)
         self.export_btn.pack(side="right")
@@ -1277,6 +1328,20 @@ class App:
         self.alert_batt = self._spin(dc_grp, "alert_batt", 3, 0, 90, 20)
         dc_grp.columnconfigure(1, weight=1)
 
+        self._build_help()
+
+        lang_row = ttk.Frame(self.tab_settings)
+        lang_row.pack(fill="x", **pad)
+        self._label(lang_row, "language").pack(side="left")
+        self.lang_var = tk.StringVar(value=dict(LANG_NAMES)[self.lang])
+        self.lang_combo = ttk.Combobox(lang_row, textvariable=self.lang_var, state="readonly",
+                                       values=[name for _c, name in LANG_NAMES], width=14)
+        self.lang_combo.pack(side="left", padx=6)
+        self.lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
+
+    def _build_help(self) -> None:
+        if not self._has_help:
+            return
         # ---- Donate tab ----
         donate_msg = ttk.Label(self.tab_donate, text=self.tr("donate_msg"), wraplength=410, justify="left")
         donate_msg.pack(anchor="w", padx=14, pady=(16, 12))
@@ -1307,15 +1372,6 @@ class App:
         self.guide_text.pack(side="left", fill="both", expand=True)
         gscroll.config(command=self.guide_text.yview)
         self._set_guide_text()
-
-        lang_row = ttk.Frame(self.tab_settings)
-        lang_row.pack(fill="x", **pad)
-        self._label(lang_row, "language").pack(side="left")
-        self.lang_var = tk.StringVar(value=dict(LANG_NAMES)[self.lang])
-        self.lang_combo = ttk.Combobox(lang_row, textvariable=self.lang_var, state="readonly",
-                                       values=[name for _c, name in LANG_NAMES], width=14)
-        self.lang_combo.pack(side="left", padx=6)
-        self.lang_combo.bind("<<ComboboxSelected>>", self._on_lang_change)
 
     def _on_guide_section_change(self, _event=None) -> None:
         index = self.guide_section_combo.current()
@@ -1511,6 +1567,8 @@ class App:
         # Quick Catch owns the flick and the post-throw wait outright.
         for key in ("quick_flick", "post_throw"):
             self._set_row_visible(key, catching and quick)
+        for key in ("target_iv_atk", "target_iv_def", "target_iv_sta"):
+            self._set_row_visible(key, self.mode == "shundo")
         # Spinning to refill needs no key, so it is on offer in both catch styles. The refill
         # duration applies to the plain AutoWalk hold as well, so it stays visible either way.
         self._set_row_visible("no_balls_spin", catching)
@@ -1573,16 +1631,24 @@ class App:
             if name == chosen:
                 self.lang = code
                 break
-        self._retranslate()
-        self.save_settings()
+        # One window, one language: every phone's panel follows the choice.
+        apps = list(self.manager.sessions.values()) if self.manager is not None else [self]
+        for app in apps:
+            app.lang = self.lang
+            app.lang_var.set(chosen)
+            app._retranslate()
+            app.save_settings()
 
     def _retranslate(self) -> None:
-        self.root.title(f"{self.tr('title')} v{APP_VERSION}")
+        suffix = f" — {self.instance_serial}" if self.instance_serial else ""
+        if self.manager is None:
+            self.root.title(f"{self.tr('title')} v{APP_VERSION}{suffix}")
         self.notebook.tab(self.tab_main, text=self.tr("tab_main"))
         self.notebook.tab(self.tab_settings, text=self.tr("tab_settings"))
-        self.notebook.tab(self.tab_guide, text=self.tr("tab_guide"))
-        self.notebook.tab(self.tab_donate, text=self.tr("tab_donate"))
-        self._set_guide_text()
+        if self._has_help:
+            self._help_book.tab(self.tab_guide, text=self.tr("tab_guide"))
+            self._help_book.tab(self.tab_donate, text=self.tr("tab_donate"))
+            self._set_guide_text()
         for widget, key in self._i18n:
             widget.config(text=self.tr(key))
         self.pause_btn.config(text=self.tr("resume" if self.paused else "pause"))
@@ -1601,10 +1667,115 @@ class App:
     # -- settings persistence -------------------------------------------------
     def _read_settings(self) -> dict:
         try:
-            with open(_settings_path(), encoding="utf-8") as f:
-                return json.load(f)
+            with open(self._settings_file, encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
         except (OSError, ValueError):
-            return {}
+            pass
+        if self.instance_serial:
+            # Older builds named files after the ADB transport. Find the latest settings
+            # belonging to this phone before copying defaults from another phone.
+            base = os.path.dirname(self._settings_file)
+            matches = []
+            try:
+                names = os.listdir(base)
+            except OSError:
+                names = []
+            for name in names:
+                if not (name.startswith("settings-") and name.endswith(".json")):
+                    continue
+                path = os.path.join(base, name)
+                if path == self._settings_file:
+                    continue
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        continue
+                    known = data.get("known_devices", [])
+                    if (data.get("device") == self.instance_serial
+                            or isinstance(known, list) and self.instance_serial in known):
+                        matches.append((os.path.getmtime(path), data))
+                except (OSError, ValueError):
+                    continue
+            if matches:
+                return max(matches, key=lambda item: item[0])[1]
+        try:
+            if self.instance_serial:
+                # A new phone starts as a copy of the phone already open. Calibration and
+                # cable preference are specific to the donor and must not be copied.
+                donor = self._settings_donor()
+                base = donor._settings_file if donor is not None else _settings_path("")
+                if donor is not None:
+                    donor.save_settings()
+                with open(base, encoding="utf-8") as f:
+                    data = json.load(f)
+                if not isinstance(data, dict):
+                    return {}
+                data = data.copy()
+                if data.get("device") != self.instance_serial:
+                    data["manual"] = {}
+                data["device"] = self.instance_serial
+                data.pop("prefer_usb", None)
+                return data
+        except (OSError, ValueError):
+            pass
+        return {}
+
+    def _settings_donor(self):
+        if self.manager is None:
+            return None
+        others = [app for serial, app in self.manager.sessions.items()
+                  if serial and app is not self]
+        running = [app for app in others if app.worker and app.worker.is_alive()]
+        return (running or others or [None])[0]
+
+    def _watch_settings_changes(self) -> None:
+        """Save ordinary edits too, including entries and checkboxes without commands."""
+        names = (
+            "throw_power", "quick_flick", "wait_enc", "wait_catch", "idle_aw",
+            "max_catches", "settle", "touch_delay", "post_throw", "show_advanced",
+            "flee_taps", "flee_gap", "max_throws", "dim_screen", "catch_use_feed",
+            "feed_wait", "no_balls_spin", "no_balls_min", "spin_radius", "spin_gap",
+            "spin_min_area", "min_gap", "pre_tap", "respect_cd", "use_ui_dump",
+            "stuck_back", "stuck_report", "trace_timing", "tp_wait", "restart_delay",
+            "s_enc_wait", "target_iv_atk", "target_iv_def", "target_iv_sta",
+            "require_background", "alert_shiny", "webhook_url", "alert_idle",
+            "alert_report", "alert_batt",
+        )
+        for name in names:
+            getattr(self, name).trace_add("write", self._queue_settings_save)
+
+    def _queue_settings_save(self, *_args) -> None:
+        if getattr(self, "_suspend_settings_save", False):
+            return
+        if self._save_after_id is not None:
+            self.root.after_cancel(self._save_after_id)
+        self._save_after_id = self.root.after(400, self._autosave_settings)
+
+    def _autosave_settings(self) -> None:
+        self._save_after_id = None
+        self.save_settings()
+
+    def _adopt_device_settings(self, serial: str, identity: str) -> None:
+        """The blank landing tab must load this phone's settings when it appears."""
+        self.instance_serial = serial
+        self._settings_key = identity or serial
+        self._settings_file = _settings_path(self._settings_key)
+        data = self._read_settings()
+        self._suspend_settings_save = True
+        try:
+            self.known = [s for s in data.get("known_devices", []) if isinstance(s, str)][:10]
+            self.prefer_usb = bool(data.get("prefer_usb", False))
+            self.manual = data.get("manual", {}) if isinstance(data.get("manual"), dict) else {}
+            self.lang = data.get("lang", self.lang) if data.get("lang") in ("vi", "en") else self.lang
+            self._apply_settings(data)
+            self.device_var.set(serial)
+            self._sync_settings_visibility()
+            self._retranslate()
+        finally:
+            self._suspend_settings_save = False
 
     def _apply_settings(self, data: dict) -> None:
         if not data:
@@ -1688,6 +1859,30 @@ class App:
             self.device_var.set(data["device"])
 
     def save_settings(self) -> None:
+        try:
+            data = self._settings_data()
+        except (tk.TclError, ValueError) as error:
+            # Spinbox text is temporarily invalid while someone is typing. Keep the last
+            # complete file and save again when the value becomes valid.
+            self._log(f"Chưa lưu cài đặt vì có ô chưa hợp lệ: {error}")
+            return
+        temporary = None
+        try:
+            directory = os.path.dirname(self._settings_file)
+            fd, temporary = tempfile.mkstemp(prefix=".settings-", suffix=".tmp", dir=directory)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            os.replace(temporary, self._settings_file)
+        except OSError as error:
+            self._log(f"Không lưu được cài đặt ({self._settings_file}): {error}")
+        finally:
+            if temporary and os.path.exists(temporary):
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    def _settings_data(self) -> dict:
         data = {
             "timing_unit": "seconds",
             "throw_power": int(self.throw_power.get()),
@@ -1732,6 +1927,7 @@ class App:
             "alert_shiny": bool(self.alert_shiny.get()),
             "device": self._sel_serial(),
             "known_devices": self.known,
+            "prefer_usb": self.prefer_usb,
             "webhook": self.webhook_url.get().strip(),
             "alert_idle": int(self.alert_idle.get()),
             "alert_report": int(self.alert_report.get()),
@@ -1739,13 +1935,12 @@ class App:
             "lang": self.lang,
             "manual": self.manual,
         }
-        try:
-            with open(_settings_path(), "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-        except OSError:
-            pass
+        return data
 
-    def _on_close(self) -> None:
+    def _shutdown(self) -> None:
+        if self._save_after_id is not None:
+            self.root.after_cancel(self._save_after_id)
+            self._save_after_id = None
         if self.routine:
             self.routine.stop()
         # Let the worker unwind (its finally stops the stream and restores brightness) so no adb
@@ -1766,13 +1961,8 @@ class App:
                 self.device.close_control()
             except Exception:  # noqa: BLE001
                 pass
-            # Frozen one-file build: the adb daemon's image lives in PyInstaller's _MEI temp dir;
-            # kill it so that dir can be removed on exit (otherwise Windows shows a
-            # 'Failed to remove temporary directory' warning).
-            try:
-                self.device.kill_server()
-            except Exception:  # noqa: BLE001
-                pass
+            # ADB belongs to every open device window. Stopping its shared server here
+            # would disconnect the other running sessions.
         self.coord_bridge.stop()
         self.save_settings()
         if self._staged_update is not None:
@@ -1780,6 +1970,12 @@ class App:
                 updater.install_on_exit(sys.executable, self._staged_update)
             except (OSError, ValueError) as error:
                 diag.write(f"Không cài được bản cập nhật: {error}")
+
+    def _on_close(self) -> None:
+        if self.manager is not None:
+            self.manager.close()
+            return
+        self._shutdown()
         self.root.destroy()
 
     def _on_root_destroy(self, event) -> None:
@@ -1831,7 +2027,10 @@ class App:
         # The connect worker already verified get-state=device. Do not let the follow-up picker
         # refresh launch another reconnect while adb is still propagating the transport list.
         self.refresh_devices(allow_reconnect=False)
-        self.device_var.set(serial)
+        if self.manager is not None:
+            self.manager.add_device(serial)
+        else:
+            self.device_var.set(serial)
         self._remember_device(serial)
         self._set_status("st_ready")
         self._log(self.tr("conn_re_ok").format(serial))
@@ -1840,7 +2039,7 @@ class App:
 
     def _open_wireless_debug(self) -> None:
         """Small Wireless Debugging wizard with mDNS first and explicit address fallback."""
-        if self.worker and self.worker.is_alive():
+        if self.manager is None and self.worker and self.worker.is_alive():
             self._log(self.tr("test_stop_first"))
             return
 
@@ -1862,7 +2061,7 @@ class App:
         ttk.Label(body, text=self.tr("wd_connect_addr")).grid(row=2, column=0, sticky="w")
         connect_var = tk.StringVar()
         current = self._sel_serial()
-        if ":" in current and current != Device.MUMU_SERIAL:
+        if self.manager is None and ":" in current and current != Device.MUMU_SERIAL:
             connect_var.set(current)
         connect_entry = ttk.Entry(body, textvariable=connect_var, width=27)
         connect_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(8, 0))
@@ -1992,21 +2191,34 @@ class App:
         pair_btn = ttk.Button(body, text=self.tr("wd_pair"), command=pair_device)
         pair_btn.grid(row=9, column=2, sticky="e", pady=(7, 0))
         buttons.extend((auto_btn, connect_btn, pair_btn))
+        ttk.Button(body, text=self.tr("usb_to_wifi"),
+                   command=lambda: (dlg.destroy(), self._connect_wifi())).grid(
+                       row=11, column=0, columnspan=3, sticky="w", pady=(12, 0))
         connect_entry.bind("<Return>", lambda _event: connect_address())
         pair_code_entry.bind("<Return>", lambda _event: pair_device())
         connect_entry.focus_set()
 
-    def refresh_devices(self, *, allow_reconnect: bool = True) -> None:
-        try:
-            attached = Device.list_devices()
-        except Exception as e:  # noqa: BLE001
-            attached = []
-            self._log(self.tr("msg_dev_err").format(e))
+    def refresh_devices(self, *, allow_reconnect: bool = True,
+                        attached: list[str] | None = None) -> None:
+        if self.instance_serial and not self.is_primary:
+            allow_reconnect = False
+        if attached is None:
+            try:
+                attached = Device.list_devices()
+            except Exception as e:  # noqa: BLE001
+                attached = []
+                self._log(self.tr("msg_dev_err").format(e))
         # Show every known device: attached ones plain, remembered-but-absent ones tagged.
         options = attached + [s + self.OFFLINE_TAG for s in self.known if s not in attached]
         self.device_combo["values"] = options
         cur = self._sel_serial()
-        if cur in attached:
+        if self.instance_serial:
+            self.device_var.set(self.instance_serial if self.instance_serial in attached
+                                else self.instance_serial + self.OFFLINE_TAG)
+        elif self.worker and self.worker.is_alive() and self.device is not None:
+            active = self.device.serial or cur
+            self.device_var.set(active if active in attached else active + self.OFFLINE_TAG)
+        elif cur in attached:
             self.device_var.set(cur)
         elif attached:
             # Prefer a device that is online now over a stale remembered Wi-Fi phone.
@@ -2199,7 +2411,11 @@ class App:
 
     def _usb_devices(self) -> list[str]:
         try:
-            return [d for d in Device.list_devices() if ":" not in d]
+            busy = set()
+            if self.manager is not None:
+                busy = {app.device.serial for app in self.manager.sessions.values()
+                        if app.device is not None and app.worker and app.worker.is_alive()}
+            return [d for d in Device.list_devices() if ":" not in d and d not in busy]
         except Exception:  # noqa: BLE001
             return []
 
@@ -2240,7 +2456,12 @@ class App:
 
                     def adopt() -> None:
                         self.refresh_devices()
-                        self.device_var.set(serial)
+                        if self.manager is not None:
+                            self.manager._usb_wifi_links[usb_serial] = serial
+                            self.manager.add_device(serial)
+                            self.manager.scan()
+                        else:
+                            self.device_var.set(serial)
                         self._remember_device(serial)
 
                     self.root.after(0, adopt)
@@ -2251,13 +2472,17 @@ class App:
 
                     def adopt_usb() -> None:
                         self.refresh_devices()
-                        self.device_var.set(usb_serial)
+                        if self.manager is not None:
+                            self.manager.scan()
+                        else:
+                            self.device_var.set(usb_serial)
                         self._remember_device(usb_serial)
                         self._log(self.tr("conn_usb_ok").format(usb_serial))
 
                     self.root.after(0, adopt_usb)
                 finally:
                     self.root.after(0, lambda: self.connect_btn.config(state="normal"))
+                    self._wifi_busy = False
 
             threading.Thread(target=work, daemon=True).start()
 
@@ -2271,11 +2496,90 @@ class App:
             self._log(self.tr("conn_need_usb"))
             self._set_status("st_no_device")
 
+    def _to_wifi(self) -> None:
+        if self._wifi_busy or not self.instance_serial or ":" in self.instance_serial:
+            return
+        self.prefer_usb = False
+        self.save_settings()
+        self._wifi_busy = True
+        self._connect_wifi(attached=[self.instance_serial])
+
+    def _to_usb(self) -> None:
+        """Move this phone's tab back onto its USB cable and keep it there."""
+        if self.manager is None or not self.instance_serial or ":" not in self.instance_serial:
+            return
+        usb = self.manager.usb_for(self.instance_serial)
+        if not usb:
+            self._log(self.tr("conn_usb_missing"))
+            return
+        self.prefer_usb = True
+        self.manager._rebind_app(self.instance_serial, usb, self)
+        self.save_settings()
+        self._log(self.tr("conn_usb_ok").format(usb))
+
+    def _compact_for_manager(self) -> None:
+        """Multi-device panel: the device table above already names the phone and shows its
+        status and count, so keep only mode, live view, run controls and the log here. The
+        occasional tools move into one Tools menu instead of four scattered buttons."""
+        for widget in (self._device_row, self._test_row, self.calib_btn,
+                       self._status_row, self._report_row):
+            widget.pack_forget()
+        self.tools_btn = ttk.Menubutton(self._mode_row, text=self.tr("tools"))
+        self._i18n.append((self.tools_btn, "tools"))
+        self.tools_menu = tk.Menu(self.tools_btn, tearoff=False,
+                                  postcommand=self._fill_tools_menu)
+        self.tools_btn["menu"] = self.tools_menu
+        self.tools_btn.pack(side="right", padx=(4, 0), before=self.preview_btn)
+
+    def _toggle_link(self) -> None:
+        """Flip this phone between cable and Wi-Fi (the ⇄ in the device table's Kết nối cell)."""
+        if ":" in (self.instance_serial or ""):
+            self._to_usb()
+        else:
+            self._to_wifi()
+        if self.manager is not None:
+            self.manager._refresh_labels()
+
+    def _can_switch_link(self) -> bool:
+        serial = self.instance_serial or ""
+        return (bool(serial) and not serial.startswith("127.0.0.1:")
+                and not (self.worker and self.worker.is_alive()) and not self._wifi_busy
+                and not self.device_var.get().endswith(self.OFFLINE_TAG))
+
+    def _fill_tools_menu(self) -> None:
+        """Rebuilt on every open so labels follow the language and states follow the run."""
+        menu = self.tools_menu
+        menu.delete(0, "end")
+        menu.add_command(label=self.tr("test_control"), command=self._test_device_control,
+                         state=str(self.test_control_btn["state"]))
+        menu.add_command(label=self.tr("calibrate"), command=self.open_calibrate)
+        menu.add_command(label=self.tr("wireless_debug"), command=self._open_wireless_debug)
+        menu.add_separator()
+        menu.add_command(label=self.tr("export"), command=self.export_report)
+
     def _recover_runtime_device(self, max_attempts: int = 3) -> str:
-        """Reconnect a TCP device after a transient ADB drop without ending the bot run."""
-        if self.device is None or not self.device.serial or ":" not in self.device.serial:
-            raise AdbError("the active device is not a reconnectable TCP endpoint")
+        """Restore a dropped ADB transport while keeping the current routine alive."""
+        if self.device is None or not self.device.serial:
+            raise AdbError("the active device has no ADB serial")
         current = self.device.serial
+        if ":" not in current:
+            last_error = "no matching Wi-Fi transport"
+            for attempt in range(1, max_attempts + 4):
+                if self.routine is not None and self.routine.stop_event.is_set():
+                    raise AdbError("reconnect cancelled")
+                self.log_queue.put(self.tr("conn_run_lost").format(attempt, max_attempts + 3))
+                if self.manager is not None:
+                    try:
+                        serial = self.manager.wifi_for_usb(current)
+                    except Exception as error:  # noqa: BLE001
+                        last_error = str(error)
+                        serial = None
+                    if serial:
+                        self.device.serial = serial
+                        self.root.after(0, lambda s=serial: self.manager.rebind_running(self, s))
+                        return serial
+                time.sleep(1.0)
+            raise AdbError(f"USB disconnected; {last_error}")
         adb_path = self.device.adb_path
         host = current.rsplit(":", 1)[0].strip("[]")
         candidates = [current]
@@ -2294,6 +2598,8 @@ class App:
                     Device.adb_connect(serial, adb_path, timeout=3.0)
                     self.device.serial = serial
                     self.root.after(0, lambda s=serial: self._remember_device(s))
+                    if self.manager is not None:
+                        self.root.after(0, lambda s=serial: self.manager.rebind_running(self, s))
                     return serial
                 except Exception as exc:  # noqa: BLE001 - try the next known endpoint
                     last_error = exc
@@ -2315,6 +2621,8 @@ class App:
         if discovered:
             self.device.serial = discovered
             self.root.after(0, lambda s=discovered: self._remember_device(s))
+            if self.manager is not None:
+                self.root.after(0, lambda s=discovered: self.manager.rebind_running(self, s))
             return discovered
         raise AdbError(f"could not reconnect {current}: {last_error or 'no endpoint found'}")
 
@@ -2476,14 +2784,18 @@ class App:
     # -- live view -------------------------------------------------------------
     PV_WIDTHS = (340, 460, 600)
 
-    def toggle_preview(self) -> None:
+    def toggle_preview(self, host=None) -> None:
         """Mirror the phone in real time, with the running mode's own detections drawn over
         it, and let the mouse drive the phone through the same scrcpy control socket the
         routines use. Frames come from the H.264 stream, so this is a live mirror rather than
         the old one-shot screenshot every 800 ms."""
+        if self.manager is not None and host is None:
+            self.manager.open_previews()
+            return
         if getattr(self, "_pv_win", None):
             self._close_preview()
-            return
+            if host is None:
+                return
         try:
             dev = self.device or Device(self._sel_serial() or None)
             if not (self._sel_serial() or self.device):
@@ -2497,10 +2809,11 @@ class App:
             shundo_cfg = self._apply_manual(ShundoConfig().scale_to(*self._pv_size, dens), "shundo")
             spin_cfg = self._apply_manual(
                 self._spin_config(CatchConfig()).scale_to(*self._pv_size, dens), "catch")
-            self._pv_dets = {"catch": CatchRoutine(dev, catch_cfg),
-                              "shundo": ShundoRoutine(dev, shundo_cfg),
-                              "coord_shundo": ShundoRoutine(dev, shundo_cfg),
-                              "spin": SpinRoutine(dev, spin_cfg)}
+            # Detector constructors load templates and OCR resources. Keep configs ready,
+            # but only construct the mode actually shown by the overlay, on demand.
+            self._pv_configs = {"catch": catch_cfg, "shundo": shundo_cfg,
+                                "coord_shundo": shundo_cfg, "spin": spin_cfg}
+            self._pv_dets = {}
             # Only stop the stream on close if we were the ones who started it; while the bot
             # runs it owns the stream and pulling it out from under the routine would stall it.
             self._pv_owns_stream = dev._stream is None
@@ -2510,19 +2823,26 @@ class App:
             self._log(self.tr("pv_err").format(e))
             return
 
-        win = tk.Toplevel(self.root)
-        win.title(self.tr("preview"))
+        win = host if host is not None else tk.Toplevel(self.root)
+        self._pv_embedded = host is not None
+        if host is None:
+            win.title(self.tr("preview"))
         self._pv_win = win
-        win.protocol("WM_DELETE_WINDOW", self._close_preview)
+        if host is None:
+            win.protocol("WM_DELETE_WINDOW", self._close_preview)
 
         bar = ttk.Frame(win)
         bar.pack(fill="x", padx=6, pady=(6, 2))
-        self.pv_overlay = tk.BooleanVar(value=True)
+        # The bot already runs its detectors. A second annotate pass on every preview
+        # interval is expensive when several windows are active; it can be enabled here
+        # when the user actually needs a diagnostic overlay.
+        overlay_on = host is None and not (self.worker and self.worker.is_alive())
+        self.pv_overlay = tk.BooleanVar(value=overlay_on)
         self.pv_control = tk.BooleanVar(value=True)
         # Tk variables must not be read from the worker threads (tkinter is not thread-safe —
         # doing so silently killed every frame), so mirror them into plain flags here, on the
         # UI thread, and let the threads read those.
-        self._pv_overlay_on = True
+        self._pv_overlay_on = overlay_on
         self._pv_control_on = True
 
         def sync_flags() -> None:
@@ -2566,11 +2886,11 @@ class App:
                             for t in (self._pv_loop, self._pv_overlay_loop)]
         for t in self._pv_threads:
             t.start()
-        self._pv_pump()
+        self._pv_pump(self._pv_stop)
 
-    def _pv_pump(self) -> None:
+    def _pv_pump(self, stop=None) -> None:
         """Drain the newest mirrored frame onto the window. Runs on the UI thread."""
-        if getattr(self, "_pv_win", None) is None:
+        if getattr(self, "_pv_win", None) is None or (stop is not None and stop is not self._pv_stop):
             return
         try:
             data, shown, status = self._pv_queue.get_nowait()
@@ -2582,7 +2902,7 @@ class App:
             self._pv_shown = shown
             self._pv_label.config(image=img)
             self._pv_status.set(f"{status}   ⚠ {self._pv_error}" if self._pv_error else status)
-        self.root.after(30, self._pv_pump)
+        self.root.after(50, lambda: self._pv_pump(stop))
 
     def _close_preview(self) -> None:
         win = getattr(self, "_pv_win", None)
@@ -2594,6 +2914,8 @@ class App:
             thread.join(timeout=2.0)
         self._pv_threads = []
         self._pv_layer = None
+        self._pv_dets = {}
+        self._pv_configs = {}
         if getattr(self, "_pv_owns_stream", False) and getattr(self, "_pv_dev", None) is not None:
             try:
                 self._pv_dev.stop_stream()
@@ -2602,9 +2924,14 @@ class App:
         self._pv_owns_stream = False
         if win is not None:
             try:
-                win.destroy()
+                if getattr(self, "_pv_embedded", False):
+                    for child in win.winfo_children():
+                        child.destroy()
+                else:
+                    win.destroy()
             except Exception:  # noqa: BLE001
                 pass
+        self._pv_embedded = False
 
     def _pv_cycle_size(self) -> None:
         widths = self.PV_WIDTHS
@@ -2686,7 +3013,14 @@ class App:
                 continue
             try:
                 frame = self._pv_device().screenshot()
-                det = self._pv_dets.get(self.mode) or self._pv_dets["catch"]
+                mode = self.mode if self.mode in self._pv_configs else "catch"
+                det = self._pv_dets.get(mode)
+                if det is None:
+                    routine_type = (SpinRoutine if mode == "spin" else
+                                    ShundoRoutine if mode in ("shundo", "coord_shundo") else
+                                    CatchRoutine)
+                    det = routine_type(self._pv_device(), self._pv_configs[mode])
+                    self._pv_dets[mode] = det
                 layer = np.zeros_like(frame)
                 det.annotate(frame, canvas=layer)
                 # Anything the annotate pass drew is non-black; that is the composite mask.
@@ -2737,6 +3071,8 @@ class App:
                 except queue.Empty:
                     pass
                 self._pv_queue.put_nowait((data, shown, status))
+                # Two simultaneous mirrors do not need to encode every stream frame.
+                self._pv_stop.wait(0.08)
             except Exception as e:  # noqa: BLE001
                 # A mirror that silently shows nothing is impossible to diagnose; keep the
                 # last failure where the status line (and a bug report) can see it.
@@ -3111,9 +3447,19 @@ class App:
         if self.worker and self.worker.is_alive():
             return
         serial = self._sel_serial()
+        if not self.is_primary and self.mode == "coord_shundo":
+            self._log(self.tr("coord_single_window"))
+            return
         if not serial:
             self._log(self.tr("msg_no_device"))
             return
+        # A preview opened before Run owns a separate Device and screenrecord process.
+        # Close it before creating the routine device; reopening Preview while running
+        # shares that routine's stream and control socket.
+        preview_tile = (self.manager.preview_tiles.get(self) if self.manager is not None
+                        else None)
+        if getattr(self, "_pv_win", None) is not None:
+            self._close_preview()
         self._remember_device(serial)
         self.save_settings()
         try:
@@ -3128,18 +3474,13 @@ class App:
                 dev_size = dev_dens = None
             if self.mode in ("shundo", "coord_shundo"):
                 config_type = CoordShundoConfig if self.mode == "coord_shundo" else ShundoConfig
-                cfg = config_type(
+                config_args = dict(
                     # Discord Coord must never consume another coordinate merely because
                     # this spawn is slow. It waits until the current spawn can be checked.
                     spawn_timeout=(0.0 if self.mode == "coord_shundo"
                                    else max(0.0, float(self.tp_wait.get()))),
                     restart_delay=max(0.0, min(300.0, float(self.restart_delay.get()))),
                     encounter_open_wait=max(2.0, float(self.s_enc_wait.get())),
-                    target_ivs=(
-                        max(0, min(15, int(self.target_iv_atk.get()))),
-                        max(0, min(15, int(self.target_iv_def.get()))),
-                        max(0, min(15, int(self.target_iv_sta.get()))),
-                    ),
                     shundo_action=self.shundo_action,
                     shiny_action=self.shiny_action,
                     require_background=bool(self.require_background.get()),
@@ -3147,6 +3488,13 @@ class App:
                     flee_gap_ms=max(0, int(round(float(self.flee_gap.get()) * 1000))),
                     use_ui_dump=bool(self.use_ui_dump.get()),
                 )
+                if self.mode == "shundo":
+                    config_args["target_ivs"] = (
+                        max(0, min(15, int(self.target_iv_atk.get()))),
+                        max(0, min(15, int(self.target_iv_def.get()))),
+                        max(0, min(15, int(self.target_iv_sta.get()))),
+                    )
+                cfg = config_type(**config_args)
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 manual_mode = "coord_shundo" if self.mode == "coord_shundo" else "shundo"
@@ -3172,6 +3520,7 @@ class App:
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 cfg = self._apply_manual(cfg, "catch")
+                cfg.timing_log = os.path.join(diag.base_dir(), diag.TIMING_NAME)
                 self.routine = SpinRoutine(self.device, cfg)
                 self.routine._on_trace = self.log_queue.put
                 self.routine._on_stuck = self._on_stuck
@@ -3210,6 +3559,7 @@ class App:
                 if dev_size is not None:
                     cfg = cfg.scale_to(*dev_size, dev_dens)
                 cfg = self._apply_manual(cfg, "catch")
+                cfg.timing_log = os.path.join(diag.base_dir(), diag.TIMING_NAME)
                 self.routine = CatchRoutine(self.device, cfg)
                 self.routine._on_trace = self.log_queue.put
                 self.routine._on_stuck = self._on_stuck
@@ -3242,11 +3592,24 @@ class App:
         self._batt_last = {}
         self.worker = threading.Thread(target=self._run_worker, daemon=True)
         self.worker.start()
+        if preview_tile is not None and preview_tile.winfo_exists():
+            self.root.after(250, lambda tile=preview_tile: self._resume_preview(tile))
         self.play_btn.config(state="disabled")
+        self.device_combo.config(state="disabled")
+        self.connect_btn.config(state="disabled")
         self.pause_btn.config(state="normal", text=self.tr("pause"))
         self.stop_btn.config(state="normal")
         self._set_status("st_running")
         self._log(self.tr("msg_started"))
+
+    def _resume_preview(self, tile, attempts: int = 40) -> None:
+        """Rejoin the bot's stream after Run, without starting a duplicate stream."""
+        if not tile.winfo_exists() or self.manager is None or self.manager.preview_tiles.get(self) is not tile:
+            return
+        if self.device is not None and self.device._stream is not None:
+            self.toggle_preview(host=tile)
+        elif attempts > 0 and self.worker is not None and self.worker.is_alive():
+            self.root.after(250, lambda: self._resume_preview(tile, attempts - 1))
 
     def _run_worker(self) -> None:
         def on_event(stats, threw):
@@ -3301,20 +3664,18 @@ class App:
                 self._coord_idle_logged = False
             if outcome != "idle":
                 self._shundo_idle_logged = False
-            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background"):
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background", "target_unknown"):
                 # A confirmed result releases exactly one new-coordinate credit to Edge.
                 # Ambiguous miss/recheck cycles keep the same item and release nothing.
                 self.coord_queue.mark_completed()
-            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background", "nospawn", "lost"):
+            if self.mode == "coord_shundo" and outcome in ("blocked", "shiny", "shundo", "background", "target_unknown", "nospawn", "lost"):
                 item = getattr(self.routine, "current_coord", None)
                 if item is not None:
                     name = f" ({item.pokemon})" if item.pokemon else ""
                     self.log_queue.put(self.tr("msg_coord_using").format(
                         item.coordinate, name, self.coord_queue.qsize()))
+            target_ivs = self.routine._target_ivs()
             if outcome == "shundo":
-                target_ivs = (
-                    int(self.target_iv_atk.get()), int(self.target_iv_def.get()),
-                    int(self.target_iv_sta.get()))
                 actual_iv = "/".join(str(value) for value in (stats.last_ivs or target_ivs))
                 how = self.tr("dc_shundo_pause" if self.shundo_action == "pause" else "dc_shundo_stop")
                 self.log_queue.put(self.tr("msg_s_shundo").format(actual_iv, how))
@@ -3333,13 +3694,10 @@ class App:
             elif outcome == "shiny":
                 actual_iv = ("/".join(str(value) for value in stats.last_ivs)
                              if stats.last_ivs is not None else "?")
-                target_iv = "/".join(str(value) for value in (
-                    int(self.target_iv_atk.get()), int(self.target_iv_def.get()),
-                    int(self.target_iv_sta.get())))
+                target_iv = "/".join(str(value) for value in target_ivs)
                 missing_background = (
                     bool(self.require_background.get())
-                    and stats.last_ivs == tuple(int(value) for value in (
-                        self.target_iv_atk.get(), self.target_iv_def.get(), self.target_iv_sta.get()))
+                    and stats.last_ivs == target_ivs
                     and not stats.last_background
                 )
                 if self.shiny_action == "skip":
@@ -3368,6 +3726,10 @@ class App:
             elif outcome == "iv_unknown":
                 self.log_queue.put(self.tr("msg_s_iv_unknown"))
                 self._send_discord(self.tr("msg_s_iv_unknown"), shot=True)
+                self.log_queue.put("__paused_shiny__")
+            elif outcome == "target_unknown":
+                self.log_queue.put(self.tr("msg_coord_iv_unknown"))
+                self._send_discord(self.tr("msg_coord_iv_unknown"), shot=True)
                 self.log_queue.put("__paused_shiny__")
             elif outcome == "goplus":
                 # Shundo teleports every cycle and Go Plus refuses every teleport; the
@@ -3426,8 +3788,6 @@ class App:
                     self.routine.run(on_event=callback)
                     break
                 except AdbError:
-                    if not self.device.serial or ":" not in self.device.serial:
-                        raise
                     self.device.stop_stream()
                     self.device.close_control()
                     serial = self._recover_runtime_device()
@@ -3473,6 +3833,9 @@ class App:
     def _finish(self, message: str) -> None:
         self._set_status("st_ready")
         self.play_btn.config(state="normal")
+        if not self.instance_serial:
+            self.device_combo.config(state="readonly")
+            self.connect_btn.config(state="normal")
         self.pause_btn.config(state="disabled", text=self.tr("pause"))
         self.stop_btn.config(state="disabled")
         self.paused = False
@@ -3506,7 +3869,8 @@ class App:
         # Every line the pane shows also goes to disk. The pane holds the last few hundred lines
         # and is gone the moment the window closes, which is why a "it stops working sometimes"
         # report never arrived with anything attached to it.
-        diag.write(text)
+        diag.write(f"[{self.instance_serial}] {text}" if self.manager is not None
+                   and self.instance_serial else text)
         self.log.config(state="normal")
         self.log.insert("end", text + "\n")
         self.log.see("end")
@@ -3539,7 +3903,7 @@ class App:
             notes["scale_do_duoc"] = getattr(routine, "_cal_scale", None) or "(chua khoa duoc)"
             notes["che_do"] = self.mode
         try:
-            diag.export(dest, settings_path=_settings_path(),
+            diag.export(dest, settings_path=self._settings_file,
                         screenshot=screenshot, notes=notes)
         except Exception as e:  # noqa: BLE001
             self._log(self.tr("export_fail").format(e))
@@ -3547,9 +3911,577 @@ class App:
         self._log(self.tr("export_ok").format(dest))
 
 
+class MultiDeviceApp:
+    """One window with one independent App control panel per ADB serial."""
+
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        root.geometry("500x820")
+        root.minsize(450, 720)
+        # The device table is the only phone picker, so the page stack underneath is a
+        # notebook with its tab strip removed: one page per phone plus Guide and Donate.
+        style = ttk.Style(root)
+        style.layout("Stack.TNotebook.Tab", [])
+        style.configure("Stack.TNotebook", borderwidth=0, padding=0)
+        self.tabs = ttk.Notebook(root, style="Stack.TNotebook")
+        self.sessions: dict[str, App] = {}
+        self.frames: dict[str, ttk.Frame] = {}
+        self.identities: dict[str, str] = {}
+        self._usb_wifi_links: dict[str, str] = {}
+        self._usb_wifi_hosts: dict[str, str] = {}
+        self.primary: App | None = None
+        self._closing = False
+        self._discovery_results: queue.Queue = queue.Queue()
+        self._polling = False
+        self._last_discovery = 0.0
+        self._last_wifi_probe = 0.0
+        self._wifi_retry_after: dict[str, float] = {}
+        self._auto_wifi_tried: set[str] = set()
+        self.preview_window = None
+        self.preview_tiles: dict[App, ttk.Frame] = {}
+        self.models: dict[App, str] = {}
+        self._seen: dict[str, str] = {}
+
+        # One row of actions for every phone, the device table (pick a phone), then the page of
+        # whatever is picked. ADB discovery runs by itself every few seconds, so no Scan button.
+        bar = ttk.Frame(root)
+        bar.pack(fill="x", padx=8, pady=(8, 0))
+        # "All phones" actions only mean something with two or more phones; with one they just
+        # repeat Run/Stop below, so _refresh_labels shows this group only when it's useful.
+        self._all_group = ttk.Frame(bar)
+        self.run_all_btn = ttk.Button(self._all_group, command=self.run_all)
+        self.stop_all_btn = ttk.Button(self._all_group, command=self.stop_all)
+        self.preview_all_btn = ttk.Button(self._all_group, command=self.open_previews)
+        for i, btn in enumerate((self.run_all_btn, self.stop_all_btn, self.preview_all_btn)):
+            btn.pack(side="left", padx=(0 if i == 0 else 4, 0))
+        self.donate_btn = ttk.Button(bar, command=lambda: self._show_help("donate"))
+        self.donate_btn.pack(side="right")
+        self.guide_btn = ttk.Button(bar, command=lambda: self._show_help("guide"))
+        self.guide_btn.pack(side="right", padx=(0, 4))
+
+        self.fleet = ttk.Treeview(root, columns=("name", "link", "mode", "status", "count"),
+                                  show="headings", height=1, selectmode="browse")
+        for col, width in (("name", 110), ("link", 50), ("mode", 115), ("status", 90),
+                           ("count", 90)):
+            self.fleet.column(col, width=width, minwidth=45, stretch=True)
+        self.fleet.pack(fill="x", padx=8, pady=(6, 0))
+        self.fleet.bind("<<TreeviewSelect>>", self._on_fleet_select)
+        self.fleet.bind("<ButtonRelease-1>", self._on_fleet_click)
+        self._fleet_rows: dict[str, App] = {}
+        # With a single phone the table is five columns for one row; show one readable line
+        # instead, in the top bar beside Guide/Donate: name · link (click ⇄ to switch
+        # cable/Wi-Fi) · status · progress. Guide/Donate are packed first, so a long status
+        # is clipped rather than pushing them off the window.
+        self.card = ttk.Frame(bar)
+        self.card_name = ttk.Label(self.card, font=("Segoe UI", 10, "bold"))
+        self.card_link = ttk.Label(self.card, cursor="hand2")
+        self.card_status = ttk.Label(self.card)
+        self.card_count = ttk.Label(self.card)
+        self.card_name.pack(side="left")
+        for widget in (self.card_link, self.card_status, self.card_count):
+            ttk.Label(self.card, text="·").pack(side="left", padx=4)
+            widget.pack(side="left")
+        self.card_link.bind("<Button-1>", self._on_card_link)
+
+        self.tabs.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self.scan()
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self._tick()
+        root.after(500, self._poll_devices)
+
+    def _show_help(self, page: str) -> None:
+        if self.primary is not None and self.primary._has_help:
+            self.tabs.select(self.primary.tab_guide if page == "guide" else self.primary.tab_donate)
+
+    def _t(self, vi: str, en: str) -> str:
+        return vi if self.primary is None or self.primary.lang == "vi" else en
+
+    def _display_name(self, app: App) -> str:
+        serial = app.instance_serial
+        if not serial:
+            return self._t("Chưa có máy", "No device")
+        model = self.models.get(app) or serial
+        # Two phones of the same model need something to tell their tabs apart.
+        if sum(m == model for m in self.models.values()) > 1:
+            model += f" ·{serial.split(':')[0][-4:]}"
+        return model
+
+    def _on_fleet_click(self, event) -> None:
+        """Clicking a phone's Kết nối cell flips it between USB cable and Wi-Fi."""
+        if self.fleet.identify_column(event.x) != "#2":
+            return
+        app = self._fleet_rows.get(self.fleet.identify_row(event.y))
+        if app is not None and app._can_switch_link():
+            app._toggle_link()
+
+    def _on_card_link(self, _event=None) -> None:
+        app = next(iter(self._fleet_rows.values()), None)
+        if app is not None and app._can_switch_link():
+            app._toggle_link()
+
+    def _on_fleet_select(self, _event=None) -> None:
+        app = self._fleet_rows.get(next(iter(self.fleet.selection()), ""))
+        if app is not None:
+            for serial, session in self.sessions.items():
+                if session is app and self.tabs.select() != str(self.frames[serial]):
+                    self.tabs.select(self.frames[serial])
+
+    def _on_tab_changed(self, _event=None) -> None:
+        current = self.tabs.select()
+        for serial, frame in self.frames.items():
+            iid = str(id(self.sessions[serial]))
+            if str(frame) == current and self.fleet.exists(iid):
+                if self.fleet.selection() != (iid,):
+                    self.fleet.selection_set(iid)
+                return
+        self.fleet.selection_remove(*self.fleet.selection())
+
+    def add_device(self, serial: str, *, select: bool = True) -> App:
+        if serial in self.sessions:
+            if select:
+                self.tabs.select(self.frames[serial])
+            return self.sessions[serial]
+        # A phone on both USB and Wi-Fi keeps showing its second serial on every scan;
+        # remember its identity instead of asking adb again every few seconds.
+        identity = self._seen.get(serial) or (self._device_identity(serial) if serial else "")
+        if serial:
+            self._seen[serial] = identity
+        for usb, wifi in self._usb_wifi_links.items():
+            if serial == wifi:
+                identity = self.identities.get(usb, identity)
+                break
+        for old_serial, app in list(self.sessions.items()):
+            if not old_serial or self.identities.get(old_serial) != identity:
+                continue
+            # USB and Wi-Fi may expose the same phone twice. Keep its existing tab
+            # while that transport is live; switch the tab to the new transport if
+            # the old one went away, preserving its settings and controls.
+            try:
+                old_online = old_serial in Device.list_devices()
+            except Exception:  # noqa: BLE001
+                old_online = True
+            # Wi-Fi wins by default; a phone switched to the cable from Tools goes back to
+            # USB whenever the cable is plugged in, and uses Wi-Fi only if it's unplugged.
+            if getattr(app, "prefer_usb", False) is True:
+                preferred = ":" not in serial and ":" in old_serial
+            else:
+                preferred = ":" in serial and ":" not in old_serial
+            if (not old_online or preferred) and not (app.worker and app.worker.is_alive()):
+                frame = self._rebind_app(old_serial, serial, app, identity)
+            else:
+                frame = self.frames[old_serial]
+            if select:
+                self.tabs.select(frame)
+            return app
+        if serial and "" in self.sessions:
+            # The empty first tab is the connection landing page. Reuse it when the
+            # first device appears so there is never a stale no-device tab.
+            app = self.sessions.pop("")
+            frame = self.frames.pop("")
+            old_serial = app._sel_serial()
+            if old_serial != serial:
+                app.manual = {}
+            app._adopt_device_settings(serial, identity)
+            app.device_combo.config(state="disabled")
+            app.connect_btn.config(state="disabled")
+            self.sessions[serial] = app
+            self.frames[serial] = frame
+            self.identities[serial] = identity
+            self.models[app] = self._device_model(serial)
+            app._remember_device(serial)
+            self.tabs.select(frame)
+            self._refresh_labels()
+            return app
+
+        frame = ttk.Frame(self.tabs)
+        if self.primary is not None and self.primary._has_help:
+            # Phone tabs stay together, ahead of the shared Guide/Donate tabs.
+            self.tabs.insert(self.primary.tab_guide, frame, text=serial)
+        else:
+            self.tabs.add(frame, text=serial)
+        primary = self.primary is None
+        app = App(self.root, container=frame, serial=serial,
+                  primary=primary, manager=self, settings_key=identity)
+        self.sessions[serial] = app
+        self.frames[serial] = frame
+        self.identities[serial] = identity
+        if serial:
+            self.models[app] = self._device_model(serial)
+        if primary:
+            self.primary = app
+        if self.preview_window is not None:
+            self._add_preview_tile(app, serial)
+        self.tabs.select(frame)
+        self._refresh_labels()
+        return app
+
+    def _rebind_app(self, old_serial: str, serial: str, app: App,
+                    identity: str | None = None):
+        frame = self.frames.pop(old_serial)
+        self.sessions.pop(old_serial)
+        identity = identity or self.identities.pop(old_serial, serial)
+        self.identities.pop(old_serial, None)
+        app.instance_serial = serial
+        app.device_var.set(serial)
+        self.frames[serial] = frame
+        self.sessions[serial] = app
+        self.identities[serial] = identity
+        app._remember_device(serial)
+        self._refresh_labels()
+        return frame
+
+    def rebind_running(self, app: App, serial: str) -> None:
+        """Update a tab after its worker recovered on a different ADB transport."""
+        for old_serial, session in list(self.sessions.items()):
+            if session is not app:
+                continue
+            if old_serial != serial and serial not in self.sessions:
+                self._rebind_app(old_serial, serial, app)
+            else:
+                app._remember_device(serial)
+            return
+
+    def usb_for(self, serial: str) -> str | None:
+        """The USB serial of the same physical phone, if its cable is plugged in."""
+        expected = self.identities.get(serial) or self._device_identity(serial)
+        for usb in Device.list_devices():
+            if ":" in usb:
+                continue
+            if usb not in self._seen:
+                self._seen[usb] = self._device_identity(usb)
+            if self._seen[usb] == expected:
+                return usb
+        return None
+
+    def wifi_for_usb(self, usb_serial: str) -> str | None:
+        """Find an already connected Wi-Fi transport for the same physical phone."""
+        attached = Device.list_devices()
+        expected = self.identities.get(usb_serial)
+        linked = self._usb_wifi_links.get(usb_serial)
+        if linked in attached and (not expected or self._device_identity(linked) == expected):
+            return linked
+        for serial in attached:
+            if ":" in serial and expected and self._device_identity(serial) == expected:
+                return serial
+        app = self.sessions.get(usb_serial)
+        host = self._usb_wifi_hosts.get(usb_serial)
+        candidates = [f"{host}:5555"] if host else []
+        if host:
+            try:
+                candidates.extend(s for s in Device.discover_wireless()
+                                  if s.rsplit(":", 1)[0].strip("[]") == host)
+            except Exception:  # noqa: BLE001
+                pass
+        if app is not None:
+            candidates.extend(app.known)
+            for serial in dict.fromkeys(candidates):
+                if ":" not in serial:
+                    continue
+                try:
+                    Device.adb_connect(serial, timeout=3.0)
+                    if expected and self._device_identity(serial) == expected:
+                        return serial
+                except Exception:  # noqa: BLE001
+                    continue
+        return None
+
+    @staticmethod
+    def _device_model(serial: str) -> str:
+        try:
+            return Device(serial)._run(["shell", "getprop", "ro.product.model"],
+                                       timeout=3.0).strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _device_identity(serial: str) -> str:
+        try:
+            identity = Device(serial)._run(
+                ["shell", "getprop", "ro.serialno"], timeout=3.0,
+            ).strip()
+            if identity and identity.lower() != "unknown":
+                return identity
+        except Exception:  # noqa: BLE001
+            pass
+        return serial
+
+    def scan(self) -> None:
+        try:
+            attached = Device.list_devices()
+        except Exception as error:  # noqa: BLE001
+            attached = []
+            if self.primary is not None:
+                self.primary._log(self.primary.tr("msg_dev_err").format(error))
+        self._apply_attached(attached)
+
+    def _apply_attached(self, attached: list[str]) -> None:
+        if not attached and self.primary is None:
+            self.add_device("")
+        for serial in attached:
+            if serial not in self.sessions:
+                self.add_device(serial, select=False)
+        for app in self.sessions.values():
+            app.refresh_devices(allow_reconnect=False, attached=attached)
+        self._refresh_labels()
+
+    def _poll_devices(self) -> None:
+        if self._closing:
+            return
+        try:
+            while True:
+                kind, *payload = self._discovery_results.get_nowait()
+                if kind == "attached":
+                    self._polling = False
+                    if len(payload) > 1:
+                        self._usb_wifi_hosts.update(payload[1])
+                    if len(payload) > 2:
+                        now = time.monotonic()
+                        for endpoint in payload[2]:
+                            self._wifi_retry_after[endpoint] = now + 60.0
+                        for endpoint in payload[0]:
+                            self._wifi_retry_after.pop(endpoint, None)
+                    self._apply_attached(payload[0])
+                    if len(payload) > 1 and payload[1]:
+                        self._auto_wifi(payload[0], payload[1])
+        except queue.Empty:
+            pass
+
+        if not self._polling and time.monotonic() - self._last_discovery >= 3.0:
+            self._polling = True
+            self._last_discovery = time.monotonic()
+            wifi_probe_due = time.monotonic() - self._last_wifi_probe >= 20.0
+            if wifi_probe_due:
+                self._last_wifi_probe = time.monotonic()
+            remembered = list(dict.fromkeys(
+                s for app in self.sessions.values() for s in app.known if ":" in s
+            ))
+            cached_hosts = dict(self._usb_wifi_hosts)
+            retry_after = dict(self._wifi_retry_after)
+
+            def discover() -> None:
+                try:
+                    attached = Device.list_devices()
+                except Exception:  # noqa: BLE001
+                    attached = []
+                hosts = {}
+                failed = []
+                if wifi_probe_due:
+                    for serial in attached:
+                        if ":" in serial:
+                            continue
+                        try:
+                            ip = Device(serial).wifi_ip()
+                            if ip:
+                                hosts[serial] = ip
+                        except Exception:  # noqa: BLE001
+                            pass
+                # ADB connect is safe here: it never changes the phone's USB or
+                # wireless debugging mode. Only probe the same phone's Wi-Fi IP.
+                if wifi_probe_due:
+                    try:
+                        mdns = Device.discover_wireless()
+                    except Exception:  # noqa: BLE001
+                        mdns = []
+                    known_hosts = set(hosts.values()) | set(cached_hosts.values())
+                    known_hosts.update(s.rsplit(":", 1)[0].strip("[]") for s in remembered)
+                    endpoints = [s for s in mdns if s.rsplit(":", 1)[0].strip("[]") in known_hosts]
+                    endpoints.extend(s for s in remembered if s not in attached)
+                    for host in set(hosts.values()):
+                        try:
+                            with socket.create_connection((host, 5555), timeout=0.2):
+                                pass
+                            endpoints.append(f"{host}:5555")
+                        except OSError:
+                            pass
+                    for endpoint in list(dict.fromkeys(endpoints))[:8]:
+                        if endpoint in attached or time.monotonic() < retry_after.get(endpoint, 0):
+                            continue
+                        try:
+                            Device.adb_connect(endpoint, timeout=3.0)
+                            attached.append(endpoint)
+                        except Exception:  # noqa: BLE001
+                            failed.append(endpoint)
+                self._discovery_results.put(("attached", attached, hosts, failed))
+
+            threading.Thread(target=discover, daemon=True).start()
+        self.root.after(500, self._poll_devices)
+
+    def _auto_wifi(self, attached: list[str], hosts: dict[str, str]) -> None:
+        """Cable-plugged phone with a Wi-Fi IP → switch it to adb-over-Wi-Fi by itself, so the
+        user never has to open Tools. Once per plug-in: a failure (phone Wi-Fi off, router
+        isolation) just keeps the USB tab and is retried only after the cable is replugged."""
+        self._auto_wifi_tried &= set(attached)
+        for usb in hosts:
+            app = self.sessions.get(usb)
+            if (app is None or app.instance_serial != usb or usb.startswith("emulator-")
+                    or app.prefer_usb
+                    or usb in self._auto_wifi_tried or app._wifi_busy
+                    or (app.worker and app.worker.is_alive())):
+                continue
+            self._auto_wifi_tried.add(usb)
+            app._to_wifi()
+
+    def _add_preview_tile(self, app: App, serial: str) -> None:
+        if self.preview_window is None or app in self.preview_tiles:
+            return
+        index = len(self.preview_tiles)
+        slot = ttk.LabelFrame(self.preview_window, text=self._display_name(app))
+        slot.grid(row=index // 2, column=index % 2, padx=5, pady=5, sticky="n")
+        tile = ttk.Frame(slot)
+        tile.pack()
+        self.preview_tiles[app] = tile
+        if not app.device_var.get().endswith(app.OFFLINE_TAG):
+            app.toggle_preview(host=tile)
+
+    def open_previews(self) -> None:
+        if self.preview_window is not None and self.preview_window.winfo_exists():
+            self.preview_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title(self._t("Xem tất cả máy", "Live view · all devices"))
+        win.protocol("WM_DELETE_WINDOW", self.close_previews)
+        self.preview_window = win
+        self.preview_tiles = {}
+        for serial, app in self.sessions.items():
+            if serial:
+                self._add_preview_tile(app, serial)
+
+    def close_previews(self) -> None:
+        for app in list(self.preview_tiles):
+            if getattr(app, "_pv_win", None) is not None:
+                app._close_preview()
+        self.preview_tiles.clear()
+        win = self.preview_window
+        self.preview_window = None
+        if win is not None:
+            win.destroy()
+
+    def run_all(self) -> None:
+        for index, (serial, app) in enumerate(self.sessions.items()):
+            if serial and not app.device_var.get().endswith(app.OFFLINE_TAG):
+                self.root.after(index * 150, app.on_play)
+
+    def stop_all(self) -> None:
+        for app in self.sessions.values():
+            if app.worker and app.worker.is_alive():
+                app.on_stop()
+
+    def _tick(self) -> None:
+        """Keep tab icons, the fleet table and the all-buttons in step with the workers."""
+        if self._closing:
+            return
+        self._refresh_labels()
+        self.root.after(500, self._tick)
+
+    def _refresh_labels(self) -> None:
+        if self._closing:
+            return
+        t = self._t
+        lang = self.primary.lang if self.primary is not None else "vi"
+        self.root.title(f"{LANG['title'][lang]} v{APP_VERSION}")
+        self.preview_all_btn.config(text=t("👁 Xem tất cả", "👁 View all"))
+        self.run_all_btn.config(text=t("▶ Chạy tất cả", "▶ Run all"))
+        self.guide_btn.config(text=t("❓ Hướng dẫn", "❓ Guide"))
+        self.donate_btn.config(text=t("❤ Ủng hộ", "❤ Donate"))
+        self.stop_all_btn.config(text=t("■ Dừng tất cả", "■ Stop all"))
+        for col, vi, en in (("name", "Máy", "Device"), ("link", "Kết nối", "Link"),
+                            ("mode", "Chế độ", "Mode"),
+                            ("status", "Trạng thái", "Status"), ("count", "Tiến độ", "Progress")):
+            self.fleet.heading(col, text=t(vi, en), anchor="w")
+
+        online = running = idle = 0
+        rows = {}
+        for serial, app in self.sessions.items():
+            name = self._display_name(app)
+            offline = bool(serial) and app.device_var.get().endswith(app.OFFLINE_TAG)
+            alive = bool(app.worker and app.worker.is_alive())
+            online += bool(serial) and not offline
+            running += alive
+            idle += bool(serial) and not offline and not alive
+            icon = "⚠ " if offline else ("⏸ " if app.paused else "▶ ") if alive else ""
+            self.tabs.tab(self.frames[serial], text=icon + name)
+            if serial:
+                link = "—" if offline else ("Wi-Fi" if ":" in serial else "USB")
+                if app._can_switch_link():
+                    link += " ⇄"
+                if app._wifi_busy:
+                    link = "USB→Wi-Fi…"
+                status = t("Mất kết nối", "Offline") if offline else app.status_var.get()
+                rows[str(id(app))] = (app, (icon + name, link, app.mode_var.get(), status,
+                                            app.count_var.get()))
+        if not rows:
+            rows["empty"] = (None, (t("Chưa có máy", "No device"),
+                                    "", t("Cắm cáp USB để kết nối", "Plug in a USB cable"),
+                                    "", ""))
+
+        for iid in set(self._fleet_rows) - set(rows):
+            self.fleet.delete(iid)
+        for iid, (app, values) in rows.items():
+            if iid in self._fleet_rows:
+                self.fleet.item(iid, values=values)
+            else:
+                self.fleet.insert("", "end", iid=iid, values=values)
+        self._fleet_rows = {iid: app for iid, (app, _v) in rows.items()}
+        self.fleet.config(height=max(1, min(len(rows), 5)))
+        self._on_tab_changed()
+
+        if len(rows) >= 2:
+            self._all_group.pack(side="left")
+            self.card.pack_forget()
+            self.fleet.pack(fill="x", padx=8, pady=(6, 0), before=self.tabs)
+        else:
+            self._all_group.pack_forget()
+            self.fleet.pack_forget()
+            self.card.pack(side="left", fill="x", expand=True, padx=(2, 0))
+            app, (name, link, mode, status, count) = next(iter(rows.values()))
+            if app is None:
+                status = mode  # empty state: the "plug in a cable" hint
+            self.card_name.config(text=name)
+            self.card_link.config(text=link, foreground="#0a58ca" if "⇄" in link else "")
+            self.card_status.config(text=status)
+            self.card_count.config(text=count)
+        self.run_all_btn.config(state="normal" if idle else "disabled")
+        self.stop_all_btn.config(state="normal" if running else "disabled")
+        self.preview_all_btn.config(state="normal" if online else "disabled")
+
+    def close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self.close_previews()
+        for app in self.sessions.values():
+            app._shutdown()
+        self.root.destroy()
+
+
+class AccentButton(tk.Button):
+    """The one primary action (▶ Run). The Windows ttk theme can't colour buttons, so this is a
+    plain tk.Button that also greys itself out while disabled."""
+
+    ON = {"bg": "#1a7f37", "fg": "white", "activebackground": "#156d2f"}
+    OFF = {"bg": "#d6d6d6", "fg": "#8a8a8a", "activebackground": "#d6d6d6"}
+
+    def __init__(self, master, **kw) -> None:
+        super().__init__(master, relief="flat", bd=0, cursor="hand2", pady=3,
+                         font=("Segoe UI", 10, "bold"), activeforeground="white",
+                         disabledforeground="#8a8a8a", **self.ON, **kw)
+
+    def configure(self, cnf=None, **kw):
+        if "state" in kw:
+            kw = {**(self.OFF if kw["state"] == "disabled" else self.ON), **kw}
+        return super().configure(cnf, **kw)
+
+    config = configure
+
+
 def main() -> None:
+    # OpenCV otherwise creates one worker per logical core in *each* device process.
+    # Small template searches gain little from that many workers, while simultaneous
+    # sessions contend for CPU and make taps arrive late.
+    cv2.setNumThreads(max(1, min(4, (os.cpu_count() or 4) // 4)))
     root = tk.Tk()
-    App(root)
+    MultiDeviceApp(root)
     root.mainloop()
 
 
