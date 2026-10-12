@@ -299,6 +299,21 @@ window.I18N.vi = {
         'Chọn **Load unpacked** rồi trỏ tới thư mục vừa giải nén.',
       ],
     },
+    pogo: {
+  "label": "Extension cho Edge / Chrome",
+  "name": "PoGo Monitor v0.3.0",
+  "text": "Tự Search PoGo Coordinates, lọc Top IV và PvPoke. Discord có ảnh Pokémon, hạng PvP in đậm và tọa độ dễ sao chép.",
+  "note": "Chọn bộ lọc trên web. Giữ Edge và tab PoGo mở; có thể chạy nền.",
+  "stepsTitle": "Cài và chạy",
+  "steps": [
+    "Tải ZIP, giải nén vào thư mục cố định.",
+    "Mở `edge://extensions` → **Developer mode** → **Load unpacked** → chọn thư mục có `manifest.json`.",
+    "Mở PoGo Coordinates, đăng nhập và chọn Stats/PvP trên web.",
+    "Popup → **Cài đặt**: mã bạn bè, chu kỳ, ngưỡng PvP và webhook → Lưu → **Chạy tự động**."
+  ],
+  "button": "Tải PoGo Monitor (.zip)",
+  "guide": "Hướng dẫn đầy đủ"
+},
     smartscreen:
       'Windows SmartScreen có thể cảnh báo vì ứng dụng chưa được ký. Chỉ chọn **More info → Run anyway** khi file được tải từ trang Release chính thức của dự án.',
   },

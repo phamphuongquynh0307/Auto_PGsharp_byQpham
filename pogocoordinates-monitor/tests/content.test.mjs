@@ -1,0 +1,83 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {JSDOM} from 'jsdom';
+const html=await readFile(new URL('./fixtures/search.html',import.meta.url),'utf8');
+const source=await readFile(new URL('../content.js',import.meta.url),'utf8');
+const core=await readFile(new URL('../core.js',import.meta.url),'utf8');
+function harness(loggedIn=true,code='123456789012',fixture=html){
+  const dom=new JSDOM(fixture,{url:'https://pogocoordinates.com/search',runScripts:'outside-only'}),w=dom.window;
+  // jsdom does not implement layout-derived innerText. Preserve block line breaks as the browser does.
+  Object.defineProperty(w.HTMLElement.prototype,'innerText',{get(){
+    function walk(n){if(n.nodeType===3)return n.textContent;
+      if(['SVG','SCRIPT','STYLE'].includes(n.tagName))return '';
+      const out=[...n.childNodes].map(walk).join('');return /^(P|DIV|FORM|MAIN|NAV|SECTION|BUTTON)$/.test(n.tagName)?`\n${out}\n`:out;}
+    return walk(this).replace(/\n\s*\n/g,'\n').trim();
+  }});
+  if(loggedIn)for(const a of w.document.querySelectorAll('nav a'))if(/Login/.test(a.textContent))a.remove();
+  let listener;
+  w.chrome={runtime:{id:'test',onMessage:{addListener:fn=>listener=fn}},storage:{session:{get:async()=>({trainerCode:code})}}};
+  w.eval(core);w.eval(source);
+  const call=m=>new Promise(resolve=>listener(m,{id:'test'},resolve));
+  return {w,dom,call};
+}
+test('Unauthenticated page cannot search or expose editable cloned fields even with trainer code',async()=>{
+  const h=harness(false);const s=await h.call({type:'PAGE_STATE'});assert.equal(s.value.loggedIn,false);assert.equal(s.value.schema,null);
+  const search=await h.call({type:'PAGE_SEARCH'});assert.equal(search.ok,false);assert.match(search.error,/đăng nhập/);h.dom.window.close();
+});
+test('Authenticated page still requires trainer code',async()=>{
+  const h=harness(true,'');const s=await h.call({type:'PAGE_STATE'});assert.equal(s.value.unlocked,false);
+  const search=await h.call({type:'PAGE_SEARCH'});assert.match(search.error,/mã bạn bè/);h.dom.window.close();
+});
+function flatten(n){return n?[n,...(n.children||[]).flatMap(flatten)]:[];}
+test('Clone real site fields including league/rank/evolutions and respect VIP locks',async()=>{
+  const h=harness();const s=await h.call({type:'PAGE_STATE'}),nodes=flatten(s.value.schema);
+  assert.equal(s.value.mode,'pvp');assert.ok(nodes.some(n=>n.label==='League'&&n.kind==='select'));
+  assert.ok(nodes.some(n=>n.label==='Top ranking'&&n.kind==='input'));
+  assert.ok(nodes.some(n=>n.label==='Include previous evolutions'));
+  const search=nodes.find(n=>n.command==='search');assert.ok(search);assert.equal(search.disabled,false);
+  assert.equal((await h.call({type:'PAGE_EDIT',id:search.id,action:'click'})).ok,false);
+  assert.equal(nodes.find(n=>n.label==='Min. TTL (minutes)'&&n.kind==='input').disabled,true);
+  const rank=nodes.find(n=>n.label==='Top ranking'&&n.kind==='input');
+  const changed=await h.call({type:'PAGE_EDIT',id:rank.id,action:'value',value:'20'});assert.equal(changed.ok,true);
+  assert.equal(h.w.document.querySelector('input[placeholder="1-50"]').value,'20');
+  const ttl=nodes.find(n=>n.label==='Min. TTL (minutes)'&&n.kind==='input');
+  assert.equal((await h.call({type:'PAGE_EDIT',id:ttl.id,action:'value',value:'5'})).ok,false);h.dom.window.close();
+});
+test('Successful search waits for completion and emits complete current results',async()=>{
+  const h=harness();const b=h.w.document.querySelector('button[type="submit"]');
+  b.addEventListener('click',e=>{e.preventDefault();b.disabled=true;setTimeout(()=>{b.disabled=false;},20);});
+  const result=await h.call({type:'PAGE_SEARCH'});assert.equal(result.ok,true,result.error);
+  assert.equal(result.value.spawns.length,5);assert.deepEqual([...result.value.spawns[0].iv],[15,15,14]);
+  assert.equal(result.value.mode,'pvp');assert.equal(result.value.filters['Top ranking · 1-50'],'10');h.dom.window.close();
+});
+test('Failed search does not send old result cards',async()=>{
+  const h=harness();const b=h.w.document.querySelector('button[type="submit"]');
+  b.addEventListener('click',e=>{e.preventDefault();b.disabled=true;setTimeout(()=>{b.disabled=false;
+    const p=h.w.document.createElement('p');p.setAttribute('role','alert');p.textContent='Search failed, try again';h.w.document.querySelector('main').append(p);},20);});
+  const result=await h.call({type:'PAGE_SEARCH'});assert.equal(result.ok,false);assert.match(result.error,/Search failed/);h.dom.window.close();
+});
+test('Coordinate request refuses changed result and obtains coordinates from the matching card',async()=>{
+  const h=harness();const card=[...h.w.document.querySelectorAll('main .card')].find(c=>!c.matches('form'));
+  const spawn=h.w.PogoCore.parseCard(card.innerText);
+  const mismatch=await h.call({type:'PAGE_COORDS',index:0,spawn:{...spawn,cp:1}});assert.equal(mismatch.ok,false);
+  const b=[...card.querySelectorAll('button')].find(b=>b.textContent.trim()==='Get coords');
+  b.addEventListener('click',()=>{b.textContent='41.123456,-8.654321';});
+  const result=await h.call({type:'PAGE_COORDS',index:0,spawn});assert.equal(result.ok,true,result.error);
+  assert.equal(result.value.coords,'41.123456,-8.654321');h.dom.window.close();
+});
+test('Web notification shows result safely, with no HTML injection',async()=>{
+  const h=harness();const result=await h.call({type:'PAGE_ALERT',events:[{mode:'stats',spawn:{fullName:'<img src=x onerror=alert(1)>',cp:5,level:1,ivPercent:100,iv:[15,15,15],location:'test',despawn:'05:00',coords:'10.123456,106.123456'}}]});
+  assert.equal(result.ok,true);const shadow=h.w.document.querySelector('#pogo-monitor-alerts').shadowRoot;
+  assert.equal(shadow.querySelectorAll('img').length,0);assert.ok(shadow.textContent.includes('<img'));h.dom.window.close();
+});
+test('Raw IV, CP ranges, weather and Area location are all cloned as separate editable fields',async()=>{
+  const statsHtml=await readFile(new URL('./fixtures/stats.html',import.meta.url),'utf8');
+  const h=harness(true,'123456789012',statsHtml);const result=await h.call({type:'PAGE_STATE'});
+  const nodes=flatten(result.value.schema);assert.equal(result.value.mode,'stats');
+  for(const placeholder of ['A','D','S','Location contains (e.g. Auckland)'])assert.ok(nodes.some(n=>n.placeholder===placeholder),placeholder);
+  assert.ok(nodes.some(n=>n.label==='Weather'&&n.kind==='select'));
+  assert.equal(nodes.filter(n=>n.label==='CP'&&n.kind==='input').length,2);
+  assert.equal(result.value.filters['IV mode'],'Raw IV');assert.equal(result.value.filters['Location mode'],'Area');
+  h.dom.window.close();
+});

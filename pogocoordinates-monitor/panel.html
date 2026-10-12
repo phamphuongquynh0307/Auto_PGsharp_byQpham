@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PoGo Search Monitor</title><link rel="stylesheet" href="panel.css"></head>
+<body>
+  <header><div><h1>PoGo Monitor <small>v0.3.0</small></h1></div><button id="openSite">Mở web ↗</button></header>
+  <main>
+
+    <section class="card" id="loginGate"><h2>Đăng nhập trên PoGo</h2><p id="loginText">Mở web và đăng nhập, rồi mở lại popup này.</p><button id="login">Mở web để đăng nhập</button><button id="sync">Kiểm tra kết nối</button><p class="hint">Đăng nhập một lần trên web, rồi quay lại đây.</p></section>
+        <section class="hero"><section class="statusbar" aria-live="polite"><span id="badge">Đang kết nối</span><span id="status">Đang đọc trạng thái…</span></section><p id="nextStep" class="quickguide" role="status">Đang kết nối…</p><div class="actions"><button id="start" class="primary">Chạy tự động</button><button id="stop" class="danger">Dừng</button><button id="searchOnce">Tìm ngay</button></div><p id="timing" class="hint">Chưa chạy.</p><p id="dirty" class="hint" hidden="">Đã thay đổi cấu hình — bấm Chạy hoặc Tìm ngay để tự lưu.</p><p class="hint">Giữ Edge và tab PoGo mở, có thể chạy nền.</p></section>
+
+
+    <nav class="tabs" aria-label="Màn hình extension"><button type="button" data-view="monitor" aria-pressed="true">Theo dõi</button><button type="button" data-view="settings" aria-pressed="false">Cài đặt</button><button type="button" data-view="history" aria-pressed="false">Thông báo <span id="navCount">0</span></button></nav><div id="view-monitor" class="view"><section class="card compact"><div class="sectionhead"><h2>Bộ lọc trên web</h2><button id="configureSite">Chỉnh bộ lọc ↗</button></div><p id="siteMode">Đang kết nối…</p><p id="scheduleSummary" class="hint"></p><p class="hint">Chọn Pokémon, Stats / PvP và bộ lọc ngay trên PoGo. Extension chạy theo bộ lọc đó.</p></section></div><div id="view-settings" class="view" hidden="">
+        <section class="card"><h2>Cài đặt</h2>
+          <form id="settingsForm">
+            <label>Mã bạn bè Pokémon GO <input id="trainerCode" type="text" inputmode="numeric" placeholder="1234 5678 9012" autocomplete="off" required="" maxlength="16"></label>
+            <p class="hint">Nhập 12 số. Nếu dùng Shiny, thêm cùng mã vào hồ sơ web.</p>
+            <div class="grid"><label>Search mỗi (giây)<input id="intervalSeconds" type="number" min="30" max="86400" step="1" required=""></label><label>Chạy trong (phút)<input id="durationMinutes" type="number" min="0" max="10080" step="1" required=""></label></div><p class="hint">0 phút = chạy đến khi bấm Dừng. Giữ tab Search mở; chu kỳ tối thiểu 30 giây.</p>
+            <h3>Điều kiện thông báo ở chế độ PvP</h3>
+            <div class="grid"><label>Hạng IV tối đa (Top N)<input id="ivTop" type="number" min="1" max="4096" required=""></label><label>Hạng loài PvPoke tối đa<input id="speciesTop" type="number" min="1" max="10000" required=""></label></div>
+            <details class="advanced"><summary>Tùy chọn PvP nâng cao</summary><label>Quy tắc<select id="rankRule"><option value="both">Đạt cả hai hạng trên cùng loài / tiến hóa</option><option value="iv">Chỉ hạng IV</option><option value="species">Chỉ hạng loài PvPoke</option></select></label>
+            <div class="grid"><label>Level tối đa khi tính IV<select id="maxLevel"><option value="50">50 (XL, không Best Buddy)</option><option value="51">51 (Best Buddy)</option><option value="40">40 (không XL)</option></select></label><label>Sàn IV của tập so sánh<select id="minIv"><option value="0">0 — bắt hoang dã</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10 — raid / trứng</option><option value="11">11</option><option value="12">12 — lucky</option><option value="13">13</option><option value="14">14</option><option value="15">15</option></select></label></div>
+            <p class="hint">Hạng 1 tốt nhất. IV = stat product trong tập IV đã chọn; PvPoke = Overall Open Great/Ultra League. Bộ lọc “Top ranking” của web vẫn chạy trước ngưỡng extension.</p>
+            </details><h3>Kênh thông báo</h3>
+            <label class="check"><input id="webAlerts" type="checkbox"> Hiện thẻ thông báo ngay trên web</label>
+            <label class="check"><input id="discordEnabled" type="checkbox"> Gửi kết quả mới tới Discord</label>
+            <label>Discord Webhook URL<input id="webhook" type="password" placeholder="https://discord.com/api/webhooks/…" autocomplete="off"></label>
+            <p class="hint">Webhook lưu cục bộ trong profile; không đưa vào bộ lọc, lịch sử hay thông báo. Discord nhận bản tóm tắt Pokémon, hạng PvP và tọa độ.</p>
+            <div class="actions"><button type="submit" class="primary">Lưu cấu hình</button><button id="testDiscord" type="button">Gửi tin thử Discord</button></div>
+          </form>
+        </section>
+        <details class="card advanced"><summary>Nguồn dữ liệu PvP</summary><p id="dataDate">Nguồn: PvPoke</p><div class="actions"><button id="refreshData">Cập nhật PvPoke</button><a href="https://pvpoke.com/rankings/" target="_blank" rel="noopener noreferrer">Xem nguồn ↗</a></div></details>
+      </div>
+
+  <section class="card view" id="view-history" hidden=""><div class="sectionhead"><h2>Lịch sử thông báo <small id="historyCount"></small></h2><div class="actions"><button id="refreshHistory">Làm mới</button><button id="clearHistory" class="danger">Xóa lịch sử & thử lại</button></div></div><p class="hint">Kết quả mới đạt điều kiện sẽ xuất hiện ở đây.</p><div id="history" aria-live="polite"></div></section></main>
+  <div id="toast" role="status" hidden=""></div>
+  <script src="core.js"></script><script src="panel.js"></script>
+
+
+</body></html>

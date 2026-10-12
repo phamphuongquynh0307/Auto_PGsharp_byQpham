@@ -1,0 +1,72 @@
+name: Publish PoGo Monitor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-pogo-monitor
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package extension and publish download
+        id: release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $version = (Get-Content pogocoordinates-monitor/manifest.json -Raw | ConvertFrom-Json).version
+          $tag = "pogo-monitor-v$version"
+          $zip = "pogocoordinates-monitor-v$version.zip"
+          $files = @('manifest.json','background.js','content.js','core.js','panel.html','panel.css','panel.js','pvp.js','data','README.vi.md','CHANGELOG.vi.md','PUBLIC-GUIDE.vi.md')
+          $paths = $files | ForEach-Object { Join-Path pogocoordinates-monitor $_ }
+          Compress-Archive -LiteralPath $paths -DestinationPath $zip
+          gh release view $tag --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Upload failed' }
+            "notify=false" >> $env:GITHUB_OUTPUT
+          } else {
+            gh release create $tag $zip --target $env:GITHUB_SHA --title "PoGo Monitor v$version" --notes-file pogocoordinates-monitor/PUBLIC-GUIDE.vi.md --latest=false
+            if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
+            "notify=true" >> $env:GITHUB_OUTPUT
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+      - name: Announce in the app update Discord channel
+        if: steps.release.outputs.notify == 'true'
+        shell: pwsh
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) { throw 'DISCORD_WEBHOOK_URL is not configured' }
+          $download = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG/pogocoordinates-monitor-v$env:VERSION.zip"
+          $guide = "https://github.com/$env:REPOSITORY/releases/tag/$env:TAG"
+          $description = "Popup nhỏ cho Edge/Chrome: tự Search PoGo Coordinates, lọc Top IV + PvPoke, báo Discord có ảnh Pokémon và tọa độ dễ sao chép."
+          $steps = "1. Tải ZIP và giải nén.`n2. Edge: edge://extensions → Developer mode → Load unpacked → chọn thư mục có manifest.json.`n3. Mở PoGo Coordinates, đăng nhập và chọn bộ lọc Stats/PvP trên web.`n4. Popup → Cài đặt: mã bạn bè, chu kỳ, ngưỡng PvP và webhook của kênh nhận → Lưu.`n5. Bấm Chạy tự động; giữ Edge và tab PoGo mở, có thể chạy nền."
+          $payload = @{
+            username = 'Auto Catch Update'
+            allowed_mentions = @{ parse = @() }
+            embeds = @(@{
+              title = "PoGo Monitor v$env:VERSION — extension mới"
+              description = $description
+              url = $guide
+              color = 2266446
+              fields = @(
+                @{ name = 'Tải và hướng dẫn'; value = "[Tải extension ZIP]($download) · [Hướng dẫn đầy đủ]($guide)" },
+                @{ name = 'Cài trong Edge'; value = $steps },
+                @{ name = 'Cập nhật bản cũ'; value = 'Chép đè vào thư mục cũ → Tải lại extension. Không gỡ để giữ cài đặt.' }
+              )
+            })
+          } | ConvertTo-Json -Depth 8
+          Invoke-RestMethod -Uri $env:DISCORD_WEBHOOK_URL -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($payload))

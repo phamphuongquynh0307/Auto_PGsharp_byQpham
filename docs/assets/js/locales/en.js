@@ -299,6 +299,21 @@ window.I18N.en = {
         'Choose **Load unpacked** and select the extracted folder.',
       ],
     },
+    pogo: {
+  "label": "Edge / Chrome extension",
+  "name": "PoGo Monitor v0.3.0",
+  "text": "Search PoGo Coordinates automatically and filter IV / PvPoke ranks. Discord alerts include Pokémon images and easy-to-copy coordinates.",
+  "note": "Choose filters on the website. Keep Edge and the PoGo tab open; the tab can stay in the background.",
+  "stepsTitle": "Install and run",
+  "steps": [
+    "Download and extract the ZIP to a permanent folder.",
+    "Open `edge://extensions` → **Developer mode** → **Load unpacked** → select the folder with `manifest.json`.",
+    "Sign in to PoGo Coordinates and choose Stats/PvP filters.",
+    "Popup → **Settings**: trainer code, interval, PvP thresholds and webhook → Save → start monitoring."
+  ],
+  "button": "Download PoGo Monitor (.zip)",
+  "guide": "Full guide"
+},
     smartscreen:
       'Windows SmartScreen may warn you because the app is unsigned. Only choose **More info → Run anyway** if the file came from the project’s official Releases page.',
   },

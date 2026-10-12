@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "PoGo Search Monitor — Qpham",
+  "version": "0.3.0",
+  "description": "Tự Search PoGo Coordinates, lọc Stats và IV/PvPoke, báo trên web và Discord.",
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://pogocoordinates.com/*",
+    "https://raw.githubusercontent.com/pvpoke/pvpoke/*",
+    "https://discord.com/api/webhooks/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "PoGo Monitor",
+    "default_popup": "panel.html"
+  },
+  "options_page": "panel.html",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pogocoordinates.com/*"
+      ],
+      "js": [
+        "core.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+node_modules/
+tests/.pnpm-store/
+tests/preview-state.json
+*.log
