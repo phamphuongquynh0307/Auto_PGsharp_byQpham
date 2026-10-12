@@ -5,6 +5,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing version tag to build and publish (for example v1.4.32)'
+        required: true
+        type: string
 
 permissions:
   contents: write        # cần để tạo Release + upload file
@@ -12,9 +18,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -30,13 +40,20 @@ jobs:
         shell: pwsh
         run: |
           $version = (Select-String -Path gui.py -Pattern '^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$').Matches.Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag and APP_VERSION differ" }
+          if ("v$version" -ne $env:RELEASE_TAG) { throw "Tag and APP_VERSION differ" }
 
       - name: Build executable
         run: pyinstaller AutoVisionClicker.spec --noconfirm --clean
 
       - name: Rename with version
-        run: Copy-Item dist/AutoCatchPokemonPGSharp.exe "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
+        run: Copy-Item dist/AutoCatchPokemonPGSharp.exe "dist/AutoCatchPokemonPGSharp-$env:RELEASE_TAG.exe"
+
+      - name: Package Discord Coord extension
+        shell: pwsh
+        run: |
+          $extensionVersion = (Get-Content discord-coord-collector/manifest.json -Raw | ConvertFrom-Json).version
+          $extensionZip = "downloads/discord-coord-collector-v$extensionVersion.zip"
+          Compress-Archive -Path discord-coord-collector/* -DestinationPath $extensionZip -Force
 
       - name: Write update checksum
         shell: pwsh
@@ -49,31 +66,54 @@ jobs:
         run: |
           $notes = Get-Content RELEASE_NOTES.md -Raw -Encoding UTF8
           $match = [regex]::Match($notes, '(?s)\A(.*?)(?=\r?\n# v\d+\.\d+\.\d+\s*\r?\n|\z)')
-          if (-not $match.Success -or -not $match.Groups[1].Value.StartsWith("# ${{ github.ref_name }}")) {
+          if (-not $match.Success -or -not $match.Groups[1].Value.StartsWith("# $env:RELEASE_TAG")) {
             throw "Release notes do not begin with this version"
           }
           Set-Content -LiteralPath release-current.md -Value $match.Groups[1].Value.Trim() -Encoding UTF8
 
       - name: Publish GitHub Release
+        id: publish
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          gh release create ${{ github.ref_name }}
-          "dist/AutoCatchPokemonPGSharp.exe"
-          "dist/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe"
-          "dist/AutoCatchPokemonPGSharp.exe.sha256"
-          "downloads/discord-coord-collector-v0.3.3.zip"
-          --title ${{ github.ref_name }}
-          --notes-file release-current.md
+        run: |
+          $extensionVersion = (Get-Content discord-coord-collector/manifest.json -Raw | ConvertFrom-Json).version
+          $assets = @(
+            "dist/AutoCatchPokemonPGSharp.exe"
+            "dist/AutoCatchPokemonPGSharp-$env:RELEASE_TAG.exe"
+            "dist/AutoCatchPokemonPGSharp.exe.sha256"
+            "downloads/discord-coord-collector-v$extensionVersion.zip"
+          )
+          gh release view $env:RELEASE_TAG --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload release assets" }
+            gh release edit $env:RELEASE_TAG --title $env:RELEASE_TAG --notes-file release-current.md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release notes" }
+            $assetNames = @(gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name')
+            if ($LASTEXITCODE -ne 0) { throw "Failed to inspect release assets" }
+            foreach ($assetName in $assetNames) {
+              if ($assetName -like 'discord-coord-collector-v*.zip' -and
+                  $assetName -ne "discord-coord-collector-v$extensionVersion.zip") {
+                gh release delete-asset $env:RELEASE_TAG $assetName --yes
+                if ($LASTEXITCODE -ne 0) { throw "Failed to remove outdated extension" }
+              }
+            }
+          } else {
+            gh release create $env:RELEASE_TAG @assets --title $env:RELEASE_TAG --notes-file release-current.md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release" }
+            "created=true" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Notify Discord about the new release
+        if: steps.publish.outputs.created == 'true'
         continue-on-error: true
         shell: pwsh
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          RELEASE_VERSION: ${{ github.ref_name }}
-          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
-          DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/AutoCatchPokemonPGSharp-${{ github.ref_name }}.exe
+          RELEASE_VERSION: ${{ inputs.release_tag || github.ref_name }}
+          RELEASE_URL: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.release_tag || github.ref_name }}
+          DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/download/${{ inputs.release_tag || github.ref_name }}/AutoCatchPokemonPGSharp-${{ inputs.release_tag || github.ref_name }}.exe
         run: |
           if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) {
             Write-Warning "DISCORD_WEBHOOK_URL is not configured; skipping Discord notification."
