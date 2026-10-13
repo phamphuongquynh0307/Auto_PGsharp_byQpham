@@ -1,4 +1,11 @@
-# PoGo Monitor 0.3.3
+# PoGo Monitor 0.3.4
+
+- Khôi phục thẻ Discord: ảnh, tên Pokémon, IV, hạng PvP hoặc CP/level, giờ despawn và tọa độ.
+- Phần văn bản chính của cùng tin chỉ chứa tọa độ; dùng Sao chép văn bản trên Discord mobile để lấy riêng coord.
+
+Chép đè vào thư mục cũ → Tải lại extension → F5 trang PoGo. Popup phải hiện v0.3.4.
+
+## PoGo Monitor 0.3.3
 
 - Tin Discord chỉ chứa tọa độ dạng văn bản thường để Sao chép văn bản trên điện thoại lấy đúng tọa độ.
 - Áp dụng cho cả Stats và PvP; bỏ tên, IV, ảnh và embed trong tin Discord.

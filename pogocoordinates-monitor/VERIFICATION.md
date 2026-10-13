@@ -1,4 +1,10 @@
-# v0.3.3 verification
+# v0.3.4 verification
+
+- All 45 extension tests passed. Raw coordinates are the message content; restored Pokémon details remain in an embed.
+- Covered both Stats/PvP, negative coordinates, deduplication, retries and stable despawn timestamps.
+- Discord mobile Copy Text has not been verified on an actual phone in this session.
+
+## v0.3.3 verification
 
 - All 43 extension tests passed, including coordinate-only Discord payloads for Stats/PvP and retries.
 - Live browser installation, actual Discord delivery and mobile copying have not been verified in this session.

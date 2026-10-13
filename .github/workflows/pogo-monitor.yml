@@ -59,7 +59,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) { throw 'DISCORD_WEBHOOK_URL is not configured' }
           $download = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG/pogocoordinates-monitor-v$env:VERSION.zip"
           $guide = "https://github.com/$env:REPOSITORY/releases/tag/$env:TAG"
-          $description = "Tự Search PoGo Coordinates, lọc Top IV + PvPoke. Bảng trạng thái ngay trên trang khi đóng popup. Tin Discord chỉ chứa tọa độ dạng văn bản thường; trên điện thoại nhấn giữ tin → Sao chép văn bản để lấy đúng tọa độ."
+          $description = "Tự Search PoGo Coordinates, lọc Top IV + PvPoke. Bảng trạng thái ngay trên trang khi đóng popup. Tin Discord có ảnh, tên, IV, hạng và giờ despawn; phần văn bản chính chỉ chứa tọa độ để Sao chép văn bản trên điện thoại lấy riêng coord."
           $steps = "1. Tải ZIP và giải nén.`n2. Edge: edge://extensions → Developer mode → Load unpacked → chọn thư mục có manifest.json.`n3. Mở PoGo Coordinates, đăng nhập và chọn bộ lọc Stats/PvP trên web.`n4. Popup → Cài đặt: mã bạn bè, chu kỳ, ngưỡng PvP và webhook của kênh nhận → Lưu.`n5. Bấm Chạy tự động; giữ Edge và tab PoGo mở, có thể chạy nền."
           $payload = @{
             username = 'Auto Catch Update'
