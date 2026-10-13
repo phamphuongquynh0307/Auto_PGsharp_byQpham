@@ -17,7 +17,7 @@
       github: REPO,
       download: REPO + '/releases/latest/download/AutoCatchPokemonPGSharp.exe',
       extension: 'https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/discord-coord-collector-v0.3.3.zip',
-      pogo: REPO + '/releases/download/pogo-monitor-v0.3.0/pogocoordinates-monitor-v0.3.0.zip',
+      pogo: 'https://raw.githubusercontent.com/phamphuongquynh0307/Auto_PGsharp_byQpham/master/downloads/pogocoordinates-monitor-latest.zip',
       pogoGuide: REPO + '/blob/master/pogocoordinates-monitor/PUBLIC-GUIDE.vi.md',
       releases: REPO + '/releases/latest',
       license: REPO + '/blob/master/LICENSE',

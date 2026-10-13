@@ -230,6 +230,16 @@ async function handle(m) {
   }
 }
 chrome.runtime.onMessage.addListener((m,sender,reply)=>{
+  if(m.type==='PAGE_MONITOR_STATUS'&&sender.id===chrome.runtime.id&&sender.tab&&
+    /^https:\/\/pogocoordinates\.com\//.test(sender.url||'')){
+    get(['run','status','lastSearchAt','nextSearchAt']).then(stored=>{
+      const run=stored.run||{};
+      reply({ok:true,value:{running:!!run.running&&(!run.endsAt||run.endsAt>Date.now()),
+        onThisTab:run.tabId===sender.tab.id,endsAt:run.endsAt||null,
+        status:stored.status||'Chưa chạy',lastSearchAt:stored.lastSearchAt||null,
+        nextSearchAt:stored.nextSearchAt||null,cycleBusy}});
+    },()=>reply({ok:false,error:'Không đọc được trạng thái.'}));return true;
+  }
   // Web page/content scripts cannot configure secrets, start jobs, or send Discord messages.
   if(sender.id!==chrome.runtime.id||sender.url?.split('?')[0]!==chrome.runtime.getURL('panel.html'))return;
   handle(m).then(value=>reply({ok:true,value}),e=>reply({ok:false,error:e.message}));return true;

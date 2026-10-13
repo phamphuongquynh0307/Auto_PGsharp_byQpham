@@ -2,6 +2,7 @@
   'use strict';
   if (globalThis.__pogoMonitorInstalled) return;
   globalThis.__pogoMonitorInstalled = true;
+  globalThis.__pogoMonitorStatusCleanup?.();
   const C=globalThis.PogoCore, nodes=new Map(), nodeIds=new WeakMap();
   let nextId=1,busy=false,alertsRoot=null;
   const text=e=>(e?.innerText||e?.textContent||'').trim();
@@ -184,4 +185,46 @@
     Promise.resolve().then(tasks[m.type]).then(value=>respond({ok:true,value}),e=>respond({ok:false,error:e.message}));return true;
   };
   chrome.runtime.onMessage.addListener(globalThis.__pogoMonitorListener);
+
+  // Keep a small read-only indicator on the page even while the popup is closed.
+  document.getElementById('pogo-monitor-status')?.remove();
+  const statusHost=document.createElement('div');statusHost.id='pogo-monitor-status';
+  document.body.append(statusHost);
+  const statusRoot=statusHost.attachShadow({mode:'open'});
+  const statusStyle=document.createElement('style');
+  statusStyle.textContent=`:host{position:fixed;left:16px;bottom:16px;z-index:2147483646;font:13px system-ui;color:#edf4ff;width:min(310px,calc(100vw - 32px))}section{background:#182237;border:1px solid #64748b;border-radius:12px;box-shadow:0 6px 24px #0006;overflow:hidden}button{display:block;width:100%;background:transparent;color:inherit;border:0;text-align:left;padding:11px 13px;font:600 13px system-ui;cursor:pointer}button:focus-visible{outline:2px solid #7bdcbb;outline-offset:-3px}.details{padding:0 13px 11px}p{margin:5px 0;line-height:1.4;overflow-wrap:anywhere}.muted{color:#b6c4d8;font-size:12px}[hidden]{display:none}`;
+  const box=document.createElement('section'),badge=document.createElement('button'),details=document.createElement('div');
+  details.className='details';badge.type='button';badge.setAttribute('aria-expanded','true');
+  badge.title='Bấm để thu gọn / mở trạng thái';
+  const message=document.createElement('p'),timing=document.createElement('p'),hint=document.createElement('p');
+  timing.className=hint.className='muted';hint.textContent='Đóng popup vẫn chạy · Mở extension để điều khiển';
+  details.append(message,timing,hint);box.append(badge,details);statusRoot.append(statusStyle,box);
+  badge.onclick=()=>{details.hidden=!details.hidden;badge.setAttribute('aria-expanded',String(!details.hidden));};
+  let monitorState=null,lastStatusAt=0,statusPending=false,disposed=false;
+  const clock=value=>value?new Date(value).toLocaleTimeString('vi-VN'):'—';
+  function renderMonitorStatus(){
+    if(!lastStatusAt||Date.now()-lastStatusAt>15000){
+      badge.textContent='⚪ PoGo Monitor · Chưa kết nối';box.style.borderColor='#64748b';
+      message.textContent='Không xác nhận được trạng thái. Mở extension hoặc tải lại trang.';timing.textContent='';return;
+    }
+    const s=monitorState,running=s.running&&(!s.endsAt||s.endsAt>Date.now());
+    const searching=s.cycleBusy&&(!running||s.onThisTab);
+    badge.textContent=`${searching?'🟡':running?'🟢':'⏸'} PoGo Monitor · ${searching?'Đang tìm':running?(s.onThisTab?'Đang chạy':'Chạy ở tab khác'):'Đã dừng'}`;
+    box.style.borderColor=searching?'#fbbf24':running?'#62d7aa':'#64748b';message.textContent=s.status;
+    let next='—';
+    if(running&&s.nextSearchAt){const seconds=Math.ceil((s.nextSearchAt-Date.now())/1000);next=seconds>0?`còn ${seconds}s`:'đang chờ lượt tìm';}
+    timing.textContent=`Tìm gần nhất: ${clock(s.lastSearchAt)} · Lần kế: ${next}${running&&s.endsAt?' · Dừng: '+clock(s.endsAt):''}`;
+  }
+  async function refreshMonitorStatus(){
+    if(statusPending||disposed)return;statusPending=true;
+    try{
+      const response=await chrome.runtime.sendMessage({type:'PAGE_MONITOR_STATUS'});
+      if(!disposed&&response?.ok){monitorState=response.value;lastStatusAt=Date.now();}
+    }catch{lastStatusAt=0;}finally{statusPending=false;if(!disposed)renderMonitorStatus();}
+  }
+  renderMonitorStatus();void refreshMonitorStatus();
+  const pollTimer=setInterval(()=>void refreshMonitorStatus(),5000),clockTimer=setInterval(renderMonitorStatus,1000);
+  const onVisible=()=>{if(!document.hidden)void refreshMonitorStatus();};
+  document.addEventListener('visibilitychange',onVisible);
+  globalThis.__pogoMonitorStatusCleanup=()=>{disposed=true;clearInterval(pollTimer);clearInterval(clockTimer);document.removeEventListener('visibilitychange',onVisible);statusHost.remove();};
 })();

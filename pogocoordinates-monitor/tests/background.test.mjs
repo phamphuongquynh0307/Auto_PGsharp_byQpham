@@ -52,6 +52,24 @@ test('Stats sends one web and Discord notification, then deduplicates subsequent
   assert.ok(!JSON.stringify(h.posts[0].body).includes(h.store.settings.trainerCode));
   await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.searches,2);assert.equal(h.posts.length,1);assert.equal(h.store.history.length,1);
 });
+
+test('Page status exposes only progress and times, never settings, codes or webhook',async()=>{
+  const h=await harness();
+  h.store.run={running:true,tabId:11,endsAt:Date.now()+60000};
+  h.store.status='Đang tìm';h.store.lastSearchAt=Date.now();h.store.nextSearchAt=Date.now()+30000;
+  const reply=await new Promise(resolve=>h.listeners.message({type:'PAGE_MONITOR_STATUS'},
+    {id:'test',tab:{id:11},url:'https://pogocoordinates.com/search'},resolve));
+  assert.equal(reply.ok,true);assert.equal(reply.value.running,true);assert.equal(reply.value.onThisTab,true);
+  assert.equal(reply.value.lastSearchAt,h.store.lastSearchAt);
+  const body=JSON.stringify(reply);assert.ok(!body.includes(h.store.settings.webhook));
+  assert.ok(!body.includes(h.store.settings.trainerCode));assert.ok(!body.includes('settings'));
+  assert.equal(h.listeners.message({type:'PAGE_MONITOR_STATUS'},
+    {id:'test',tab:{id:11},url:'https://example.com/'},()=>assert.fail('untrusted origin')),undefined);
+  h.store.run.endsAt=Date.now()-1000;
+  const expired=await new Promise(resolve=>h.listeners.message({type:'PAGE_MONITOR_STATUS'},
+    {id:'test',tab:{id:11},url:'https://pogocoordinates.com/'},resolve));
+  assert.equal(expired.value.running,false);
+});
 test('MV3 alarm interval and configured stop deadline are saved; stopping cancels search alarm',async()=>{
   const h=await harness({settings:{durationMinutes:5,intervalSeconds:30}});await h.rpc({type:'START'});
   assert.equal(h.alarms.get('pogo-search').periodInMinutes,.5);assert.ok(h.alarms.has('pogo-stop'));

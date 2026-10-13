@@ -1,4 +1,20 @@
-# PoGo Monitor 0.3.0
+# PoGo Monitor 0.3.2
+
+- Thêm bảng trạng thái thu gọn ở góc trái dưới trang PoGo Coordinates, hoạt động khi popup đóng.
+- Hiển thị đang chạy, đang tìm, đã dừng, chạy ở tab khác hoặc mất kết nối; kèm lần tìm gần nhất, đếm ngược lần tìm tiếp và giờ dừng.
+- Chỉ đọc trạng thái từ extension; bảng trên trang không nhận webhook hoặc mã bạn bè.
+
+Chép đè vào thư mục extension cũ → Tải lại extension → F5 trang PoGo Coordinates. Popup phải hiện v0.3.2.
+
+## PoGo Monitor 0.3.1
+
+- Discord hiển thị giờ despawn và thời gian còn lại bằng timestamp tự cập nhật theo giờ của người xem.
+- Tên Pokémon nằm trong khối riêng để sao chép nhanh, tọa độ vẫn có khối riêng.
+- Khi Discord gửi lại sau lỗi hoặc giới hạn tốc độ, giờ despawn giữ đúng mốc phát hiện ban đầu.
+
+Chép đè bản 0.3.1 vào đúng thư mục extension đã cài, rồi vào `edge://extensions` hoặc `chrome://extensions` bấm **Tải lại**. Popup phải hiển thị **v0.3.1**. Cập nhật app desktop không cập nhật extension.
+
+## PoGo Monitor 0.3.0
 
 Bản cập nhật tổng hợp các thay đổi đã thống nhất:
 

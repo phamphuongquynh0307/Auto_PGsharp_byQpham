@@ -1,4 +1,7 @@
-# v0.3.0 verification
+# v0.3.2 verification
+
+- All 44 extension tests passed. Covers on-page running/stopped/disconnected status, collapsing the indicator, despawn timestamps and retry deadlines, and excluding secrets from page status replies.
+- ZIP manifest and popup version verified as 0.3.2. User confirmed the local result was satisfactory; live browser installation and Discord delivery have not been independently verified in this session.
 
 - 39 tests passed: background scheduling/delivery, parsing, IV calculations, auth gates and compact popup actions.
 - Popup uses action.default_popup=panel.html; no cloned filter view, no unsolicited login tab on popup open.

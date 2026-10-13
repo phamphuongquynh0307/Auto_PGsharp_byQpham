@@ -301,9 +301,9 @@ window.I18N.en = {
     },
     pogo: {
   "label": "Edge / Chrome extension",
-  "name": "PoGo Monitor v0.3.0",
-  "text": "Search PoGo Coordinates automatically and filter IV / PvPoke ranks. Discord alerts include Pokémon images and easy-to-copy coordinates.",
-  "note": "Choose filters on the website. Keep Edge and the PoGo tab open; the tab can stay in the background.",
+  "name": "PoGo Monitor v0.3.2",
+  "text": "Search PoGo Coordinates automatically and filter IV / PvPoke ranks. Discord alerts include Pokémon images, despawn times, and easy-to-copy names and coordinates.",
+  "note": "See monitor status on the website with the popup closed. Update: overwrite the existing folder, reload the extension, then refresh the PoGo page.",
   "stepsTitle": "Install and run",
   "steps": [
     "Download and extract the ZIP to a permanent folder.",

@@ -16,7 +16,7 @@ function harness(loggedIn=true,code='123456789012',fixture=html){
   }});
   if(loggedIn)for(const a of w.document.querySelectorAll('nav a'))if(/Login/.test(a.textContent))a.remove();
   let listener;
-  w.chrome={runtime:{id:'test',onMessage:{addListener:fn=>listener=fn}},storage:{session:{get:async()=>({trainerCode:code})}}};
+  w.chrome={runtime:{id:'test',onMessage:{addListener:fn=>listener=fn},sendMessage:async()=>({ok:true,value:{running:false,status:'Đã dừng'}})},storage:{session:{get:async()=>({trainerCode:code})}}};
   w.eval(core);w.eval(source);
   const call=m=>new Promise(resolve=>listener(m,{id:'test'},resolve));
   return {w,dom,call};
@@ -24,6 +24,31 @@ function harness(loggedIn=true,code='123456789012',fixture=html){
 test('Unauthenticated page cannot search or expose editable cloned fields even with trainer code',async()=>{
   const h=harness(false);const s=await h.call({type:'PAGE_STATE'});assert.equal(s.value.loggedIn,false);assert.equal(s.value.schema,null);
   const search=await h.call({type:'PAGE_SEARCH'});assert.equal(search.ok,false);assert.match(search.error,/đăng nhập/);h.dom.window.close();
+});
+
+test('Page indicator follows background state with popup closed, collapses and shows disconnected state',async t=>{
+  const h=harness();
+  t.after(()=>h.dom.window.close());
+  Object.defineProperty(h.w.document,'hidden',{value:false,configurable:true});
+  await new Promise(resolve=>h.w.setTimeout(resolve,0));
+  const shadow=h.w.document.querySelector('#pogo-monitor-status').shadowRoot;
+  assert.match(shadow.querySelector('button').textContent,/Đã dừng/);
+  h.w.chrome.runtime.sendMessage=async m=>{
+    assert.equal(m.type,'PAGE_MONITOR_STATUS');
+    return {ok:true,value:{running:true,onThisTab:true,status:'Stats: 5 kết quả',lastSearchAt:Date.now(),nextSearchAt:Date.now()+60000}};
+  };
+  h.w.document.dispatchEvent(new h.w.Event('visibilitychange'));
+  await new Promise(resolve=>h.w.setTimeout(resolve,0));
+  assert.match(shadow.querySelector('button').textContent,/Đang chạy/);
+  assert.match(shadow.textContent,/Stats: 5 kết quả/);
+  assert.match(shadow.querySelector('.muted').textContent,/còn 60s/);
+  shadow.querySelector('button').click();assert.equal(shadow.querySelector('.details').hidden,true);
+  h.w.chrome.runtime.sendMessage=async()=>{throw Error('Extension context invalidated');};
+  h.w.document.dispatchEvent(new h.w.Event('visibilitychange'));
+  await new Promise(resolve=>h.w.setTimeout(resolve,0));
+  assert.match(shadow.querySelector('button').textContent,/Chưa kết nối/);
+  h.w.__pogoMonitorStatusCleanup();assert.equal(h.w.document.querySelector('#pogo-monitor-status'),null);
+  h.dom.window.close();
 });
 test('Authenticated page still requires trainer code',async()=>{
   const h=harness(true,'');const s=await h.call({type:'PAGE_STATE'});assert.equal(s.value.unlocked,false);

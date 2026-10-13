@@ -301,9 +301,9 @@ window.I18N.vi = {
     },
     pogo: {
   "label": "Extension cho Edge / Chrome",
-  "name": "PoGo Monitor v0.3.0",
-  "text": "Tự Search PoGo Coordinates, lọc Top IV và PvPoke. Discord có ảnh Pokémon, hạng PvP in đậm và tọa độ dễ sao chép.",
-  "note": "Chọn bộ lọc trên web. Giữ Edge và tab PoGo mở; có thể chạy nền.",
+  "name": "PoGo Monitor v0.3.2",
+  "text": "Tự Search PoGo Coordinates, lọc Top IV và PvPoke. Discord có ảnh Pokémon, giờ despawn, tên và tọa độ dễ sao chép.",
+  "note": "Đóng popup vẫn xem được trạng thái ngay trên trang. Cập nhật: chép đè thư mục cũ → Tải lại extension → F5 trang PoGo.",
   "stepsTitle": "Cài và chạy",
   "steps": [
     "Tải ZIP, giải nén vào thư mục cố định.",

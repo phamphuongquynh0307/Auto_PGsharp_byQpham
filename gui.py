@@ -163,6 +163,7 @@ LANG = {
                       "en": "If this app catches you a good few Pokémon, consider buying me a coffee ☕ Thank you!"},
     "copy":          {"vi": "Sao chép", "en": "Copy"},
     "copied":        {"vi": "Đã chép ✓", "en": "Copied ✓"},
+    "name_copied":   {"vi": "Đã sao chép tên máy: {}", "en": "Copied device name: {}"},
     "device":        {"vi": "Thiết bị:", "en": "Device:"},
     "coord_single_window": {"vi": "Chế độ Discord Coord chỉ chạy trong cửa sổ chính (cổng 8766).",
                             "en": "Discord Coord mode runs only in the main window (port 8766)."},
@@ -3967,13 +3968,15 @@ class MultiDeviceApp:
         self.fleet.pack(fill="x", padx=8, pady=(6, 0))
         self.fleet.bind("<<TreeviewSelect>>", self._on_fleet_select)
         self.fleet.bind("<ButtonRelease-1>", self._on_fleet_click)
+        self.fleet.bind("<Control-c>", self._on_copy_selected_name)
         self._fleet_rows: dict[str, App] = {}
         # With a single phone the table is five columns for one row; show one readable line
         # instead, in the top bar beside Guide/Donate: name · link (click ⇄ to switch
         # cable/Wi-Fi) · status · progress. Guide/Donate are packed first, so a long status
         # is clipped rather than pushing them off the window.
         self.card = ttk.Frame(bar)
-        self.card_name = ttk.Label(self.card, font=("Segoe UI", 10, "bold"))
+        self.card_name = ttk.Label(self.card, font=("Segoe UI", 10, "bold"), cursor="hand2")
+        self.card_name.bind("<Button-1>", self._on_card_name)
         self.card_link = ttk.Label(self.card, cursor="hand2")
         self.card_status = ttk.Label(self.card)
         self.card_count = ttk.Label(self.card)
@@ -4008,12 +4011,32 @@ class MultiDeviceApp:
         return model
 
     def _on_fleet_click(self, event) -> None:
-        """Clicking a phone's Kết nối cell flips it between USB cable and Wi-Fi."""
-        if self.fleet.identify_column(event.x) != "#2":
-            return
+        """Copy the name or switch transport directly from its cell."""
+        column = self.fleet.identify_column(event.x)
         app = self._fleet_rows.get(self.fleet.identify_row(event.y))
-        if app is not None and app._can_switch_link():
+        if app is None:
+            return
+        if column == "#1":
+            self._copy_device_name(app)
+        elif column == "#2" and app._can_switch_link():
             app._toggle_link()
+
+    def _copy_device_name(self, app: App) -> None:
+        name = self._display_name(app)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(name)
+        app._log(app.tr("name_copied").format(name))
+
+    def _on_card_name(self, _event=None) -> None:
+        app = next(iter(self._fleet_rows.values()), None)
+        if app is not None:
+            self._copy_device_name(app)
+
+    def _on_copy_selected_name(self, _event=None) -> str:
+        app = self._fleet_rows.get(next(iter(self.fleet.selection()), ""))
+        if app is not None:
+            self._copy_device_name(app)
+        return "break"
 
     def _on_card_link(self, _event=None) -> None:
         app = next(iter(self._fleet_rows.values()), None)
@@ -4385,7 +4408,7 @@ class MultiDeviceApp:
         self.guide_btn.config(text=t("❓ Hướng dẫn", "❓ Guide"))
         self.donate_btn.config(text=t("❤ Ủng hộ", "❤ Donate"))
         self.stop_all_btn.config(text=t("■ Dừng tất cả", "■ Stop all"))
-        for col, vi, en in (("name", "Máy", "Device"), ("link", "Kết nối", "Link"),
+        for col, vi, en in (("name", "Máy ⧉", "Device ⧉"), ("link", "Kết nối", "Link"),
                             ("mode", "Chế độ", "Mode"),
                             ("status", "Trạng thái", "Status"), ("count", "Tiến độ", "Progress")):
             self.fleet.heading(col, text=t(vi, en), anchor="w")
@@ -4437,7 +4460,7 @@ class MultiDeviceApp:
             app, (name, link, mode, status, count) = next(iter(rows.values()))
             if app is None:
                 status = mode  # empty state: the "plug in a cable" hint
-            self.card_name.config(text=name)
+            self.card_name.config(text=name + " ⧉" if app is not None else name)
             self.card_link.config(text=link, foreground="#0a58ca" if "⇄" in link else "")
             self.card_status.config(text=status)
             self.card_count.config(text=count)

@@ -56,11 +56,18 @@
   }
   function discordPayload(event) {
     const s=event.spawn, p=event.mode==='pvp'?event.pvp:null;
-    const lines=[`IV ${s.ivPercent}% (${s.iv?.join('/')||'?'})`];
+    const copyName=String(s.fullName||s.name||'').replace(/`/g,'').replace(/[\r\n]+/g,' ').slice(0,256);
+    const lines=['```\n'+copyName+'\n```',`IV ${s.ivPercent}% (${s.iv?.join('/')||'?'})`];
     if(p){
       const cap=/ultra|2500/i.test(p.league)?2500:1500;
       lines.push(`**${p.league} (${cap}) · ${p.speciesName}: IV #${p.ivRank??'?'} · PvPoke #${p.speciesRank??'?'}**`);
     }else lines.push(`CP ${s.cp} · LV ${s.level}`);
+    if(Number.isFinite(event.createdAt)&&Number.isFinite(s.ttlSeconds)&&s.ttlSeconds>0){
+      const despawnAt=Math.floor((event.createdAt+s.ttlSeconds*1000)/1000);
+      lines.push(`⏳ Despawn: <t:${despawnAt}:T> · <t:${despawnAt}:R>`);
+    }else if(s.despawn){
+      lines.push(`⏳ Despawn: ${s.despawn} lúc phát hiện`);
+    }else lines.push('⏳ Despawn: chưa có thông tin');
     lines.push('```\n'+s.coords+'\n```');
     const thumbnail=Number.isInteger(s.dex)&&s.dex>0
       ?{url:`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${s.dex}.png`}:undefined;

@@ -1,10 +1,12 @@
-# PoGo Monitor v0.3.0 cho Edge / Chrome
+# PoGo Monitor v0.3.2 cho Edge / Chrome
 
-Popup nhỏ tự Search PoGo Coordinates, lọc Top IV và Top PvPoke, báo trên web và Discord. Tin Discord có ảnh Pokémon, hạng PvP in đậm và tọa độ riêng để sao chép.
+Popup nhỏ tự Search PoGo Coordinates, lọc Top IV và Top PvPoke, báo trên web và Discord. Tin Discord có ảnh Pokémon, giờ despawn và thời gian còn lại tự cập nhật; tên Pokémon và tọa độ có khối riêng để sao chép.
+
+Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang tìm, đã dừng, chạy ở tab khác hoặc mất kết nối. Đóng popup vẫn thấy lần tìm gần nhất và đếm ngược lần tiếp. Bấm tiêu đề bảng để thu gọn.
 
 ## Cài lần đầu
 
-1. Tải file `pogocoordinates-monitor-v0.3.0.zip` và giải nén vào thư mục cố định.
+1. Tải file `pogocoordinates-monitor-v0.3.2.zip` và giải nén vào thư mục cố định.
 2. Edge: mở `edge://extensions` → bật **Developer mode** → **Load unpacked** → chọn thư mục có `manifest.json`. Chrome dùng `chrome://extensions`.
 3. Bấm biểu tượng extension → **Mở web**. Đăng nhập PoGo Coordinates trong cùng profile trình duyệt.
 4. Chọn Pokémon, Stats/PvP và bộ lọc **trên website**.
@@ -13,7 +15,7 @@ Popup nhỏ tự Search PoGo Coordinates, lọc Top IV và Top PvPoke, báo trê
 
 ## Cập nhật / chạy thử lại
 
-- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**. Không gỡ để giữ cấu hình và lịch sử.
+- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**, sau đó **F5 trang PoGo**. Popup phải hiện **v0.3.2**. Không gỡ để giữ cấu hình và lịch sử.
 - Đổi bộ lọc: Dừng, sửa trên web, rồi Chạy lại.
 - Chạy thử lại: tab **Thông báo** → **Xóa lịch sử & thử lại** → **Tìm ngay**. Các kết quả vẫn phải đạt bộ lọc và ngưỡng PvP.
 - Nếu không có tin mới, đọc dòng trạng thái: không đạt hạng, đã báo, hết hạn hoặc lỗi tọa độ.

@@ -63,6 +63,9 @@ test('Discord summary contains coordinates and ranks without filters, attachment
   const payload=C.discordPayload(event);assert.deepEqual(payload.allowed_mentions,{parse:[]});
   assert.match(payload.embeds[0].description,/\*\*Great League \(1500\) · Raichu: IV #20 · PvPoke #90\*\*/);
   assert.match(payload.embeds[0].description,/```\n14\.538988,121\.004883\n```/);
+  assert.match(payload.embeds[0].description,/```\nPikachu\n```/);
+  const despawnAt=Math.floor((event.createdAt+3124*1000)/1000);
+  assert.ok(payload.embeds[0].description.includes(`Despawn: <t:${despawnAt}:T> · <t:${despawnAt}:R>`));
   assert.match(payload.embeds[0].thumbnail.url,/\/25\.png$/);
   const body=JSON.stringify(payload);for(const value of ['14.538988','14/14/14','Pikachu','Raichu','IV #20']){
     assert.ok(body.includes(value),value);
@@ -75,6 +78,18 @@ test('Discord Ultra shows 2500; Stats omits all ranks, league and long context',
   const ultra=C.discordPayload({spawn,pvp,mode:'pvp'}).embeds[0];assert.match(ultra.description,/\*\*Ultra League \(2500\)/);
   const stats=C.discordPayload({spawn,pvp,mode:'stats'}).embeds[0];
   assert.match(stats.description,/CP 474 · LV 18/);assert.match(stats.description,/```\n/);
-  assert.ok(!/hạng|PvP|League|Pasay|Còn/i.test(stats.description));
-  assert.ok(stats.thumbnail);assert.ok(stats.description.length<130);
+  assert.ok(!/hạng|PvP|League|Pasay/i.test(stats.description));
+  assert.match(stats.description,/Despawn: 52:04 lúc phát hiện/);
+  assert.ok(stats.thumbnail);assert.ok(stats.description.length<200);
+});
+
+test('Queued Discord alerts keep their original despawn deadline after retries',()=>{
+  const event={spawn:C.parseCard(card),mode:'stats',createdAt:1700000000000};
+  const original=C.discordPayload(event).embeds[0].description;
+  const retried=C.discordPayload({...event,attempts:3,nextRetryAt:event.createdAt+120000}).embeds[0].description;
+  assert.equal(original,retried);
+  assert.match(original,/Despawn: <t:1700003124:T> · <t:1700003124:R>/);
+  const unknown=C.discordPayload({spawn:{...event.spawn,ttlSeconds:null,despawn:''},mode:'stats',createdAt:event.createdAt});
+  assert.match(unknown.embeds[0].description,/Despawn: chưa có thông tin/);
+  assert.ok(!unknown.embeds[0].description.includes('<t:'));
 });

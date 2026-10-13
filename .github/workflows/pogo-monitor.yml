@@ -52,7 +52,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) { throw 'DISCORD_WEBHOOK_URL is not configured' }
           $download = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG/pogocoordinates-monitor-v$env:VERSION.zip"
           $guide = "https://github.com/$env:REPOSITORY/releases/tag/$env:TAG"
-          $description = "Popup nhỏ cho Edge/Chrome: tự Search PoGo Coordinates, lọc Top IV + PvPoke, báo Discord có ảnh Pokémon và tọa độ dễ sao chép."
+          $description = "Tự Search PoGo Coordinates, lọc Top IV + PvPoke. Bảng trạng thái ngay trên trang khi đóng popup. Discord có giờ despawn, thời gian còn lại, ảnh Pokémon, tên và tọa độ dễ sao chép."
           $steps = "1. Tải ZIP và giải nén.`n2. Edge: edge://extensions → Developer mode → Load unpacked → chọn thư mục có manifest.json.`n3. Mở PoGo Coordinates, đăng nhập và chọn bộ lọc Stats/PvP trên web.`n4. Popup → Cài đặt: mã bạn bè, chu kỳ, ngưỡng PvP và webhook của kênh nhận → Lưu.`n5. Bấm Chạy tự động; giữ Edge và tab PoGo mở, có thể chạy nền."
           $payload = @{
             username = 'Auto Catch Update'
@@ -65,7 +65,7 @@ jobs:
               fields = @(
                 @{ name = 'Tải và hướng dẫn'; value = "[Tải extension ZIP]($download) · [Hướng dẫn đầy đủ]($guide)" },
                 @{ name = 'Cài trong Edge'; value = $steps },
-                @{ name = 'Cập nhật bản cũ'; value = 'Chép đè vào thư mục cũ → Tải lại extension. Không gỡ để giữ cài đặt.' }
+                @{ name = 'Cập nhật bản cũ'; value = 'Chép đè vào thư mục cũ → Tải lại extension → F5 trang PoGo. Không gỡ để giữ cài đặt.' }
               )
             })
           } | ConvertTo-Json -Depth 8
