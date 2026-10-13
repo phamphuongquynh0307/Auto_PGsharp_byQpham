@@ -68,12 +68,14 @@
     }else if(s.despawn){
       lines.push(`⏳ Despawn: ${s.despawn} lúc phát hiện`);
     }else lines.push('⏳ Despawn: chưa có thông tin');
-    lines.push('```\n'+s.coords+'\n```');
     const thumbnail=Number.isInteger(s.dex)&&s.dex>0
       ?{url:`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${s.dex}.png`}:undefined;
-    return {content:s.coords,allowed_mentions:{parse:[]},embeds:[{title:`${s.fullName} #${s.dex}`.slice(0,256),
+    return {allowed_mentions:{parse:[]},embeds:[{title:`${s.fullName} #${s.dex}`.slice(0,256),
       url:`https://www.google.com/maps?q=${encodeURIComponent(s.coords)}`,color:p?0x8b5cf6:0x22c55e,
       thumbnail,description:lines.join('\n').slice(0,4096)}]};
   }
-  root.PogoCore = {defaults,normalize,validateSettings,validateWebhook,parseCard,matchThreshold,eventKey,discordPayload};
+  function discordCoordinatePayload(event) {
+    return {content:event.spawn.coords,allowed_mentions:{parse:[]}};
+  }
+  root.PogoCore = {defaults,normalize,validateSettings,validateWebhook,parseCard,matchThreshold,eventKey,discordPayload,discordCoordinatePayload};
 })(globalThis);

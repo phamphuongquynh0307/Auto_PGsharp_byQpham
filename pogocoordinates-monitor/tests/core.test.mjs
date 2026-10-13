@@ -72,9 +72,9 @@ test('No cross-evolution mixing of IV rank and PvPoke species rank',()=>{
 test('Discord summary contains coordinates and ranks without filters, attachments or secrets',()=>{
   const event={spawn:C.parseCard(card),mode:'pvp',filters:{Pokemon:'Pikachu',League:'Great League'},createdAt:Date.now(),
     pvp:{league:'Great League',speciesName:'Raichu',ivRank:20,speciesRank:90,cp:1499,level:28,productPercent:99.5,maxLevel:50,minIv:0,dataDate:'2026-10-12'}};
-  const payload=C.discordPayload(event);assert.deepEqual(payload.allowed_mentions,{parse:[]});assert.equal(payload.content,event.spawn.coords);
+  const payload=C.discordPayload(event);assert.deepEqual(payload.allowed_mentions,{parse:[]});assert.equal(payload.content,undefined);
   assert.match(payload.embeds[0].description,/\*\*Great League \(1500\) · Raichu: IV #20 · PvPoke #90\*\*/);
-  assert.match(payload.embeds[0].description,/```\n14\.538988,121\.004883\n```/);
+  assert.ok(!payload.embeds[0].description.includes(event.spawn.coords));
   assert.match(payload.embeds[0].description,/```\nPikachu\n```/);
   const despawnAt=Math.floor((event.createdAt+3124*1000)/1000);
   assert.ok(payload.embeds[0].description.includes(`Despawn: <t:${despawnAt}:T> · <t:${despawnAt}:R>`));
@@ -106,12 +106,12 @@ test('Queued Discord alerts keep their original despawn deadline after retries',
   assert.ok(!unknown.embeds[0].description.includes('<t:'));
 });
 
-test('Mobile Copy Text uses raw coordinates while rich information stays in the embed',()=>{
+test('Coordinates have a standalone message with no rich information or code formatting',()=>{
  const spawn={...C.parseCard(card),coords:'-33.865143,151.209900'};
  for(const mode of ['stats','pvp']){
   const payload=C.discordPayload({spawn,mode,pvp:{league:'Great League',speciesName:'Raichu',ivRank:20,speciesRank:90},createdAt:1700000000000});
-  assert.equal(payload.content,'-33.865143,151.209900');
-  assert.ok(!payload.content.includes(String(spawn.cp)));
+  assert.equal(payload.content,undefined);
+  assert.deepEqual(C.discordCoordinatePayload({spawn}),{content:'-33.865143,151.209900',allowed_mentions:{parse:[]}});
   assert.equal(payload.embeds.length,1);
   assert.match(payload.embeds[0].title,/Pikachu/);
   assert.ok(payload.embeds[0].description.includes('IV 93% (14/14/14)'));

@@ -1,4 +1,10 @@
-# v0.3.5 verification
+# v0.3.6 verification
+
+- All 51 tests passed. Information and coordinates are distinct Discord POSTs; coordinate message contains only raw coords and disabled mentions.
+- Covers deduplication, rate limiting on either message, uncertain delivery and manual retry without duplicate information.
+- Actual mobile copying has not been verified in this session.
+
+## v0.3.5 verification
 
 - All 49 extension tests passed: league/evolution species ranking, new web columns, unchanged parsed spawn data, Stats cleanup, public-only read bridge and Discord regression checks.
 - Unknown forms and species absent from rankings show no rank rather than guessing.

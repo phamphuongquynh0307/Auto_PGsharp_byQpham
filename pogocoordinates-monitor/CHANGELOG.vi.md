@@ -1,4 +1,13 @@
-# PoGo Monitor 0.3.5
+# PoGo Monitor 0.3.6
+
+- Tách thông tin Pokémon và tọa độ thành hai tin Discord riêng. Nhấn giữ tin coord để sao chép riêng tọa độ trên mobile.
+- Thẻ thông tin giữ ảnh, tên, IV, hạng và despawn; bỏ khối tọa độ trong thẻ để tránh nhầm chỗ sao chép.
+- Lưu trạng thái đã gửi thẻ. Nếu tin coord bị 429, chỉ thử lại coord, không gửi lại thẻ.
+- Giữ cột PvPoke trên trang Search.
+
+Cập nhật: chép đè → Tải lại extension → F5 trang PoGo. Popup hiện v0.3.6. Chỉ tin gửi mới dùng định dạng này.
+
+## PoGo Monitor 0.3.5
 
 - Thêm cột PvPoke cạnh CP / LVL / IV trên mỗi kết quả Search ở chế độ PvP, kể cả khi chưa chạy tự động.
 - Tự đổi theo league và tùy chọn tiến hóa; tên loài hiển thị dưới hạng. Chưa có hạng hiện dấu —.

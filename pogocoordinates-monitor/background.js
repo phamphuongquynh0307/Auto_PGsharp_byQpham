@@ -165,9 +165,19 @@ async function deliverDiscord() {
       // Persist the in-flight marker. A restart will not blindly resend an ambiguously delivered POST.
       await updateEvents([event.id],{discordStatus:'sending',attempts:event.attempts+1});
       try{
-        const result=await postWebhook(settings.webhook,C.discordPayload(event));
-        if(result.retryAfter){await updateEvents([event.id],{discordStatus:'pending',nextRetryAt:Date.now()+result.retryAfter});
-          await chrome.alarms.create('pogo-discord-retry',{when:Date.now()+result.retryAfter});break;}
+        const messages=event.discordInfoSent?[]:[{part:'info',payload:C.discordPayload(event)}];
+        messages.push({part:'coords',payload:C.discordCoordinatePayload(event)});
+        let retry=false;
+        for(const message of messages){
+          await updateEvents([event.id],{discordPart:message.part});
+          const result=await postWebhook(settings.webhook,message.payload);
+          if(result.retryAfter){
+            await updateEvents([event.id],{discordStatus:'pending',nextRetryAt:Date.now()+result.retryAfter});
+            await chrome.alarms.create('pogo-discord-retry',{when:Date.now()+result.retryAfter});retry=true;break;
+          }
+          if(message.part==='info')await updateEvents([event.id],{discordInfoSent:true});
+        }
+        if(retry)break;
         await updateEvents([event.id],{discordStatus:'sent',discordError:null});
       }catch(e){await updateEvents([event.id],{discordStatus:/^Discord HTTP \d+$/.test(e.message)?'failed':'uncertain',discordError:e.message});}
     }

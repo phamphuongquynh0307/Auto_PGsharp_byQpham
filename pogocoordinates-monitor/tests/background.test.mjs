@@ -34,8 +34,8 @@ async function harness(options={}){
     if(String(url).startsWith('chrome-extension:'))return new Response(JSON.stringify(data),{status:200});
     posts.push({url,body:JSON.parse(typeof init.body==='string'?init.body:init.body.get('payload_json')),
       attachment:typeof init.body==='string'?null:await init.body.get('files[0]').text()});
-    if(options.networkFail)throw Error('fetch failed');
-    if(options.discord429&&posts.length===1)return new Response(JSON.stringify({retry_after:1}),{status:429});
+    if(options.networkFail||options.networkFailAt===posts.length)throw Error('fetch failed');
+    if((options.discord429&&posts.length===1)||options.discord429At===posts.length)return new Response(JSON.stringify({retry_after:1}),{status:429});
     if(options.discordFail)return new Response('bad',{status:401});
     return new Response('{}',{status:200});
   };
@@ -44,13 +44,14 @@ async function harness(options={}){
   const until=async condition=>{const end=Date.now()+3000;while(!condition()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(condition(),'operation timed out');};
   return {store,session,alarms,listeners,posts,web,rpc,spawn,until,get searches(){return searches;}};
 }
-test('Stats sends one web and Discord notification, then deduplicates subsequent search',async()=>{
+test('Stats sends information then standalone coordinates and deduplicates the pair',async()=>{
   const h=await harness();assert.equal((await h.rpc({type:'SEARCH_ONCE'})).ok,true);
-  assert.equal(h.store.history.length,1);assert.equal(h.posts.length,1);assert.equal(h.web.length,1);
+  assert.equal(h.store.history.length,1);assert.equal(h.posts.length,2);assert.equal(h.web.length,1);
   assert.equal(h.store.history[0].discordStatus,'sent');assert.equal(h.store.history[0].webStatus,'shown');
-  assert.equal(h.posts[0].attachment,null);
+  assert.equal(h.posts[0].attachment,null);assert.equal(h.posts[0].body.content,undefined);
+  assert.deepEqual(h.posts[1].body,{content:h.spawn.coords,allowed_mentions:{parse:[]}});
   assert.ok(!JSON.stringify(h.posts[0].body).includes(h.store.settings.trainerCode));
-  await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.searches,2);assert.equal(h.posts.length,1);assert.equal(h.store.history.length,1);
+  await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.searches,2);assert.equal(h.posts.length,2);assert.equal(h.store.history.length,1);
 });
 test('Page rank bridge returns only public species ranks and rejects oversized requests',async()=>{
  const h=await harness();
@@ -109,7 +110,7 @@ test('Discord 429 is retained for retry and never marked sent prematurely',async
   const h=await harness({discord429:true});await h.rpc({type:'SEARCH_ONCE'});
   assert.equal(h.store.history[0].discordStatus,'pending');assert.ok(h.alarms.has('pogo-discord-retry'));
   h.store.history[0].nextRetryAt=0;h.listeners.alarm({name:'pogo-discord-retry'});
-  await h.until(()=>h.store.history[0].discordStatus==='sent');assert.equal(h.posts.length,2);
+  await h.until(()=>h.store.history[0].discordStatus==='sent');assert.equal(h.posts.length,3);
 });
 test('Webhook failure is visible and does not cause an endless automatic retry',async()=>{
   const h=await harness({discordFail:true});await h.rpc({type:'SEARCH_ONCE'});
@@ -155,14 +156,33 @@ test('Post-login homepage recovers Search while OAuth callback and loading page 
 });
 
 test('Clear history stops the run and resets deduplication without losing settings',async()=>{
-  const h=await harness();await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.posts.length,1);
+  const h=await harness();await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.posts.length,2);
   const settings=structuredClone(h.store.settings);h.store.run={running:true,id:'test'};
   assert.equal((await h.rpc({type:'CLEAR_HISTORY'})).ok,true);
   assert.deepEqual(h.store.history,[]);assert.deepEqual(h.store.seen,{});assert.deepEqual(h.store.settings,settings);
   assert.equal(h.store.run.running,false);assert.equal(h.store.lastSearchAt,null);
-  await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.posts.length,2);
+  await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.posts.length,4);
 });
 test('Clear history rejects while a search is in flight',async()=>{
   const h=await harness({searchDelay:100});const pending=h.rpc({type:'SEARCH_ONCE'});await h.until(()=>h.searches===1);
   assert.equal((await h.rpc({type:'CLEAR_HISTORY'})).ok,false);await pending;assert.equal(h.store.history.length,1);
+});
+
+test('Coordinate rate limit retries only the second message without repeating the information',async()=>{
+ const h=await harness({discord429At:2});await h.rpc({type:'SEARCH_ONCE'});
+ assert.equal(h.posts.length,2);assert.equal(h.store.history[0].discordInfoSent,true);
+ assert.equal(h.store.history[0].discordStatus,'pending');assert.equal(h.store.history[0].discordPart,'coords');
+ h.store.history[0].nextRetryAt=0;h.listeners.alarm({name:'pogo-discord-retry'});
+ await h.until(()=>h.store.history[0].discordStatus==='sent');
+ assert.equal(h.posts.length,3);assert.deepEqual(h.posts[2].body,{content:h.spawn.coords,allowed_mentions:{parse:[]}});
+ assert.equal(h.posts.filter(p=>p.body.embeds).length,1);
+});
+
+test('Uncertain coordinate delivery is not repeated automatically and manual retry skips information',async()=>{
+ const h=await harness({networkFailAt:2});await h.rpc({type:'SEARCH_ONCE'});
+ const event=h.store.history[0];assert.equal(event.discordStatus,'uncertain');assert.equal(event.discordInfoSent,true);
+ await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.posts.length,2);
+ await h.rpc({type:'RETRY_DISCORD',id:event.id});assert.equal(h.posts.length,3);
+ assert.deepEqual(h.posts[2].body,{content:h.spawn.coords,allowed_mentions:{parse:[]}});
+ assert.equal(h.store.history[0].discordStatus,'sent');
 });
