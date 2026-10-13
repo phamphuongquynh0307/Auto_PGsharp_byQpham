@@ -2,6 +2,11 @@ name: Publish PoGo Monitor
 
 on:
   workflow_dispatch:
+    inputs:
+      announce_existing:
+        description: Announce an already published release in Discord
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,6 +26,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          ANNOUNCE_EXISTING: ${{ inputs.announce_existing }}
         run: |
           $version = (Get-Content pogocoordinates-monitor/manifest.json -Raw | ConvertFrom-Json).version
           $tag = "pogo-monitor-v$version"
@@ -32,7 +38,8 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $zip --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Upload failed' }
-            "notify=false" >> $env:GITHUB_OUTPUT
+            if ($env:ANNOUNCE_EXISTING -eq 'true') { "notify=true" >> $env:GITHUB_OUTPUT }
+            else { "notify=false" >> $env:GITHUB_OUTPUT }
           } else {
             gh release create $tag $zip --target $env:GITHUB_SHA --title "PoGo Monitor v$version" --notes-file pogocoordinates-monitor/PUBLIC-GUIDE.vi.md --latest=false
             if ($LASTEXITCODE -ne 0) { throw 'Release failed' }
@@ -52,7 +59,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:DISCORD_WEBHOOK_URL)) { throw 'DISCORD_WEBHOOK_URL is not configured' }
           $download = "https://github.com/$env:REPOSITORY/releases/download/$env:TAG/pogocoordinates-monitor-v$env:VERSION.zip"
           $guide = "https://github.com/$env:REPOSITORY/releases/tag/$env:TAG"
-          $description = "Tự Search PoGo Coordinates, lọc Top IV + PvPoke. Bảng trạng thái ngay trên trang khi đóng popup. Discord có giờ despawn, thời gian còn lại, ảnh Pokémon, tên và tọa độ dễ sao chép."
+          $description = "Tự Search PoGo Coordinates, lọc Top IV + PvPoke. Bảng trạng thái ngay trên trang khi đóng popup. Tin Discord chỉ chứa tọa độ dạng văn bản thường; trên điện thoại nhấn giữ tin → Sao chép văn bản để lấy đúng tọa độ."
           $steps = "1. Tải ZIP và giải nén.`n2. Edge: edge://extensions → Developer mode → Load unpacked → chọn thư mục có manifest.json.`n3. Mở PoGo Coordinates, đăng nhập và chọn bộ lọc Stats/PvP trên web.`n4. Popup → Cài đặt: mã bạn bè, chu kỳ, ngưỡng PvP và webhook của kênh nhận → Lưu.`n5. Bấm Chạy tự động; giữ Edge và tab PoGo mở, có thể chạy nền."
           $payload = @{
             username = 'Auto Catch Update'
