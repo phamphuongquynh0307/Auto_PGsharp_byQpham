@@ -21,6 +21,48 @@ function harness(loggedIn=true,code='123456789012',fixture=html){
   const call=m=>new Promise(resolve=>listener(m,{id:'test'},resolve));
   return {w,dom,call};
 }
+test('Web PvPoke column annotates every result without changing parsed spawn data',async t=>{
+ const h=harness();t.after(()=>h.dom.window.close());
+ const cards=[...h.w.document.querySelectorAll('main .card')].filter(c=>!c.matches('form')&&/\bCP\b/.test(c.innerText)&&/\bIV\b/.test(c.innerText));
+ const before=cards.map(c=>JSON.stringify(h.w.PogoCore.parseCard(c.innerText)));
+ const requests=[];
+ h.w.chrome.runtime.sendMessage=async m=>{
+  if(m.type==='PAGE_PVPOKE_RANKS'){
+   requests.push(m);return {ok:true,value:m.spawns.map((s,i)=>i?null:{speciesName:'Corviknight',speciesRank:9})};
+  }
+  return {ok:true,value:{running:false,status:'Đã dừng'}};
+ };
+ await new Promise(resolve=>h.w.setTimeout(resolve,400));
+ assert.equal(requests.length,1);assert.equal(requests[0].league,'great');
+ assert.equal(cards.length,5);
+ const column=cards[0].querySelector('[data-pogo-pvpoke]');
+ assert.equal(column.shadowRoot.querySelector('.rank').textContent,'#9');
+ assert.equal(column.shadowRoot.querySelector('.species').textContent,'Corviknight');
+ assert.match(column.title,/Great League 1500/);
+ assert.ok(column.parentElement.classList.contains('grid-cols-4'));
+ assert.equal(cards[1].querySelector('[data-pogo-pvpoke]').shadowRoot.querySelector('.rank').textContent,'—');
+ assert.deepEqual(cards.map(c=>JSON.stringify(h.w.PogoCore.parseCard(c.innerText))),before);
+ h.w.__pogoMonitorStatusCleanup();
+ assert.equal(h.w.document.querySelectorAll('[data-pogo-pvpoke]').length,0);
+ assert.ok(column.parentElement===null);
+});
+
+test('Web rank changes with league and removes columns after switching to Stats',async t=>{
+ const h=harness();t.after(()=>h.dom.window.close());
+ h.w.chrome.runtime.sendMessage=async m=>m.type==='PAGE_PVPOKE_RANKS'
+  ?{ok:true,value:m.spawns.map(()=>({speciesName:'Pikachu',speciesRank:m.league==='great'?10:20}))}
+  :{ok:true,value:{running:false,status:'Đã dừng'}};
+ await new Promise(resolve=>h.w.setTimeout(resolve,300));
+ const select=[...h.w.document.querySelectorAll('select')].find(s=>[...s.options].some(o=>o.value==='ultra'));
+ select.value='ultra';select.dispatchEvent(new h.w.Event('change',{bubbles:true}));
+ await new Promise(resolve=>h.w.setTimeout(resolve,300));
+ const column=h.w.document.querySelector('[data-pogo-pvpoke]');
+ assert.equal(column.shadowRoot.querySelector('.rank').textContent,'#20');assert.match(column.title,/Ultra League 2500/);
+ const pvp=[...h.w.document.querySelectorAll('button')].find(b=>b.textContent.trim()==='PvP');
+ pvp.className='';
+ await new Promise(resolve=>h.w.setTimeout(resolve,300));
+ assert.equal(h.w.document.querySelectorAll('[data-pogo-pvpoke]').length,0);
+});
 test('Unauthenticated page cannot search or expose editable cloned fields even with trainer code',async()=>{
   const h=harness(false);const s=await h.call({type:'PAGE_STATE'});assert.equal(s.value.loggedIn,false);assert.equal(s.value.schema,null);
   const search=await h.call({type:'PAGE_SEARCH'});assert.equal(search.ok,false);assert.match(search.error,/đăng nhập/);h.dom.window.close();

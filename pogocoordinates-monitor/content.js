@@ -88,6 +88,62 @@
     return [...document.querySelectorAll('main .card')].filter(c=>!c.matches('form')&&!c.closest('form')&&
       [...c.querySelectorAll('p')].some(p=>text(p)==='CP')&&[...c.querySelectorAll('p')].some(p=>text(p)==='IV'));
   }
+  let rankTimer=null,rankRequest=0,rankSignature='';
+  function clearRankColumns(){
+    for(const host of document.querySelectorAll('[data-pogo-pvpoke]')){
+      const grid=host.parentElement;host.remove();
+      if(grid?.dataset.pogoRankGrid==='true'){
+        grid.classList.replace('grid-cols-4','grid-cols-3');delete grid.dataset.pogoRankGrid;
+      }
+    }
+  }
+  async function refreshRankColumns(){
+    const request=++rankRequest;
+    if(!form()||mode()!=='pvp'){rankSignature='';clearRankColumns();return;}
+    const cards=cardElements(),options=pvpOptions();
+    const parsed=cards.map(c=>C.parseCard(text(c)));
+    if(parsed.some(s=>!s)){rankSignature='';clearRankColumns();return;}
+    const spawns=parsed.map(s=>({dex:s.dex,name:s.name,form:s.form}));
+    const signature=JSON.stringify([options,spawns]);
+    if(signature===rankSignature&&cards.every(c=>c.querySelector('[data-pogo-pvpoke]')))return;
+    let response;
+    try{response=await chrome.runtime.sendMessage({type:'PAGE_PVPOKE_RANKS',...options,spawns});}catch{return;}
+    if(request!==rankRequest||!response?.ok||!Array.isArray(response.value))return;
+    // A Search may replace all rows while the background is answering.
+    if(cards.some(c=>!c.isConnected)||!form()||mode()!=='pvp'||JSON.stringify(pvpOptions())!==JSON.stringify(options))return;
+    if(JSON.stringify(cards.map(c=>{const s=C.parseCard(text(c));return s?{dex:s.dex,name:s.name,form:s.form}:null;}))!==JSON.stringify(spawns))return;
+    rankSignature=signature;
+    cards.forEach((card,i)=>{
+      const grid=[...card.querySelectorAll('.grid')].find(g=>['CP','LVL','IV'].every(label=>
+        [...g.querySelectorAll('p')].some(p=>text(p)===label)));
+      if(!grid)return;
+      let host=card.querySelector('[data-pogo-pvpoke]');
+      if(!host){
+        host=document.createElement('div');host.dataset.pogoPvpoke='true';
+        const shadow=host.attachShadow({mode:'open'}),style=document.createElement('style');
+        style.textContent=':host{display:block;min-width:0}p{margin:0}.label{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted,#94a3b8)}.rank{font:600 12px ui-monospace,monospace;color:var(--accent,#a78bfa)}.species{font:10px system-ui;color:var(--text-muted,#94a3b8);overflow-wrap:anywhere}';
+        const label=document.createElement('p'),value=document.createElement('p'),species=document.createElement('p');
+        label.className='label';label.textContent='PvPoke';value.className='rank';species.className='species';
+        shadow.append(style,label,value,species);grid.append(host);
+        if(grid.classList.contains('grid-cols-3')){grid.classList.replace('grid-cols-3','grid-cols-4');grid.dataset.pogoRankGrid='true';}
+      }
+      const rank=response.value[i],league=options.league==='great'?'Great League 1500':'Ultra League 2500';
+      host.shadowRoot.querySelector('.rank').textContent=rank?`#${rank.speciesRank}`:'—';
+      host.shadowRoot.querySelector('.species').textContent=rank?.speciesName||'Chưa có hạng';
+      host.title=`${league} · Hạng loài PvPoke, không phải hạng IV.${options.includeEvolutions?' Xét cả tiến hóa, hiển thị loài có hạng tốt nhất.':''}`;
+    });
+  }
+  function scheduleRankColumns(){
+    rankRequest++;clearTimeout(rankTimer);rankTimer=setTimeout(()=>void refreshRankColumns(),150);
+  }
+  const rankObserver=new MutationObserver(records=>{
+    if(records.every(r=>r.target.closest?.('[data-pogo-pvpoke]')||
+      (r.type==='childList'&&[...r.addedNodes,...r.removedNodes].every(n=>n.nodeType===1&&n.matches('[data-pogo-pvpoke]')))))return;
+    scheduleRankColumns();
+  });
+  rankObserver.observe(document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['class','value'],characterData:true});
+  document.addEventListener('change',scheduleRankColumns);
+  scheduleRankColumns();
   async function state() {
     const a=auth();const {trainerCode}=await chrome.storage.session.get('trainerCode');
     const unlocked=a.loggedIn&&/^\d{12}$/.test(trainerCode||'');
@@ -180,7 +236,7 @@
   }
   globalThis.__pogoMonitorListener=(m,sender,respond)=>{
     if(sender.id!==chrome.runtime.id)return;
-    const tasks={PAGE_STATE:state,PAGE_EDIT:()=>edit(m),PAGE_SEARCH:search,PAGE_COORDS:()=>coords(m),PAGE_ALERT:()=>{showAlerts(m.events||[]);return {ok:true};}};
+    const tasks={PAGE_STATE:state,PAGE_EDIT:()=>edit(m),PAGE_SEARCH:search,PAGE_COORDS:()=>coords(m),PAGE_ALERT:()=>{showAlerts(m.events||[]);return {ok:true};},PAGE_RANKS_INVALIDATE:()=>{rankSignature='';scheduleRankColumns();return true;}};
     if(!tasks[m.type])return;
     Promise.resolve().then(tasks[m.type]).then(value=>respond({ok:true,value}),e=>respond({ok:false,error:e.message}));return true;
   };
@@ -226,5 +282,5 @@
   const pollTimer=setInterval(()=>void refreshMonitorStatus(),5000),clockTimer=setInterval(renderMonitorStatus,1000);
   const onVisible=()=>{if(!document.hidden)void refreshMonitorStatus();};
   document.addEventListener('visibilitychange',onVisible);
-  globalThis.__pogoMonitorStatusCleanup=()=>{disposed=true;clearInterval(pollTimer);clearInterval(clockTimer);document.removeEventListener('visibilitychange',onVisible);statusHost.remove();};
+  globalThis.__pogoMonitorStatusCleanup=()=>{disposed=true;clearInterval(pollTimer);clearInterval(clockTimer);document.removeEventListener('visibilitychange',onVisible);statusHost.remove();rankRequest++;clearTimeout(rankTimer);rankObserver.disconnect();document.removeEventListener('change',scheduleRankColumns);clearRankColumns();};
 })();

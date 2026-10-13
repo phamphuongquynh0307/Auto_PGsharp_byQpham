@@ -1,4 +1,10 @@
-# v0.3.4 verification
+# v0.3.5 verification
+
+- All 49 extension tests passed: league/evolution species ranking, new web columns, unchanged parsed spawn data, Stats cleanup, public-only read bridge and Discord regression checks.
+- Unknown forms and species absent from rankings show no rank rather than guessing.
+- Live browser layout and installation have not been verified in this session.
+
+## v0.3.4 verification
 
 - All 45 extension tests passed. Raw coordinates are the message content; restored Pokémon details remain in an embed.
 - Covered both Stats/PvP, negative coordinates, deduplication, retries and stable despawn timestamps.

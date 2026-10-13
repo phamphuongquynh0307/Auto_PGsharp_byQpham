@@ -7,6 +7,18 @@ const C=globalThis.PogoCore;
 const data=JSON.parse(await readFile(new URL('../data/pvpoke.json',import.meta.url),'utf8'));
 const engine=new PvpEngine(data),settings={...C.defaults,trainerCode:'123456789012'};
 const card=`Pikachu\n#025 · Male · M\nThunder Shock / Discharge\nCP\n474\nLVL\n18\nIV\n93% (14/14/14)\nLocation\nPasay, Philippines\nDespawn\n52:04\nOpen in Maps\n14.538988,121.004883`;
+test('Web species rank follows league and includes evolutions only when requested',()=>{
+ const spawn={dex:821,name:'Rookidee',form:''};
+ assert.equal(engine.speciesRanking(spawn,'great',false),null);
+ const own=engine.speciesRanking({dex:184,name:'Azumarill',form:''},'great',false);
+ assert.equal(own.speciesName,'Azumarill');
+ assert.equal(own.speciesRank,engine.ranks.great.get('azumarill').rank);
+ const evolved=engine.speciesRanking(spawn,'great',true);
+ assert.equal(evolved.speciesRank,Math.min(...engine.evolutions(engine.resolve(spawn),true).map(p=>engine.ranks.great.get(p.speciesId)?.rank||Infinity)));
+ assert.equal(engine.speciesRanking({dex:25,name:'Pikachu',form:'Unknown Costume'},'great',true),null);
+ assert.equal(engine.speciesRanking(spawn,'master',true),null);
+ assert.equal(engine.speciesRanking(spawn,'ultra',false)?.speciesRank,engine.ranks.ultra.get('rookidee')?.rank);
+});
 test('Parse full real card data, including coordinates and exact IVs',()=>{
   const p=C.parseCard(card);assert.deepEqual(p.iv,[14,14,14]);assert.equal(p.dex,25);assert.equal(p.cp,474);
   assert.equal(p.coords,'14.538988,121.004883');assert.equal(p.ttlSeconds,3124);assert.equal(p.gender,'Male');

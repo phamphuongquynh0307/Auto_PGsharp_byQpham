@@ -1,4 +1,4 @@
-# PoGo Monitor v0.3.4 cho Edge / Chrome
+# PoGo Monitor v0.3.5 cho Edge / Chrome
 
 Popup nhỏ tự Search PoGo Coordinates, lọc Top IV và Top PvPoke, báo trên web và Discord. Tin Discord có ảnh, tên, IV, hạng PvP và giờ despawn trong thẻ thông tin; phần văn bản chính chỉ chứa tọa độ. Trên điện thoại, nhấn giữ tin → Sao chép văn bản để lấy đúng tọa độ.
 
@@ -6,7 +6,7 @@ Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang
 
 ## Cài lần đầu
 
-1. Tải file `pogocoordinates-monitor-v0.3.4.zip` và giải nén vào thư mục cố định.
+1. Tải file `pogocoordinates-monitor-v0.3.5.zip` và giải nén vào thư mục cố định.
 2. Edge: mở `edge://extensions` → bật **Developer mode** → **Load unpacked** → chọn thư mục có `manifest.json`. Chrome dùng `chrome://extensions`.
 3. Bấm biểu tượng extension → **Mở web**. Đăng nhập PoGo Coordinates trong cùng profile trình duyệt.
 4. Chọn Pokémon, Stats/PvP và bộ lọc **trên website**.
@@ -15,7 +15,7 @@ Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang
 
 ## Cập nhật / chạy thử lại
 
-- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**, sau đó **F5 trang PoGo**. Popup phải hiện **v0.3.4**. Không gỡ để giữ cấu hình và lịch sử.
+- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**, sau đó **F5 trang PoGo**. Popup phải hiện **v0.3.5**. Không gỡ để giữ cấu hình và lịch sử.
 - Đổi bộ lọc: Dừng, sửa trên web, rồi Chạy lại.
 - Chạy thử lại: tab **Thông báo** → **Xóa lịch sử & thử lại** → **Tìm ngay**. Các kết quả vẫn phải đạt bộ lọc và ngưỡng PvP.
 - Nếu không có tin mới, đọc dòng trạng thái: không đạt hạng, đã báo, hết hạn hoặc lỗi tọa độ.
@@ -25,3 +25,5 @@ Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang
 Stats báo kết quả mới đạt bộ lọc web, không có hạng. PvP kiểm tra thêm hạng IV và hạng loài PvPoke; hạng 1 tốt nhất, mốc 1500 hoặc 2500. Mặc định cả hai ngưỡng phải đạt trên cùng loài/tiến hóa. Dữ liệu đầy đủ xem trong tab Thông báo.
 
 Mỗi người dùng phiên đăng nhập, mã bạn bè và webhook riêng; file ZIP không chứa tài khoản hay webhook của tác giả. Shiny cần thêm mã bạn bè vào hồ sơ PoGo Coordinates. Quyền VIP và hạn mức trên web vẫn áp dụng.
+
+Cột PvPoke nằm cạnh CP / LVL / IV trên kết quả Search ở chế độ PvP. Hạng theo Great 1500 / Ultra 2500; khi xét tiến hóa, hiện loài có hạng tốt nhất. Dấu — là chưa có hạng. Đây là hạng loài, không phải hạng IV.

@@ -1,4 +1,13 @@
-# PoGo Monitor 0.3.4
+# PoGo Monitor 0.3.5
+
+- Thêm cột PvPoke cạnh CP / LVL / IV trên mỗi kết quả Search ở chế độ PvP, kể cả khi chưa chạy tự động.
+- Tự đổi theo league và tùy chọn tiến hóa; tên loài hiển thị dưới hạng. Chưa có hạng hiện dấu —.
+- Cột là hạng loài PvPoke, không phải hạng IV. Không thay đổi kết quả hoặc bộ lọc web.
+- Giữ thẻ thông tin Discord và phần văn bản coord để sao chép trên mobile.
+
+Cập nhật: chép đè → Tải lại extension → F5 trang PoGo. Popup hiện v0.3.5.
+
+## PoGo Monitor 0.3.4
 
 - Khôi phục thẻ Discord: ảnh, tên Pokémon, IV, hạng PvP hoặc CP/level, giờ despawn và tọa độ.
 - Phần văn bản chính của cùng tin chỉ chứa tọa độ; dùng Sao chép văn bản trên Discord mobile để lấy riêng coord.

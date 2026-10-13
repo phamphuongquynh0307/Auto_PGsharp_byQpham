@@ -52,6 +52,17 @@ test('Stats sends one web and Discord notification, then deduplicates subsequent
   assert.ok(!JSON.stringify(h.posts[0].body).includes(h.store.settings.trainerCode));
   await h.rpc({type:'SEARCH_ONCE'});assert.equal(h.searches,2);assert.equal(h.posts.length,1);assert.equal(h.store.history.length,1);
 });
+test('Page rank bridge returns only public species ranks and rejects oversized requests',async()=>{
+ const h=await harness();
+ const sender={id:'test',tab:{id:11},url:'https://pogocoordinates.com/search'};
+ const request=m=>new Promise(resolve=>h.listeners.message(m,sender,resolve));
+ const result=await request({type:'PAGE_PVPOKE_RANKS',league:'great',includeEvolutions:true,spawns:[{dex:821,name:'Rookidee',form:''}]});
+ assert.equal(result.ok,true);assert.equal(result.value.length,1);assert.ok(result.value[0].speciesRank>0);
+ assert.deepEqual(Object.keys(result.value[0]).sort(),['speciesName','speciesRank']);
+ const body=JSON.stringify(result);assert.ok(!body.includes(h.store.settings.trainerCode));assert.ok(!body.includes(h.store.settings.webhook));
+ assert.equal(h.posts.length,0);assert.equal(h.searches,0);
+ const invalid=await request({type:'PAGE_PVPOKE_RANKS',league:'great',spawns:Array(101).fill({})});assert.equal(invalid.ok,false);
+});
 
 test('Page status exposes only progress and times, never settings, codes or webhook',async()=>{
   const h=await harness();

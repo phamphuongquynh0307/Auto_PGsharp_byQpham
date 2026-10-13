@@ -184,7 +184,10 @@ async function refreshData() {
   if(gm.pokemon.some(p=>!p.speciesId||!p.baseStats||!Number.isFinite(p.baseStats.atk)))throw Error('Game master thiếu chỉ số.');
   const compact=d=>d.map((p,i)=>({speciesId:p.speciesId,speciesName:p.speciesName,rank:i+1,score:p.score}));
   const data={...bundled,pokemon:gm.pokemon,timestamp:gm.timestamp,fetchedAt:new Date().toISOString(),rankings:{great:compact(great),ultra:compact(ultra)}};
-  await set({pvpData:data,dataUpdatedAt:data.fetchedAt});enginePromise=Promise.resolve(new PvpEngine(data));return data.fetchedAt;
+  await set({pvpData:data,dataUpdatedAt:data.fetchedAt});enginePromise=Promise.resolve(new PvpEngine(data));
+  const tabs=await chrome.tabs.query({url:'https://pogocoordinates.com/search*'});
+  await Promise.allSettled(tabs.map(t=>chrome.tabs.sendMessage(t.id,{type:'PAGE_RANKS_INVALIDATE'})));
+  return data.fetchedAt;
 }
 async function handle(m) {
   await init();
@@ -230,6 +233,15 @@ async function handle(m) {
   }
 }
 chrome.runtime.onMessage.addListener((m,sender,reply)=>{
+  if(m.type==='PAGE_PVPOKE_RANKS'&&sender.id===chrome.runtime.id&&sender.tab&&
+    /^https:\/\/pogocoordinates\.com\/search(?:[?#]|$)/.test(sender.url||'')){
+    if(!['great','ultra'].includes(m.league)||!Array.isArray(m.spawns)||m.spawns.length>100){
+      reply({ok:false,error:'Yêu cầu hạng PvPoke không hợp lệ.'});return;
+    }
+    engine().then(pvp=>reply({ok:true,value:m.spawns.map(s=>pvp.speciesRanking(
+      {dex:s?.dex,name:String(s?.name||'').slice(0,256),form:String(s?.form||'').slice(0,256)},
+      m.league,m.includeEvolutions===true))}),()=>reply({ok:false,error:'Không đọc được hạng PvPoke.'}));return true;
+  }
   if(m.type==='PAGE_MONITOR_STATUS'&&sender.id===chrome.runtime.id&&sender.tab&&
     /^https:\/\/pogocoordinates\.com\//.test(sender.url||'')){
     get(['run','status','lastSearchAt','nextSearchAt']).then(stored=>{

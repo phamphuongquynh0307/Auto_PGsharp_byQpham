@@ -17,6 +17,14 @@ export class PvpEngine {
       if(include) for(const id of x.family?.evolutions||[]) walk(this.byId.get(id));};
     walk(p); return result.filter(x=>x.released!==false&&!/_shadow|_mega|_primal/.test(x.speciesId));
   }
+  speciesRanking(spawn,league='great',includeEvolutions=false) {
+    if(!['great','ultra'].includes(league))return null;
+    const species=this.resolve(spawn);if(!species)return null;
+    return this.evolutions(species,includeEvolutions).map(p=>{
+      const rank=this.ranks[league]?.get(p.speciesId)?.rank;
+      return Number.isInteger(rank)&&rank>0?{speciesName:p.speciesName,speciesRank:rank}:null;
+    }).filter(Boolean).sort((a,b)=>a.speciesRank-b.speciesRank)[0]||null;
+  }
   bestStats(p,ivs,cap,maxLevel) {
     const base=p.baseStats, maxIndex=Math.min(this.data.cpm.length-1,(maxLevel-1)*2);
     const cpAt=i=>Math.max(10,Math.floor((base.atk+ivs[0])*Math.sqrt(base.def+ivs[1])*Math.sqrt(base.hp+ivs[2])*this.data.cpm[i]**2/10));

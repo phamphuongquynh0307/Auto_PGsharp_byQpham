@@ -1,4 +1,4 @@
-# PoGo Monitor v0.3.4
+# PoGo Monitor v0.3.5
 
 Popup nhỏ cho Edge/Chrome. Bạn chọn bộ lọc trên PoGo Coordinates; extension tự bấm Search, kiểm tra hạng PvP và báo trên web / Discord.
 
@@ -28,6 +28,8 @@ Một spawn chỉ báo một lần đến khi hết hạn. Discord 429 được 
 
 ## Kiểm tra
 
-Bản 0.3.4 giữ thẻ thông tin Pokémon và cho sao chép riêng tọa độ từ phần văn bản chính. Chưa tải lại bản mới vào Edge hoặc kiểm tra tin mới trong Discord thực tế.
+Bản 0.3.5 giữ thẻ thông tin Pokémon và cho sao chép riêng tọa độ từ phần văn bản chính. Chưa tải lại bản mới vào Edge hoặc kiểm tra tin mới trong Discord thực tế.
 
 Bản 0.2.4: Trong tab Thông báo, bấm Xóa lịch sử & thử lại. Extension dừng lịch, xóa lịch sử và dấu đã báo; giữ nguyên cấu hình và webhook. Sau đó bấm Tìm ngay hoặc Chạy tự động. Không xóa tin trong Discord. Kiểm tra tự động: 41 passed. Chưa thực hiện xóa trên extension đang cài trong Edge.
+
+Cột PvPoke nằm cạnh CP / LVL / IV trên kết quả Search ở chế độ PvP. Hạng theo Great 1500 / Ultra 2500; khi xét tiến hóa, hiện loài có hạng tốt nhất. Dấu — là chưa có hạng. Đây là hạng loài, không phải hạng IV.
