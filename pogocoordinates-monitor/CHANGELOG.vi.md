@@ -1,4 +1,11 @@
-# PoGo Monitor 0.3.2
+# PoGo Monitor 0.3.3
+
+- Tin Discord chỉ chứa tọa độ dạng văn bản thường để Sao chép văn bản trên điện thoại lấy đúng tọa độ.
+- Áp dụng cho cả Stats và PvP; bỏ tên, IV, ảnh và embed trong tin Discord.
+
+Chép đè vào thư mục extension cũ → Tải lại extension → F5 trang PoGo Coordinates. Popup phải hiện v0.3.3.
+
+## PoGo Monitor 0.3.2
 
 - Thêm bảng trạng thái thu gọn ở góc trái dưới trang PoGo Coordinates, hoạt động khi popup đóng.
 - Hiển thị đang chạy, đang tìm, đã dừng, chạy ở tab khác hoặc mất kết nối; kèm lần tìm gần nhất, đếm ngược lần tìm tiếp và giờ dừng.

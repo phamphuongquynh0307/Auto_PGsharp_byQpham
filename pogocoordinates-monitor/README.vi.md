@@ -1,4 +1,4 @@
-# PoGo Monitor v0.3.2
+# PoGo Monitor v0.3.3
 
 Popup nhỏ cho Edge/Chrome. Bạn chọn bộ lọc trên PoGo Coordinates; extension tự bấm Search, kiểm tra hạng PvP và báo trên web / Discord.
 
@@ -22,12 +22,12 @@ Cài lần đầu: edge://extensions → Developer mode → Load unpacked → ch
 
 Hạng 1 tốt nhất. Hạng IV tính cục bộ theo stat product, giới hạn level và sàn IV đã chọn. Hạng loài từ PvPoke Overall Open Great/Ultra League. Mặc định cả hai ngưỡng phải đạt trên cùng loài/tiến hóa. Bộ lọc web chạy trước ngưỡng extension. Dữ liệu PvPoke có sẵn, có thể cập nhật trong Cài đặt.
 
-Discord gửi ảnh đại diện theo số Pokédex, tên Pokémon và IV. PvP thêm hạng IV / PvPoke và mốc 1500 hoặc 2500; Stats chỉ thêm CP/level, không có hạng. Tọa độ nằm riêng trong khối code để sao chép nhanh. Hiển thị giờ despawn và thời gian còn lại tự cập nhật trên Discord. Tên Pokémon có khối code riêng để sao chép. Không gửi khu vực, chỉ số nâng cấp hoặc dữ liệu chi tiết. Không gửi file JSON hoặc bộ lọc. Webhook lưu cục bộ; không gửi mã bạn bè hay webhook trong thông báo.
+Discord chỉ gửi tọa độ dạng văn bản thường, ví dụ `14.538988,121.004883`. Trên điện thoại, nhấn giữ tin → Sao chép văn bản để lấy đúng tọa độ. Không kèm tên, IV, ảnh, khối code hoặc embed. Webhook lưu cục bộ; không gửi mã bạn bè hay webhook trong thông báo.
 
 Một spawn chỉ báo một lần đến khi hết hạn. Discord 429 được thử lại; lỗi mạng không rõ đã gửi hay chưa cần kiểm tra kênh trước khi gửi lại. Khóa VIP và hạn mức web được giữ nguyên. Shiny yêu cầu thêm mã bạn bè trong hồ sơ web.
 
 ## Kiểm tra
 
-44 kiểm tra tự động đều qua cho bản 0.3.2. Chưa tải lại bản mới vào Edge hoặc kiểm tra tin mới trong Discord thực tế.
+Bản 0.3.3 đổi tin Discord sang chỉ tọa độ. Chưa tải lại bản mới vào Edge hoặc kiểm tra tin mới trong Discord thực tế.
 
 Bản 0.2.4: Trong tab Thông báo, bấm Xóa lịch sử & thử lại. Extension dừng lịch, xóa lịch sử và dấu đã báo; giữ nguyên cấu hình và webhook. Sau đó bấm Tìm ngay hoặc Chạy tự động. Không xóa tin trong Discord. Kiểm tra tự động: 41 passed. Chưa thực hiện xóa trên extension đang cài trong Edge.

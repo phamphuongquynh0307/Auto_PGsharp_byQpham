@@ -1,4 +1,9 @@
-# v0.3.2 verification
+# v0.3.3 verification
+
+- All 43 extension tests passed, including coordinate-only Discord payloads for Stats/PvP and retries.
+- Live browser installation, actual Discord delivery and mobile copying have not been verified in this session.
+
+## v0.3.2 verification
 
 - All 44 extension tests passed. Covers on-page running/stopped/disconnected status, collapsing the indicator, despawn timestamps and retry deadlines, and excluding secrets from page status replies.
 - ZIP manifest and popup version verified as 0.3.2. User confirmed the local result was satisfactory; live browser installation and Discord delivery have not been independently verified in this session.

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PoGo Search Monitor — Qpham",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Tự Search PoGo Coordinates, lọc Stats và IV/PvPoke, báo trên web và Discord.",
   "permissions": [
     "storage",

@@ -55,25 +55,7 @@
     return [spawn.dex,spawn.form,spawn.coords,spawn.cp,spawn.iv?.join("/")].join("|");
   }
   function discordPayload(event) {
-    const s=event.spawn, p=event.mode==='pvp'?event.pvp:null;
-    const copyName=String(s.fullName||s.name||'').replace(/`/g,'').replace(/[\r\n]+/g,' ').slice(0,256);
-    const lines=['```\n'+copyName+'\n```',`IV ${s.ivPercent}% (${s.iv?.join('/')||'?'})`];
-    if(p){
-      const cap=/ultra|2500/i.test(p.league)?2500:1500;
-      lines.push(`**${p.league} (${cap}) · ${p.speciesName}: IV #${p.ivRank??'?'} · PvPoke #${p.speciesRank??'?'}**`);
-    }else lines.push(`CP ${s.cp} · LV ${s.level}`);
-    if(Number.isFinite(event.createdAt)&&Number.isFinite(s.ttlSeconds)&&s.ttlSeconds>0){
-      const despawnAt=Math.floor((event.createdAt+s.ttlSeconds*1000)/1000);
-      lines.push(`⏳ Despawn: <t:${despawnAt}:T> · <t:${despawnAt}:R>`);
-    }else if(s.despawn){
-      lines.push(`⏳ Despawn: ${s.despawn} lúc phát hiện`);
-    }else lines.push('⏳ Despawn: chưa có thông tin');
-    lines.push('```\n'+s.coords+'\n```');
-    const thumbnail=Number.isInteger(s.dex)&&s.dex>0
-      ?{url:`https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${s.dex}.png`}:undefined;
-    return {allowed_mentions:{parse:[]},embeds:[{title:`${s.fullName} #${s.dex}`.slice(0,256),
-      url:`https://www.google.com/maps?q=${encodeURIComponent(s.coords)}`,color:p?0x8b5cf6:0x22c55e,
-      thumbnail,description:lines.join('\n').slice(0,4096)}]};
+    return {content:event.spawn.coords,allowed_mentions:{parse:[]}};
   }
   root.PogoCore = {defaults,normalize,validateSettings,validateWebhook,parseCard,matchThreshold,eventKey,discordPayload};
 })(globalThis);
