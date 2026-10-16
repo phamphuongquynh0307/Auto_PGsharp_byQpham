@@ -7,7 +7,7 @@ const data=JSON.parse(await readFile(new URL('../data/pvpoke.json',import.meta.u
 let serial=0;
 async function harness(options={}){
   const store={settings:{...C.defaults,trainerCode:'123456789012',discordEnabled:true,webhook:'https://discord.com/api/webhooks/12345/test_token',...options.settings},run:{running:false},history:[],seen:{}},session={},alarms=new Map();
-  const listeners={},posts=[],web=[],tab={id:11,windowId:1,url:options.tabUrl||'https://pogocoordinates.com/search',active:true,status:options.tabStatus||'complete'};
+  const listeners={},posts=[],web=[],power={level:null},tab={id:11,windowId:1,url:options.tabUrl||'https://pogocoordinates.com/search',active:true,status:options.tabStatus||'complete',autoDiscardable:options.autoDiscardable!==false};
   if(options.tabUrl)store.targetTabId=11;
   const spawn={dex:25,name:'Pikachu',fullName:'Pikachu',form:'',cp:474,level:18,iv:[14,14,14],ivPercent:93,gender:'Male',size:'M',moves:'Thunder Shock / Discharge',location:'Pasay, Philippines',despawn:'30:00',ttlSeconds:1800,coords:'14.538988,121.004883',index:0};
   let searches=0;
@@ -16,6 +16,7 @@ async function harness(options={}){
     storage:{local:{get:async keys=>{const names=typeof keys==='string'?[keys]:keys;return structuredClone(Object.fromEntries(names.filter(k=>k in store).map(k=>[k,store[k]])));},set:async obj=>Object.assign(store,structuredClone(obj)),setAccessLevel:async()=>{}},
       session:{set:async obj=>Object.assign(session,obj),setAccessLevel:async()=>{}}},
     action:{onClicked:event('action')},windows:{update:async()=>{}},scripting:{executeScript:async()=>{}},
+    power:{requestKeepAwake:level=>power.level=level,releaseKeepAwake:()=>power.level=null},
     alarms:{onAlarm:event('alarm'),create:async(name,info)=>alarms.set(name,info),clear:async name=>alarms.delete(name)},
     tabs:{get:async()=>options.closed?null:tab,query:async()=>options.closed||!tab.url.includes('/search')?[]:[tab],create:async()=>tab,update:async(_,patch)=>Object.assign(tab,patch),
       sendMessage:async(_,m)=>{
@@ -42,8 +43,62 @@ async function harness(options={}){
   await import(`../background.js?test=${serial++}`);
   const rpc=m=>new Promise(resolve=>listeners.message(m,{id:'test',url:'chrome-extension://test/panel.html'},resolve));
   const until=async condition=>{const end=Date.now()+3000;while(!condition()&&Date.now()<end)await new Promise(r=>setTimeout(r,5));assert.ok(condition(),'operation timed out');};
-  return {store,session,alarms,listeners,posts,web,rpc,spawn,until,get searches(){return searches;}};
+  return {store,session,alarms,listeners,posts,web,rpc,spawn,until,power,tab,options,get searches(){return searches;}};
 }
+
+test('Unlimited run keeps system awake and tab protected until stopped',async()=>{
+  const h=await harness();await h.rpc({type:'START'});
+  await h.until(()=>h.store.history[0]?.discordStatus==='sent');
+  assert.equal(h.store.run.endsAt,null);assert.equal(h.power.level,'system');
+  assert.equal(h.tab.autoDiscardable,false);assert.equal(h.alarms.has('pogo-stop'),false);
+  await h.rpc({type:'STOP'});
+  assert.equal(h.power.level,null);assert.equal(h.tab.autoDiscardable,true);
+});
+
+test('Stopping preserves an existing tab discard exclusion',async()=>{
+  const h=await harness({autoDiscardable:false});await h.rpc({type:'START'});
+  await h.until(()=>h.store.history[0]?.discordStatus==='sent');await h.rpc({type:'STOP'});
+  assert.equal(h.tab.autoDiscardable,false);
+});
+
+test('Transient Search failures retain schedule and recover on the following alarm',async()=>{
+  for(const searchError of ['Search quá 45 giây.','Nút Search đang bận.','Một lượt tìm kiếm khác đang chạy.']){
+    const h=await harness({searchError});await h.rpc({type:'START'});
+    await h.until(()=>h.store.status.startsWith('Đang chờ thử lại:'));
+    assert.equal(h.store.run.running,true);assert.ok(h.alarms.has('pogo-search'));
+    assert.equal(h.posts.length,0);assert.ok(h.store.nextSearchAt>Date.now());
+    h.options.searchError=null;h.listeners.alarm({name:'pogo-search'});
+    await h.until(()=>h.store.history[0]?.discordStatus==='sent');assert.equal(h.searches,2);
+    await h.rpc({type:'STOP'});
+  }
+});
+
+test('Loading tab waits without clicking Search and recovers without changing filters',async()=>{
+  const h=await harness();await h.rpc({type:'START'});
+  await h.until(()=>h.store.history[0]?.discordStatus==='sent');
+  h.tab.status='loading';h.listeners.alarm({name:'pogo-search'});
+  await h.until(()=>h.store.status.startsWith('Đang chờ thử lại:'));
+  assert.equal(h.store.run.running,true);assert.equal(h.searches,1);
+  h.tab.status='complete';h.listeners.alarm({name:'pogo-search'});
+  await h.until(()=>h.searches===2);await h.rpc({type:'STOP'});
+});
+
+test('Startup restores keep-awake protection and deadline releases it',async()=>{
+  const h=await harness();h.store.run={running:true,id:'saved',tabId:11,autoDiscardable:true,endsAt:Date.now()+60000};
+  h.listeners.startup();await h.until(()=>h.alarms.has('pogo-stop'));
+  assert.equal(h.power.level,'system');assert.equal(h.tab.autoDiscardable,false);
+  h.listeners.alarm({name:'pogo-stop'});await h.until(()=>h.power.level===null);
+  assert.equal(h.store.run.running,false);assert.equal(h.tab.autoDiscardable,true);
+});
+
+test('Authentication and unknown website failures stop and release keep-awake',async()=>{
+  for(const searchError of ['Bạn cần đăng nhập PoGo Coordinates.','forbidden','Web không trả về số kết quả; có thể phiên đã hết hạn hoặc bị giới hạn.']){
+    const h=await harness({searchError});await h.rpc({type:'START'});
+    await h.until(()=>h.store.status.startsWith('Đã dừng:')&&h.power.level===null);
+    assert.equal(h.store.run.running,false);assert.equal(h.tab.autoDiscardable,true);
+    assert.equal(h.alarms.has('pogo-search'),false);assert.equal(h.posts.length,0);
+  }
+});
 test('Stats sends information then standalone coordinates and deduplicates the pair',async()=>{
   const h=await harness();assert.equal((await h.rpc({type:'SEARCH_ONCE'})).ok,true);
   assert.equal(h.store.history.length,1);assert.equal(h.posts.length,2);assert.equal(h.web.length,1);

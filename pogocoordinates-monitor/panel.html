@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PoGo Search Monitor</title><link rel="stylesheet" href="panel.css"></head>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PoGo Radar</title><link rel="stylesheet" href="panel.css"></head>
 <body>
-  <header><div><h1>PoGo Monitor <small>v0.3.6</small></h1></div><button id="openSite">Mở web ↗</button></header>
+  <header><div class="brand"><img src="icons/icon-48.png" width="36" height="36" alt=""><h1>PoGo Radar <small>v0.3.7</small></h1></div><button id="openSite">Mở web ↗</button></header>
   <main>
 
     <section class="card" id="loginGate"><h2>Đăng nhập trên PoGo</h2><p id="loginText">Mở web và đăng nhập, rồi mở lại popup này.</p><button id="login">Mở web để đăng nhập</button><button id="sync">Kiểm tra kết nối</button><p class="hint">Đăng nhập một lần trên web, rồi quay lại đây.</p></section>
@@ -13,7 +13,7 @@
           <form id="settingsForm">
             <label>Mã bạn bè Pokémon GO <input id="trainerCode" type="text" inputmode="numeric" placeholder="1234 5678 9012" autocomplete="off" required="" maxlength="16"></label>
             <p class="hint">Nhập 12 số. Nếu dùng Shiny, thêm cùng mã vào hồ sơ web.</p>
-            <div class="grid"><label>Search mỗi (giây)<input id="intervalSeconds" type="number" min="30" max="86400" step="1" required=""></label><label>Chạy trong (phút)<input id="durationMinutes" type="number" min="0" max="10080" step="1" required=""></label></div><p class="hint">0 phút = chạy đến khi bấm Dừng. Giữ tab Search mở; chu kỳ tối thiểu 30 giây.</p>
+            <div class="grid"><label>Search mỗi (giây)<input id="intervalSeconds" type="number" min="30" max="86400" step="1" required=""></label><label>Chạy trong (phút)<input id="durationMinutes" type="number" min="0" max="10080" step="1" required=""></label></div><p class="hint">0 phút = chạy đến khi bấm Dừng. Khi chạy, extension giữ máy thức (màn hình vẫn có thể tắt), bảo vệ tab khỏi tự giải phóng và thử lại khi Search bận / quá giờ. Giữ trình duyệt và tab Search mở; hết phiên web cần đăng nhập lại.</p>
             <h3>Điều kiện thông báo ở chế độ PvP</h3>
             <div class="grid"><label>Hạng IV tối đa (Top N)<input id="ivTop" type="number" min="1" max="4096" required=""></label><label>Hạng loài PvPoke tối đa<input id="speciesTop" type="number" min="1" max="10000" required=""></label></div>
             <details class="advanced"><summary>Tùy chọn PvP nâng cao</summary><label>Quy tắc<select id="rankRule"><option value="both">Đạt cả hai hạng trên cùng loài / tiến hóa</option><option value="iv">Chỉ hạng IV</option><option value="species">Chỉ hạng loài PvPoke</option></select></label>

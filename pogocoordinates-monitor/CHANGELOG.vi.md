@@ -1,4 +1,11 @@
-# PoGo Monitor 0.3.6
+# PoGo Radar 0.3.7
+
+- Giữ máy thức khi chạy tự động; màn hình vẫn có thể tắt. Dừng chạy sẽ bỏ yêu cầu giữ máy thức.
+- Bảo vệ tab Search khỏi tự giải phóng bộ nhớ; trả lại thiết lập ban đầu khi dừng.
+- Search bận, quá giờ và trang đang tải được thử lại theo lịch thay vì dừng hẳn. Hết đăng nhập, đổi bộ lọc và lỗi web không xác định vẫn dừng với lý do rõ ràng.
+- Khôi phục yêu cầu giữ máy thức và lịch khi mở lại trình duyệt; vẫn cần tab Search và phiên đăng nhập hợp lệ.
+
+## PoGo Monitor 0.3.6
 
 - Tách thông tin Pokémon và tọa độ thành hai tin Discord riêng. Nhấn giữ tin coord để sao chép riêng tọa độ trên mobile.
 - Thẻ thông tin giữ ảnh, tên, IV, hạng và despawn; bỏ khối tọa độ trong thẻ để tránh nhầm chỗ sao chép.

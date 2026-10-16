@@ -1,4 +1,8 @@
-# PoGo Monitor v0.3.6 cho Edge / Chrome
+# PoGo Radar v0.3.7 cho Edge / Chrome
+
+PoGo Monitor nay là **PoGo Radar — Qpham**, có icon radar mới trên thanh công cụ và popup.
+
+**Mới ở v0.3.7:** giữ máy thức khi chạy tự động (màn hình vẫn có thể tắt), bảo vệ tab Search khỏi tự giải phóng, tự thử lại khi Search bận/quá 45 giây hoặc trang đang tải. Đặt thời gian chạy = **0 phút** để chạy đến khi bấm Dừng. Khi dừng, extension bỏ yêu cầu giữ máy thức. Giữ trình duyệt và tab Search mở; hết phiên cần đăng nhập lại. Extension không chạy khi đóng trình duyệt, tắt máy hoặc ép máy sleep/gập máy.
 
 Popup nhỏ tự Search PoGo Coordinates, lọc Top IV và Top PvPoke, báo trên web và Discord. Mỗi kết quả gửi hai tin Discord riêng: một thẻ thông tin Pokémon và một tin văn bản chỉ có tọa độ. Trên điện thoại, nhấn giữ tin → Sao chép văn bản để lấy đúng tọa độ.
 
@@ -6,7 +10,7 @@ Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang
 
 ## Cài lần đầu
 
-1. Tải file `pogocoordinates-monitor-v0.3.6.zip` và giải nén vào thư mục cố định.
+1. Tải file `pogocoordinates-monitor-v0.3.7.zip` và giải nén vào thư mục cố định.
 2. Edge: mở `edge://extensions` → bật **Developer mode** → **Load unpacked** → chọn thư mục có `manifest.json`. Chrome dùng `chrome://extensions`.
 3. Bấm biểu tượng extension → **Mở web**. Đăng nhập PoGo Coordinates trong cùng profile trình duyệt.
 4. Chọn Pokémon, Stats/PvP và bộ lọc **trên website**.
@@ -15,7 +19,7 @@ Bảng trạng thái ở góc trái dưới trang cho biết đang chạy, đang
 
 ## Cập nhật / chạy thử lại
 
-- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**, sau đó **F5 trang PoGo**. Popup phải hiện **v0.3.6**. Không gỡ để giữ cấu hình và lịch sử.
+- Cập nhật: chép đè vào thư mục extension cũ rồi bấm **Tải lại**, sau đó **F5 trang PoGo**. Popup phải hiện **v0.3.7**. Không gỡ để giữ cấu hình và lịch sử.
 - Đổi bộ lọc: Dừng, sửa trên web, rồi Chạy lại.
 - Chạy thử lại: tab **Thông báo** → **Xóa lịch sử & thử lại** → **Tìm ngay**. Các kết quả vẫn phải đạt bộ lọc và ngưỡng PvP.
 - Nếu không có tin mới, đọc dòng trạng thái: không đạt hạng, đã báo, hết hạn hoặc lỗi tọa độ.

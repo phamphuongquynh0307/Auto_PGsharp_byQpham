@@ -260,12 +260,12 @@
   const clock=value=>value?new Date(value).toLocaleTimeString('vi-VN'):'—';
   function renderMonitorStatus(){
     if(!lastStatusAt||Date.now()-lastStatusAt>15000){
-      badge.textContent='⚪ PoGo Monitor · Chưa kết nối';box.style.borderColor='#64748b';
+      badge.textContent='⚪ PoGo Radar · Chưa kết nối';box.style.borderColor='#64748b';
       message.textContent='Không xác nhận được trạng thái. Mở extension hoặc tải lại trang.';timing.textContent='';return;
     }
     const s=monitorState,running=s.running&&(!s.endsAt||s.endsAt>Date.now());
     const searching=s.cycleBusy&&(!running||s.onThisTab);
-    badge.textContent=`${searching?'🟡':running?'🟢':'⏸'} PoGo Monitor · ${searching?'Đang tìm':running?(s.onThisTab?'Đang chạy':'Chạy ở tab khác'):'Đã dừng'}`;
+    badge.textContent=`${searching?'🟡':running?'🟢':'⏸'} PoGo Radar · ${searching?'Đang tìm':running?(s.onThisTab?'Đang chạy':'Chạy ở tab khác'):'Đã dừng'}`;
     box.style.borderColor=searching?'#fbbf24':running?'#62d7aa':'#64748b';message.textContent=s.status;
     let next='—';
     if(running&&s.nextSearchAt){const seconds=Math.ceil((s.nextSearchAt-Date.now())/1000);next=seconds>0?`còn ${seconds}s`:'đang chờ lượt tìm';}

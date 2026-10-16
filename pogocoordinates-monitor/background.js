@@ -50,19 +50,29 @@ async function findTab(open=false) {
 async function focusSite() {
   const t=await findTab(true);await chrome.tabs.update(t.id,{active:true});await chrome.windows.update(t.windowId,{focused:true});return t.id;
 }
+async function keepAwake(run) {
+  chrome.power.requestKeepAwake('system');
+  await chrome.tabs.update(run.tabId,{autoDiscardable:false});
+}
 async function pause(reason='Đã dừng') {
   cancellationEpoch++;
+  const {run}=await get('run');
   await chrome.alarms.clear(ALARM);await chrome.alarms.clear(STOP_ALARM);
   await set({run:{running:false},status:reason,nextSearchAt:null});
+  chrome.power.releaseKeepAwake();
+  if(run?.tabId)await chrome.tabs.update(run.tabId,{autoDiscardable:run.autoDiscardable!==false}).catch(()=>{});
 }
 async function start() {
   await init();const {settings}=await get('settings');const s=C.validateSettings(settings),t=await findTab(true);
   let state;try{state=await page(t.id,'PAGE_STATE');}catch{await focusSite();throw Error('Trang đang mở. Đăng nhập rồi bấm Đồng bộ lại.');}
   if(!state.loggedIn){await focusSite();throw Error('Hãy đăng nhập PoGo Coordinates trên tab vừa mở.');}
   if(!state.unlocked)throw Error('Cần nhập mã bạn bè trước khi chạy.');
+  const {run:previousRun}=await get('run');
   const now=Date.now(),run={running:true,id:crypto.randomUUID(),tabId:t.id,startedAt:now,
+    autoDiscardable:previousRun?.running&&previousRun.tabId===t.id?previousRun.autoDiscardable!==false:t.autoDiscardable!==false,
     filterSignature:filterSignature(state.filters),endsAt:s.durationMinutes?now+s.durationMinutes*60000:null};
   await set({settings:s,run,status:'Đang tìm…',nextSearchAt:now});
+  await keepAwake(run);
   await chrome.alarms.create(ALARM,{periodInMinutes:s.intervalSeconds/60,delayInMinutes:s.intervalSeconds/60});
   if(run.endsAt)await chrome.alarms.create(STOP_ALARM,{when:run.endsAt});
   void cycle(false);return run;
@@ -81,8 +91,11 @@ async function cycle(manual=false) {
     const settings=C.validateSettings(raw),t=manual?await findTab(false):await chrome.tabs.get(run.tabId).catch(()=>null);
     if(!t||!t.url?.startsWith('https://pogocoordinates.com/search'))throw Error('Tab Search đã đóng hoặc chuyển trang.');
     runId=run?.running?run.id:null;
+    if(run?.running)await keepAwake(run);
+    if(t.status==='loading')throw Error('Trang Search đang tải.');
     if(!manual&&run.filterSignature){
       const current=await page(t.id,'PAGE_STATE');
+      if(current.ready===false)throw Error('Trang Search đang tải.');
       if(!current.loggedIn)throw Error('Bạn cần đăng nhập PoGo Coordinates.');
       if(filterSignature(current.filters)!==run.filterSignature)
         throw Error('Bộ lọc trên web đã đổi hoặc trang đã tải lại. Đồng bộ và Bắt đầu lại.');
@@ -128,6 +141,15 @@ async function cycle(manual=false) {
     }
     await deliverDiscord();return {count:result.spawns.length,matched:matched.length};
   }catch(error){
+    if(epoch!==cancellationEpoch)return;
+    // Retry only known transient failures. Authentication, changed filters and
+    // ambiguous site errors still require attention; never reload lost filters.
+    const transient=/^Trang Search đang tải\.$|^Search quá 45 giây\.$|^Nút Search đang bận\.$|^Một lượt tìm kiếm khác đang chạy\.$|message port closed|message channel closed|frame was removed|tab was discarded|Receiving end does not exist|Could not establish connection/i.test(error.message);
+    if(!manual&&transient&&await activeRun(runId)){
+      const {settings}=await get('settings');
+      await set({status:`Đang chờ thử lại: ${error.message}`,nextSearchAt:Date.now()+settings.intervalSeconds*1000});
+      return;
+    }
     // Do not silently loop when authentication, selectors or permissions fail.
     await pause(`Đã dừng: ${error.message}`);
     if(/đăng nhập|login|sign in/i.test(error.message))await focusSite().catch(()=>{});
@@ -235,7 +257,7 @@ async function handle(m) {
     case 'REFRESH_DATA': return refreshData();
     case 'TEST_DISCORD': {
       const {settings}=await get('settings');C.validateWebhook(settings.webhook);
-      const result=await postWebhook(settings.webhook,{content:'✅ PoGo Search Monitor: kết nối Discord thành công.',allowed_mentions:{parse:[]}});
+      const result=await postWebhook(settings.webhook,{content:'✅ PoGo Radar: kết nối Discord thành công.',allowed_mentions:{parse:[]}});
       if(!result.sent)throw Error('Discord đang giới hạn tốc độ. Thử lại sau.');return true;
     }
     case 'RETRY_DISCORD': await updateEvents([m.id],{discordStatus:'pending',nextRetryAt:0});await deliverDiscord();return true;
@@ -283,10 +305,11 @@ async function restore() {
   if(run?.running){
     if(run.endsAt&&run.endsAt<=Date.now())await pause('Đã hết thời gian chạy.');
     else{
+      await keepAwake(run).catch(()=>{});
       await chrome.alarms.create(ALARM,{periodInMinutes:settings.intervalSeconds/60,delayInMinutes:settings.intervalSeconds/60});
       if(run.endsAt)await chrome.alarms.create(STOP_ALARM,{when:run.endsAt});
     }
-  }
+  }else chrome.power.releaseKeepAwake();
 }
 chrome.runtime.onInstalled.addListener(()=>void restore());
 chrome.runtime.onStartup.addListener(()=>void restore());

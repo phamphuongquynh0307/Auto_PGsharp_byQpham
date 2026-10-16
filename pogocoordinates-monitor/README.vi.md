@@ -1,4 +1,12 @@
-# PoGo Monitor v0.3.6
+# PoGo Radar v0.3.7
+
+## Chạy lâu và giữ máy thức
+
+Đặt thời gian chạy = **0 phút** để chạy đến khi bấm Dừng. Khi chạy tự động, extension dùng quyền `power` để ngăn máy tự sleep (màn hình vẫn có thể tắt) và đặt tab Search không tự giải phóng bộ nhớ. Khi dừng hoặc hết thời gian, extension bỏ yêu cầu giữ máy thức và trả lại thiết lập giải phóng tab ban đầu.
+
+Search bận, quá 45 giây hoặc trang đang tải sẽ chờ thử lại ở chu kỳ kế tiếp. Đổi bộ lọc, hết phiên đăng nhập hoặc lỗi web không xác định vẫn dừng và hiện lý do trên web/popup. Giữ trình duyệt và tab Search mở; extension không thể chạy khi đóng trình duyệt, tắt máy hoặc ép máy sleep/gập máy. Khi khởi động lại trình duyệt, lịch đã lưu được khôi phục nhưng tab và phiên đăng nhập phải còn hợp lệ.
+
+Cập nhật v0.3.7: chép đè thư mục cũ, Tải lại tại edge://extensions (hoặc chrome://extensions), chấp nhận quyền giữ máy thức nếu trình duyệt hỏi, rồi tải lại tab Search và bấm Chạy tự động. Đã qua 57 kiểm tra tự động; chưa kiểm chứng chạy dài thực tế trên Edge.
 
 Popup nhỏ cho Edge/Chrome. Bạn chọn bộ lọc trên PoGo Coordinates; extension tự bấm Search, kiểm tra hạng PvP và báo trên web / Discord.
 
@@ -14,7 +22,7 @@ Không có bộ lọc sao chép trong popup. Mở web / Chỉnh bộ lọc đưa
 
 ## Cập nhật
 
-Giải nén ZIP mới và chép đè vào đúng thư mục extension hiện tại. Trong edge://extensions bấm Tải lại của PoGo Monitor. Không gỡ extension để giữ cấu hình, webhook và lịch sử. Bấm biểu tượng extension để mở popup mới.
+Giải nén ZIP mới và chép đè vào đúng thư mục extension hiện tại. Trong edge://extensions bấm Tải lại của PoGo Radar. Không gỡ extension để giữ cấu hình, webhook và lịch sử. Bấm biểu tượng extension để mở popup mới.
 
 Cài lần đầu: edge://extensions → Developer mode → Load unpacked → chọn thư mục chứa manifest.json.
 

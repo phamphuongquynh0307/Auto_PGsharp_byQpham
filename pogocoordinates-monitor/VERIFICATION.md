@@ -1,4 +1,9 @@
-# v0.3.6 verification
+# v0.3.7 verification
+
+- 57 tests passed: system keep-awake, tab discard protection/restoration, unlimited duration, transient retry/recovery, loading page recovery, startup/deadline and fatal-error cleanup, plus existing search/Discord/UI regressions.
+- Long-running behavior in actual Edge, OS sleep prevention and browser tab suspension have not been verified live.
+
+## v0.3.6 verification
 
 - All 51 tests passed. Information and coordinates are distinct Discord POSTs; coordinate message contains only raw coords and disabled mentions.
 - Covers deduplication, rate limiting on either message, uncertain delivery and manual retry without duplicate information.
